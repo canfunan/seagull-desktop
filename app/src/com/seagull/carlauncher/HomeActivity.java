@@ -375,7 +375,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             PipBoard.showPicker(this, which, pip);   // 空槽：先让用户选应用
         } else {
             pip.focusSlot(which);
-            pip.deployIfBound();                     // 幂等：已在跑就只搬屏，不杀进程
+            // 【批次 AE】只部署进入的这一个槽。旧代码 deployIfBound() 会把隐藏槽
+            // 也部署一遍 —— 隐藏槽没有 Surface，触发 VD 重建把另一个在跑的应用
+            // 连屏带任务拆掉（进音乐杀高德 / 进高德杀音乐）。
+            pip.deploySlotPublic(which);
+            pip.healSlotSoon(which);     // singleTask 拉回默认屏的兜底（学参考 xphook 语义）
         }
         syncDock(which == 1 ? DockBar.MAP : DockBar.MUSIC);
     }

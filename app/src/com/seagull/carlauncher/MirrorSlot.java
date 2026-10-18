@@ -137,8 +137,20 @@ public final class MirrorSlot implements CanvasSource {
      * 手机桌面镜像进画中画，正是"画中画里看到的是桌面而不是应用"的来源。
      */
     public boolean deploy(MediaProjection mp, String pkg, Surface surface, int w, int h, int dpi) {
-        String sig = pkg + "|" + (surface == null ? "nosurface" : System.identityHashCode(surface))
-                + "|" + w + "x" + h;
+        // 【批次 AE·黑屏根因修复】surface 为 null（画布 GONE / 布局还没跑）时：
+        //   · VD 还活着且包没换 → 什么都不做直接返回。VD 一拆，屏上的任务跟着被
+        //     销毁 —— 这正是「进音乐杀高德 / 进高德杀音乐 / 返回桌面画布黑屏」的
+        //     根因：隐藏槽的 deploy 拿到 null surface 走到 teardownVd，把在跑的
+        //     另一个应用连屏带任务拆了，再冷启动到一块没有输出的新屏。
+        //   · 连 VD 都没有 → 也不盲建。盲建的屏没有输出面，纯黑；等 surfaceChanged
+        //     → attachTo 带真 surface 来部署（PipBoard.deploySlot 已改成等画布）。
+        // teardown 只属于两种情形：用户换了应用（pkg 变）/ 显式清空。
+        if (surface == null || !surface.isValid()) {
+            if (vd != null && displayId > 0 && pkg != null && pkg.equals(lastPkg)) return true;
+            lastError = "画布未就绪，等待 Surface 再部署";
+            return false;
+        }
+        String sig = pkg + "|" + System.identityHashCode(surface) + "|" + w + "x" + h;
         if (sig.equals(lastSig) && ready) return true;
         lastError = "";
 
@@ -147,10 +159,12 @@ public final class MirrorSlot implements CanvasSource {
 
         // 已有 VD、只是 surface/尺寸变了 → resize + setSurface，不重建（避免目标重启）
         VirtualDisplay existing = vd;
-        if (existing != null && pkg.equals(lastPkg) && displayId > 0 && surface != null) {
+        if (existing != null && pkg.equals(lastPkg) && displayId > 0) {
             try {
                 existing.resize(w, h, dpi);
                 existing.setSurface(surface);
+                vdW = w;
+                vdH = h;
                 lastSig = sig;
                 // 【关键】resize 成功即画面已恢复，ready 必须跟着恢复，
                 // 否则：①提示层永久压在真画面上 ②触摸回注判 ready 永远 false → 点击失效
@@ -220,6 +234,8 @@ public final class MirrorSlot implements CanvasSource {
 
         displayId = vd.getDisplay() != null ? vd.getDisplay().getDisplayId() : -1;
         if (displayId < 0) { lastError = "拿不到虚拟屏 id"; teardownVd(); return false; }
+        vdW = w;
+        vdH = h;
 
         // 建屏成功即注册（触摸/抽屉据此找得到这块屏），不必等 Surface
         register(displayId);
@@ -256,10 +272,8 @@ public final class MirrorSlot implements CanvasSource {
             Log.w(TAG, "[" + name + "] 部署后自愈异常: " + t);
         }
 
-        touchFor().setDisplay(displayId, transformer.scaleX());   // 批次 N：VD 恒等映射，scale 恒 1
         lastSig = sig;
-        // ready 表示"可接收触摸"：建屏+搬应用成功即视为就绪（画面由 attachSurface 负责）
-        ready = (surface == null) || surface.isValid();
+        ready = surface.isValid();
         Log.i(TAG, "[" + name + "] " + pkg + " 已部署到 displayId=" + displayId + " " + w + "x" + h
                 + " trusted=" + trusted + " ready=" + ready);
         return true;
@@ -374,10 +388,22 @@ public final class MirrorSlot implements CanvasSource {
         }
     }
 
-    /** SurfaceView 触摸转发：点/滑/长按都交给 TouchForward（12.1）。 */
-    public void onTouch(MotionEvent e) {
+    /** 上一次喂进来的画布尺寸：CANCEL 补发（cancelStroke）时用同一坐标系。 */
+    private volatile int svW, svH;
+
+    /**
+     * SurfaceView 触摸转发：点/滑/长按都交给 TouchForward（12.1）。
+     *
+     * 批次 AE：坐标不再假设 1:1 —— 按传入的画布实际尺寸逐轴换算到 VD 空间。
+     * 画布被拉伸/暂未 resize 对齐时点哪儿都是哪儿（见 TouchForward 头注释）。
+     */
+    public void onTouch(MotionEvent e, int canvasW, int canvasH) {
         if (displayId <= 0) return;
-        touchFor().setDisplay(displayId, transformer.scaleX());
+        if (canvasW > 0) svW = canvasW;
+        if (canvasH > 0) svH = canvasH;
+        float sx = (vdW > 0 && svW > 0) ? vdW / (float) svW : transformer.scaleX();
+        float sy = (vdH > 0 && svH > 0) ? vdH / (float) svH : transformer.scaleX();
+        touchFor().setDisplay(displayId, sx, sy);
         touchFor().feed(e);
     }
 

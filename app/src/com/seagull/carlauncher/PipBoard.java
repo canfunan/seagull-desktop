@@ -327,13 +327,19 @@ public final class PipBoard extends LinearLayout {
             int a = e.getActionMasked();
             MirrorSlot s = slotOf(w);
             if (singleMode) {
-                // 单应用模式：整块画布就是应用界面本身，触摸全量转发（多指/长按都成立）
+                // 单应用模式：整块画布就是应用界面本身，触摸全量转发（多指/长按都成立）。
+                // 坐标按画布实际尺寸逐轴换算（批次 AE）——铺满/缩半都不跑偏。
                 if (a == MotionEvent.ACTION_DOWN) {
                     if (w != focusSlot) switchFocus(w);
                     syncCanvasSize(s, view);
                 }
-                if (s != null && s.ready()) s.onTouch(e);
-                if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) armed[w] = false;
+                if (s != null && s.ready()) s.onTouch(e, view.getWidth(), view.getHeight());
+                if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                    armed[w] = false;
+                    // 应用内跳页可能把任务拉回默认屏（singleTask 拉回，参考 xphook
+                    // 用 startActivity 注入堵的就是这个）——抬手后补两次自愈
+                    if (a == MotionEvent.ACTION_UP) healSlotSoon(w);
+                }
                 return true;
             }
             // 分屏模式：画布只当预览 —— 点一下 = 进入该应用（铺满内容区、底栏跟随），
@@ -360,6 +366,8 @@ public final class PipBoard extends LinearLayout {
             @Override public void surfaceChanged(SurfaceHolder h, int f, int wd, int ht) {
                 MirrorSlot s = slotOf(w);
                 if (s == null || wd <= 0 || ht <= 0) return;
+                cvW[w] = wd;
+                cvH[w] = ht;
                 attachTo(s, h.getSurface(), wd, ht);
             }
             @Override public void surfaceDestroyed(SurfaceHolder h) {
@@ -385,7 +393,11 @@ public final class PipBoard extends LinearLayout {
         if (s == null || sv == null) return;
         int wd = sv.getWidth();
         int ht = sv.getHeight();
-        if (wd > 0 && ht > 0) s.syncSize(wd, ht, dpiFit(wd, ht));
+        if (wd <= 0 || ht <= 0) return;
+        int w = (s == slotA) ? 1 : 2;
+        cvW[w] = wd;
+        cvH[w] = ht;
+        s.syncSize(wd, ht, dpiFit(wd, ht));
     }
 
     /** 点画布进入应用：交给 HomeActivity（切单应用 + 同步底栏高亮），没注入就本地降级。 */
@@ -624,7 +636,10 @@ public final class PipBoard extends LinearLayout {
         if (s == null || !s.ready()) return;
         long now = SystemClock.uptimeMillis();
         MotionEvent c = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0);
-        try { s.onTouch(c); } catch (Throwable t) { Log.w(TAG, "失焦 CANCEL 失败: " + t); }
+        try {
+            int w = (s == slotA) ? 1 : 2;
+            s.onTouch(c, cvW[w], cvH[w]);
+        } catch (Throwable t) { Log.w(TAG, "失焦 CANCEL 失败: " + t); }
         c.recycle();
     }
 
@@ -673,7 +688,17 @@ public final class PipBoard extends LinearLayout {
             return;
         }
         if (empty != null) empty.setVisibility(View.GONE);
-        if (s != null && s.ready()) { hint.setVisibility(View.GONE); return; }
+        if (s != null && s.ready()) {
+            // 批次 AE：刚挂上 900ms 内先报「画面就绪中…」，等应用出第一帧再撤
+            // （学 Vivo MapSurfaceViewHelper 的封面延迟揭示，AMap 给 2 秒）
+            if (SystemClock.uptimeMillis() < revealUntil[which]) {
+                hint.setText("画面就绪中…");
+                hint.setVisibility(View.VISIBLE);
+            } else {
+                hint.setVisibility(View.GONE);
+            }
+            return;
+        }
         if (s != null && s.needsProjection()) hint.setText("需要录屏授权…");
         else if (s != null && s.displayId() > 0) hint.setText("挂载中…");
         else hint.setText("启动中…");
@@ -765,7 +790,12 @@ public final class PipBoard extends LinearLayout {
         SurfaceView svView = which == 1 ? svA : svB;
         Surface surf = (svView != null && svView.getHolder().getSurface() != null
                 && svView.getHolder().getSurface().isValid()) ? svView.getHolder().getSurface() : null;
-        // VD 严格按画布实际像素 1:1：量到用实测，没量到按权重比例算单块设计尺寸
+        // 【批次 AE】画布还没 Surface 时绝不盲部署：
+        //   · VD 已在（换应用/重挂场景）→ deploy 内部幂等处理；
+        //   · VD 不在 → 首次部署一律等 surfaceChanged → attachTo 带真 surface 来，
+        //     屏和任务都诞生在真实尺寸上。旧逻辑在这里用 designW 估的假尺寸 +
+        //     null surface 建屏，正是「黑屏 + 应用被反复冷启动」的源头。
+        if (surf == null) { setHint(which, slot); return; }
         int w = svView != null && svView.getWidth() > 0 ? svView.getWidth() : designW(which);
         int h = svView != null && svView.getHeight() > 0 ? svView.getHeight()
                 : Math.max(1, act.getResources().getDisplayMetrics().heightPixels - dp(150));
@@ -842,14 +872,21 @@ public final class PipBoard extends LinearLayout {
                 boolean ok = s.attachSurface(surface, w, h, dpi);
                 if (!ok) ok = s.deploy(mp, pkg, surface, w, h, dpi);
                 final boolean needProj = s.needsProjection();
+                final boolean fOk = ok;
                 ui.post(() -> {
-                    setHint(which, s);
-                    Log.i(TAG, "槽 " + which + " → " + s.describe()
+                    int w2 = (s == slotA) ? 1 : 2;
+                    if (fOk && s.ready()) {
+                        // 揭示延迟：应用出第一帧前 hint 不撤，黑帧不被看见
+                        revealUntil[w2] = SystemClock.uptimeMillis() + 900;
+                        ui.postDelayed(() -> setHint(w2, s), 950);
+                    }
+                    setHint(w2, s);
+                    Log.i(TAG, "槽 " + w2 + " → " + s.describe()
                             + " 画布 " + w + "x" + h + "@" + dpi + "dpi");
                     if (needProj && mp == null) requestConsent();
                 });
             }
-        }, "pip-attach" + which).start();
+        }, "pip-attach" + (slot == slotA ? "1" : "2")).start();
     }
 
     private void redeployIfPossible() {
@@ -891,7 +928,9 @@ public final class PipBoard extends LinearLayout {
      * 任何框架，是模块路线的兜底。补两次延时（600ms / 1600ms）：跳页的开窗有几帧延迟，
      * 一次可能扑空。
      */
-    private void healSlotSoon(final int which) {
+    /** 节流自愈入口：进入单应用后补两次（600/1600ms），兜住 singleTask 拉回默认屏。 */
+    public void healSlotSoon(int which) {
+        if (which != 1 && which != 2) return;
         ui.postDelayed(() -> healSlotNow(which), 600);
         ui.postDelayed(() -> healSlotNow(which), 1600);
     }
@@ -910,6 +949,13 @@ public final class PipBoard extends LinearLayout {
     }
 
     private boolean notEmpty(String s) { return s != null && !s.isEmpty(); }
+
+    /** 画布实际尺寸缓存（cancelStroke 补 CANCEL 时用同一坐标系）。 */
+    private final int[] cvW = new int[3], cvH = new int[3];
+    /** 揭示延迟（批次 AE，学 Vivo MapSurfaceViewHelper 的封面时序）：
+     *  surface 刚挂上时应用还没出第一帧，立即撤提示会看见黑/花帧；
+     *  hint 多留 900ms 再撤。 */
+    private final long[] revealUntil = new long[3];
 
     private String pkgOf(int which) { return loadPkg(act, which); }
 

@@ -20,7 +20,12 @@ import java.util.List;
  *
  * 通道选择钉在每次手势的 DOWN 上，一次手势中途不换通道（换了事件流就断了）。
  *
- * 坐标：VD 按 surface 尺寸 1:1 建，所以本地坐标直接用；带缩放时按 scale 换算。
+ * 坐标（批次 AE·根治「点击错位」）：**逐轴比例映射** —— 注入坐标 = 画布内坐标
+ * × (VD 尺寸 / 画布尺寸)。SurfaceView 默认把 VD 画面拉伸铺满自己，所以
+ * 「画布内位置比例」永远等于「VD 内位置比例」，即便 VD 和画布尺寸暂时不一致
+ * （resize 在途、应用还没按新尺寸重绘），点哪儿都是哪儿。参考实现（车联助手）
+ * 用的是真系统 PiP，触摸由系统分发，天生没有这个问题；我们镜像画布方案里
+ * 这条比例映射就是等价物。1:1 时比例恒为 1，行为不变。
  * 排障（12.8）：lastLines() 拿最近 12 条命令与返回，失败原因都在里面。
  */
 public final class TouchForward {
@@ -32,12 +37,13 @@ public final class TouchForward {
     private final HandlerThread thread = new HandlerThread("seagull-touch");
     private final Handler h;
     private static final ArrayDeque<String> LOG = new ArrayDeque<>();
-    private final float threshold;      // 防误滑阈值（px）
+    private final float threshold;      // 防误滑阈值（px，画布内坐标）
     private final long longPressMs;
     private final boolean follow;       // 跟手：滑动手势边走边发
 
     private int displayId = -1;
-    private float scale = 1f;
+    /** 画布→VD 的逐轴比例（vdW/画布W、vdH/画布H）。1:1 时恒 1。 */
+    private float fx = 1f, fy = 1f;
     private float downX, downY;
     private long downAt;
     private float lastX, lastY;
@@ -54,9 +60,10 @@ public final class TouchForward {
         h = new Handler(thread.getLooper());
     }
 
-    public void setDisplay(int displayId, float scale) {
+    public void setDisplay(int displayId, float scaleX, float scaleY) {
         this.displayId = displayId;
-        this.scale = scale <= 0 ? 1f : scale;
+        this.fx = scaleX > 0 ? scaleX : 1f;
+        this.fy = scaleY > 0 ? scaleY : 1f;
     }
 
     public boolean ready() { return displayId > 0; }
@@ -92,8 +99,8 @@ public final class TouchForward {
         float[] xs = new float[n];
         float[] ys = new float[n];
         for (int i = 0; i < n; i++) {
-            xs[i] = e.getX(i) * scale;
-            ys[i] = e.getY(i) * scale;
+            xs[i] = e.getX(i) * fx;
+            ys[i] = e.getY(i) * fy;
         }
         boolean ok = PrivClient.motion(displayId, e.getAction(), e.getDownTime(),
                 e.getEventTime(), xs, ys, n);
@@ -144,7 +151,7 @@ public final class TouchForward {
         if (PrivClient.available()) {
             // DOWN 与 UP 同点，中间隔 longPressMs —— 目标应用判定长按的就是这段时长
             long now = android.os.SystemClock.uptimeMillis();
-            float[] px = {x * scale}, py = {y * scale};
+            float[] px = {x * fx}, py = {y * fy};
             PrivClient.motion(displayId, android.view.MotionEvent.ACTION_DOWN, now, now, px, py, 1);
             PrivClient.motion(displayId, android.view.MotionEvent.ACTION_UP, now,
                     now + longPressMs, px, py, 1);
@@ -154,17 +161,20 @@ public final class TouchForward {
     }
 
     private void tap(float x, float y) {
-        final String cmd = "input -d " + displayId + " tap " + px(x) + " " + px(y);
+        final String cmd = "input -d " + displayId + " tap " + pxX(x) + " " + pxY(y);
         run(cmd);
     }
 
     private void swipe(float x1, float y1, float x2, float y2, long dur) {
         final String cmd = "input -d " + displayId + " swipe "
-                + px(x1) + " " + px(y1) + " " + px(x2) + " " + px(y2) + " " + clamp(dur, 16, 2000);
+                + pxX(x1) + " " + pxY(y1) + " " + pxX(x2) + " " + pxY(y2) + " "
+                + clamp(dur, 16, 2000);
         run(cmd);
     }
 
-    private int px(float v) { return Math.round(v * scale); }
+    private int pxX(float v) { return Math.round(v * fx); }
+
+    private int pxY(float v) { return Math.round(v * fy); }
 
     private static long clamp(long v, long lo, long hi) {
         return v < lo ? lo : (v > hi ? hi : v);
