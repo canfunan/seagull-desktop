@@ -1068,6 +1068,7 @@ public final class PipBoard extends LinearLayout {
         new Thread(() -> {
             String out = RootOps.ensureOnDisplay(act, pkg, d);
             if (out != null && !out.isEmpty()) Log.i(TAG, "点后自愈 槽 " + slotNo + ": " + out);
+            if (out != null && out.contains("已搬回")) ui.post(s::nudgeLayout);
         }, "pip-tap-heal" + which).start();
     }
 
@@ -1095,7 +1096,10 @@ public final class PipBoard extends LinearLayout {
                         String out = RootOps.ensureOnDisplay(act, pkg, s.displayId());
                         if (out != null && out.contains("已搬回")) {
                             Log.i(TAG, "巡检搬回 槽 " + i + ": " + out);
-                            ui.post(PipBoard.this::redeployIfPossible);
+                            ui.post(() -> {
+                                s.nudgeLayout();          // 批次 AH：搬回后强制重排铺满
+                                redeployIfPossible();
+                            });
                         }
                     } catch (Throwable t) {
                         Log.w(TAG, "巡检 槽 " + i + " 异常: " + t);

@@ -165,6 +165,7 @@ public final class MirrorSlot implements CanvasSource {
                 existing.setSurface(surface);
                 vdW = w;
                 vdH = h;
+                vdDpi = dpi;
                 lastSig = sig;
                 // 【关键】resize 成功即画面已恢复，ready 必须跟着恢复，
                 // 否则：①提示层永久压在真画面上 ②触摸回注判 ready 永远 false → 点击失效
@@ -236,9 +237,18 @@ public final class MirrorSlot implements CanvasSource {
         if (displayId < 0) { lastError = "拿不到虚拟屏 id"; teardownVd(); return false; }
         vdW = w;
         vdH = h;
+        vdDpi = dpi;
 
         // 建屏成功即注册（触摸/抽屉据此找得到这块屏），不必等 Surface
         register(displayId);
+
+        // 【批次 AH】relaxCompat 必须在两条部署路之前：兼容位（FORCE_RESIZE_APP /
+        // NEVER_FIX_ORIENTATION）只对新进程生效。冷启动路本来就在 launchOnDisplay
+        // 里做，但搬任务路此前完全没做 —— 应用被搬进虚拟屏时进程还是旧的，读不到
+        // 兼容位，本次会话就永远以旧尺寸/竖版待在画布里（"不铺满"），触摸按满屏
+        // 比例换算也跟着全错。现在搬任务路也先把兼容位写好：哪怕当前进程吃不到，
+        // 之后任何一次冷启动都会铺满。
+        RootOps.relaxCompat(pkg);
 
         // 部署两段（复刻 CarWithX deploy 顺序，蓝图 §2.1）：
         //   ① 锚点 + 搬已有任务（moveExistingTask 内部先落锚点 PipAnchorActivity，
@@ -274,6 +284,13 @@ public final class MirrorSlot implements CanvasSource {
 
         lastSig = sig;
         ready = surface.isValid();
+        // 【批次 AH】搬已有任务进新屏后，应用窗口常停在搬入前的旧尺寸、卡在画布一角
+        //（用户截图实测：网易云四周黑边不铺满、高德/网易云触摸全偏）。没有任何东西
+        // 强制它重排 —— surface 挂载时的 resize 若与旧尺寸相同是 no-op，应用收不到
+        // 重排时机。这里安排两拍"布局抖动"（2s/4.5s，见 nudgeLayout），1px 缩放强制
+        // 一轮 config change，应用重排铺满；不杀进程、不丢导航/播放状态。
+        scheduleNudge(2000);
+        scheduleNudge(4500);
         Log.i(TAG, "[" + name + "] " + pkg + " 已部署到 displayId=" + displayId + " " + w + "x" + h
                 + " trusted=" + trusted + " ready=" + ready);
         return true;
@@ -354,6 +371,7 @@ public final class MirrorSlot implements CanvasSource {
             vd.resize(w, h, dpi);
             vdW = w;
             vdH = h;
+            vdDpi = dpi;
             vd.setSurface(surface);
             ready = true;
             lastSig = lastPkg + "|" + System.identityHashCode(surface) + "|" + w + "x" + h;
@@ -382,10 +400,46 @@ public final class MirrorSlot implements CanvasSource {
             vd.resize(w, h, dpi);
             vdW = w;
             vdH = h;
+            vdDpi = dpi;
             Log.i(TAG, "[" + name + "] VD 尺寸校准 → " + w + "x" + h + "@" + dpi + "dpi");
         } catch (Throwable t) {
             Log.w(TAG, "[" + name + "] VD 尺寸校准失败: " + t);
         }
+    }
+
+    /* ---------------- 批次 AH：布局抖动（搬入后强制重排铺满） ---------------- */
+
+    /** deploy / attachSurface / syncSize 时记录的 dpi，抖动回弹时保持不变。 */
+    private volatile int vdDpi;
+
+    /**
+     * VD 尺寸 ±1px 再弹回：强制系统对这块屏发一轮 config change，画布里的应用按
+     * 当前 VD 尺寸重新布局。修「应用不满画布 + 触摸全偏」—— 应用被 move-task 搬进
+     * 新屏（部署路①）后窗口停在搬入前尺寸；surface 挂载的 resize 若与旧尺寸相同是
+     * no-op，应用收不到任何重排时机，就一直卡在画布一角，触摸按满屏比例换算自然全偏。
+     * 不杀进程、不丢导航/播放状态。450ms 后回弹；期间屏被重建（displayId 变了）放弃。
+     */
+    public void nudgeLayout() {
+        final int d = displayId;
+        final int w = vdW, h = vdH, dpi = vdDpi;
+        if (vd == null || d <= 0 || w <= 0 || h <= 0 || dpi <= 0) return;
+        try {
+            vd.resize(w, Math.max(64, h - 1), dpi);
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                if (vd == null || displayId != d) return;
+                try { vd.resize(w, h, dpi); } catch (Throwable ignore) {}
+            }, 450);
+            Log.i(TAG, "[" + name + "] 布局抖动 " + w + "x" + Math.max(64, h - 1)
+                    + " → " + w + "x" + h);
+        } catch (Throwable t) {
+            Log.w(TAG, "[" + name + "] 布局抖动失败: " + t);
+        }
+    }
+
+    /** 部署成功后的两拍抖动（2s/4.5s）：给应用留出搬入/挂面的完成时间。 */
+    private void scheduleNudge(long delayMs) {
+        new android.os.Handler(android.os.Looper.getMainLooper())
+                .postDelayed(this::nudgeLayout, delayMs);
     }
 
     /** 上一次喂进来的画布尺寸：CANCEL 补发（cancelStroke）时用同一坐标系。 */
