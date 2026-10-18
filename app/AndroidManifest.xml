@@ -19,6 +19,22 @@
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+        特权级权限（复刻蓝图 §5「硬前提」，与参考车联助手 AndroidManifest 逐条对齐）。
+        所有这些是 signature|privileged 级：普通安装时申请也无害（不会授予），
+        装成 /system/priv-app（或厂商特权白名单）后即可直接使用「把别的 App 的
+        Activity 拉进私有虚拟屏 / 注入事件 / 停别人进程」这几条硬能力，不必每次
+        绕 su。海鸥同时保留 su 兜底（RootOps/PrivClient），两条腿走路：
+        特权在位走特权，不在位走 root，两条都断才彻底失败。
+        普通应用安装时这些声明不产生任何副作用（未持有即不授予，无运行时风险）。
+    -->
+    <uses-permission android:name="android.permission.INJECT_EVENTS" />
+    <uses-permission android:name="android.permission.CAPTURE_SECURE_VIDEO_OUTPUT" />
+    <uses-permission android:name="android.permission.FORCE_STOP_PACKAGES" />
+    <uses-permission android:name="android.permission.STATUS_BAR_SERVICE" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.BIND_APPWIDGET" />
+
     <!-- 状态/设置类（root 或特权时才有意义，普通应用申请了也无害） -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />

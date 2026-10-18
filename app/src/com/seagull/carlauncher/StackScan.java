@@ -126,11 +126,90 @@ public final class StackScan {
         return null;
     }
 
+    /**
+     * 指定屏上的第一个 **stack**（root task）id —— 哪怕这块屏上一个任务都没有。
+     * 批次 AA 新增：move-task 的落点需要的是 root task，而空虚拟屏通常仍有一个
+     * 默认 root task（只是里面没任务）—— 锚点 Activity 已经自己退掉时靠它兜底，
+     * 否则自愈会因为"没有锚点栈"直接放弃搬运。
+     * 返回 -1 = 该屏在输出里连一条栈信息都没有。
+     */
+    public static int firstStackOnDisplay(String out, int displayId) {
+        String seg = segments(out).get(displayId);
+        if (seg == null) return -1;
+        for (String line : seg.split("\n")) {
+            int v = pickStackAny(line);
+            if (v >= 0) return v;
+        }
+        return -1;
+    }
+
+    /**
+     * 目标屏上「锚点所在栈」的 id —— 复刻 CarWithX 的 awk
+     * （`/^Stack id=/ {s=$0}  /PipAnchorActivity/ {print s; exit}`）。
+     *
+     * 这是路①「锚点 + move-task」的落点：move-task 的目的参数要的是 **root task id**，
+     * 而 am stack list 只能按"某个包的任务"去找 —— 用自家空 Activity 当锚，
+     * 就能稳定解析出目标屏上的那个 root task id（绕开 setLaunchDisplayId 的权限限制）。
+     *
+     * anchorClass 传锚点 Activity 的类全名（出现在该栈的 topActivity/baseActivity 行里即命中）。
+     * 找不到返回 -1（锚点可能已自己退掉，调用方用 {@link #firstStackOnDisplay} 兜底）。
+     */
+    public static int anchorStackOnDisplay(String out, int displayId, String anchorClass) {
+        String seg = segments(out).get(displayId);
+        if (seg == null || anchorClass == null || anchorClass.isEmpty()) return -1;
+        int last = -1;
+        for (String line : seg.split("\n")) {
+            int v = pickStackAny(line);
+            if (v >= 0) last = v;
+            if (line.indexOf(anchorClass) >= 0) return last;
+        }
+        return -1;
+    }
+
+    /**
+     * 任意屏上包含目标包的任务；**优先主屏（display 0）**。
+     * 批次 AA 新增：搬运的源任务可能在任何屏上（多数在主屏），
+     * 逐个屏去问太啰嗦，这里一次给答案。
+     */
+    public static TaskRef findTaskAnywhere(String out, String pkg) {
+        TaskRef onMain = findTaskOnDisplay(out, pkg, 0);
+        if (onMain != null) return onMain;
+        for (Integer d : segments(out).keySet()) {
+            if (d == null || d == 0) continue;
+            TaskRef t = findTaskOnDisplay(out, pkg, d);
+            if (t != null) return t;
+        }
+        return null;
+    }
+
+    /** 目标包出现在哪些 display 上（搬运前判"别的虚拟屏是不是也有同名实例"用）。 */
+    public static List<Integer> displaysWithPkg(String out, String pkg) {
+        List<Integer> hits = new ArrayList<>();
+        for (Map.Entry<Integer, String> e : segments(out).entrySet()) {
+            if (e.getKey() == null) continue;
+            if (segHasPkg(e.getValue(), pkg)) hits.add(e.getKey());
+        }
+        return hits;
+    }
+
     /* ---------------- 内部小工具 ---------------- */
 
     private static int pickStack(String line, int last) {
         int v = pickInt(line, "stackId=");
         return v >= 0 ? v : last;
+    }
+
+    /**
+     * 行内取「栈 id」，兼容 am stack list 各代口径：
+     *   stackId=7（A10/A11 的 am stack list） / Stack id=7（更早） / RootTask id=7（A12+ 部分 ROM）。
+     * 三个都没有返回 -1。
+     */
+    private static int pickStackAny(String line) {
+        int v = pickInt(line, "stackId=");
+        if (v >= 0) return v;
+        v = pickInt(line, "RootTask id=");
+        if (v >= 0) return v;
+        return pickInt(line, "Stack id=");
     }
 
     /** 行内找 key=数字，取第一个；找不到 -1。 */

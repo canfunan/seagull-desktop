@@ -222,13 +222,28 @@ public final class MirrorSlot implements CanvasSource {
         // 建屏成功即注册（触摸/抽屉据此找得到这块屏），不必等 Surface
         register(displayId);
 
-        // 锚点先落（批次 R，复刻 CarWithX ensureAnchor）：VD 上常驻自家 root task，
-        // 重钉有稳定落点、系统不当空屏清理。失败不阻断部署（目标应用照常起）。
-        try { RootOps.launchAnchor(ctx, displayId); }
-        catch (Throwable t) { Log.w(TAG, "[" + name + "] 锚点启动失败（不阻断）: " + t); }
+        // 部署两段（复刻 CarWithX deploy 顺序，蓝图 §2.1）：
+        //   ① 锚点 + 搬已有任务（moveExistingTask 内部先落锚点 PipAnchorActivity，
+        //      再 move-task）：目标已在跑时首选，保住运行状态（导航中不被打断），
+        //      也避免 `am start --display` 把 singleTask 目标拉回主屏全屏。
+        //   ② 冷启动：没有已在跑的任务（或①两条通道都不可用）才走 launchOnDisplay。
+        boolean moved;
+        try {
+            moved = RootOps.moveExistingTask(ctx, pkg, displayId);
+        } catch (Throwable t) {
+            Log.w(TAG, "[" + name + "] 路①(锚点+搬任务)异常，回落冷启动: " + t);
+            moved = false;
+        }
+        Log.i(TAG, "[" + name + "] 路①(锚点+搬任务)=" + moved);
 
-        boolean ok = RootOps.launchOnDisplay(ctx, pkg, displayId);
-        if (!ok) { lastError = "am start --display " + displayId + " 失败"; teardownVd(); return false; }
+        if (!moved) {
+            boolean ok = RootOps.launchOnDisplay(ctx, pkg, displayId);
+            if (!ok) {
+                lastError = "部署失败：搬已有任务与冷启动都没成功（display " + displayId + "）";
+                teardownVd();
+                return false;
+            }
+        }
 
         // 部署即自愈一次（批次 L）：singleTask 目标落地瞬间就可能被系统拉回默认屏，
         // 不等用户切页面。保守：am stack list 解析不出就不动（见 ensureOnDisplay）。

@@ -290,6 +290,89 @@ public final class RootOps {
         return ok;
     }
 
+    /* ---------------- 路①：锚点 + move-task 搬已有任务（批次 AB） ---------------- */
+
+    /**
+     * 车联助手路①（复刻蓝图 §2.2 `FakeStart.moveExistingTask`）：
+     * 锚点 + move-task 把「**已经在跑**」的目标任务搬进虚拟屏。
+     *
+     * 为什么这是首选而不是冷启动：目标 App（高德最常见）通常用户已经开过、
+     * 正在主屏跑着。`am start --display` 对 singleTask 目标常把它主屏的老任务
+     * 拉到前台而不是挪屏（"点了却跳全屏"的根因）；而搬任务能保住它的运行状态
+     * （导航中不被打断）。车联的 deploy 顺序就是「先搬、搬不动才冷启动」。
+     *
+     * 落点三条，按可靠性排：
+     *   ① 守护进程反射 moveTaskToRootTask（CarWithX TaskMover 原逻辑，不解析文本）；
+     *   ② shell `am stack list` 解出锚点栈 → `am stack move-task <task> <root> true`；
+     *   ③ 都不可用 → 返回 false，调用方走冷启动。
+     *
+     * 返回 false = "没有已在跑的任务可搬"（也可能是两条通道都不可用），
+     * 二者对调用方的决策一致：去冷启动。仅后台线程调用（内部 sleep + su）。
+     */
+    public static boolean moveExistingTask(Context ctx, String pkg, int displayId) {
+        if (pkg == null || !pkg.matches("[a-z0-9_.]+")) {
+            Log.w(TAG, "moveExistingTask: 包名非法 " + pkg);
+            return false;
+        }
+        if (displayId <= 0) return false;
+        // 锚点必须先落：它是 move-task 的落点（root task）；幂等（NEW_TASK 复用）
+        launchAnchor(ctx, displayId);
+        // 给锚点开窗留时间（复刻原实现的 sleep 0.15；这里略放宽）
+        sleepQuiet(180);
+        if (moveToAnchorRoot(ctx, pkg, displayId)) return true;
+        Log.i(TAG, "moveExistingTask: 没搬成（无已在跑的任务，或通道不可用），交回调用方冷启动");
+        return false;
+    }
+
+    /** 把 pkg 的任务搬进「锚点在 displayId 屏上的 root task」：守护进程反射优先，shell 兜底。 */
+    private static boolean moveToAnchorRoot(Context ctx, String pkg, int displayId) {
+        String anchorPkg = ctx.getPackageName();
+        PrivClient.init(ctx);
+        if (PrivClient.moveToRoot(pkg, displayId, anchorPkg)) return true;
+        return shellMoveToAnchorRoot(pkg, displayId, anchorPkg);
+    }
+
+    /** shell 兜底：`am stack list` 找锚点栈与目标任务 → `am stack move-task <task> <root> true`。 */
+    private static boolean shellMoveToAnchorRoot(String pkg, int displayId, String anchorPkg) {
+        String out = Caps.exec("am stack list");
+        if (out == null || StackScan.segments(out).isEmpty()) {
+            Log.i(TAG, "shell 搬任务：am stack list 不可用/不可解析");
+            return false;
+        }
+        if (StackScan.isRunningOnDisplay(out, pkg, displayId)) {
+            Log.i(TAG, "shell 搬任务：" + pkg + " 已在 display " + displayId);
+            return true;
+        }
+        // 落点：锚点所在栈；锚点已退则用该屏第一个 root task
+        int root = StackScan.anchorStackOnDisplay(out, displayId, anchorPkg);
+        if (root < 0) root = StackScan.firstStackOnDisplay(out, displayId);
+        if (root < 0) { Log.i(TAG, "shell 搬任务：目标屏没有 root task"); return false; }
+        StackScan.TaskRef src = StackScan.findTaskAnywhere(out, pkg);
+        if (src == null) { Log.i(TAG, "shell 搬任务：" + pkg + " 没有已存在的任务"); return false; }
+        String cmdOut = Caps.exec("am stack move-task " + src.taskId + " " + root + " true");
+        boolean ok = shellOk(cmdOut);
+        Log.i(TAG, "shell move-task " + src.taskId + " -> root " + root + " ok=" + ok
+                + (cmdOut == null ? " 无回显" : " " + cmdOut.trim()));
+        return ok;
+    }
+
+    /** shell 输出判成功：非 null 且不含 error/exception/unknown/usage/permission denied。 */
+    private static boolean shellOk(String out) {
+        if (out == null) return false;
+        String s = out.toLowerCase();
+        return !s.contains("error") && !s.contains("exception")
+                && !s.contains("unknown") && !s.contains("usage:")
+                && !s.contains("permission denied");
+    }
+
+    private static void sleepQuiet(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     /* ---------------- 目标自愈（批次 K，carlink m10/m12 同款） ---------------- */
 
     /**
@@ -305,36 +388,54 @@ public final class RootOps {
      *
      * 保守策略（m12 真机教训）：检测不出栈结构就放弃，绝不主动重拉 ——
      * 无脑重拉会在虚拟屏里叠出第二个目标任务，两个画中画一起坏。
-     * 优先守护进程反射 moveRootTaskToDisplay（Android 14+，root uid 直接过检查），
-     * 失败回退 `am task move-task <taskId> <displayId>`。
+     *
+     * 搬运链（批次 AB 对齐车联助手）：
+     *   ① 守护进程反射 moveTaskToRootTask（落点 = 锚点在目标屏上的 root task），
+     *      不解析 am 文本、不依赖 `am stack move-task` 子命令；
+     *   ② shell：`am stack list` 解出锚点栈 → `am stack move-task <task> <root> true`；
+     *   ③ 旧命令链 `am task move-task <taskId> <displayId> true` 兜底。
      * 仅后台线程调用。
      */
     public static String ensureOnDisplay(Context ctx, String pkg, int displayId) {
         if (pkg == null || pkg.isEmpty() || displayId <= 0) return "参数无效";
         String out = Caps.exec("am stack list");
-        if (out == null) return "am stack list 无回显（su 不可用）";
-        if (StackScan.segments(out).isEmpty()) return "am stack list 输出无法解析，跳过自愈";
-        if (StackScan.isRunningOnDisplay(out, pkg, displayId)) return "目标已在虚拟屏";
-        // 双槽绑同一个应用时，另一个槽的屏上会有同名 task：那是别人的实例，绝不能动
-        // （否则重拉会 force-stop 掉对槽正在跑的应用，两块画布一起死）。
-        for (Integer d : StackScan.segments(out).keySet()) {
-            if (d == null || d == 0 || d == displayId) continue;
-            if (StackScan.findTaskOnDisplay(out, pkg, d) != null) {
-                return "目标任务在其他虚拟屏 d=" + d + "，不动";
+        boolean parsed = out != null && !StackScan.segments(out).isEmpty();
+        if (parsed) {
+            if (StackScan.isRunningOnDisplay(out, pkg, displayId)) return "目标已在虚拟屏";
+            // 双槽绑同一个应用时，另一个槽的屏上会有同名 task：那是别人的实例，绝不能动
+            // （否则重拉会 force-stop 掉对槽正在跑的应用，两块画布一起死）。
+            for (Integer d : StackScan.segments(out).keySet()) {
+                if (d == null || d == 0 || d == displayId) continue;
+                if (StackScan.findTaskOnDisplay(out, pkg, d) != null) {
+                    return "目标任务在其他虚拟屏 d=" + d + "，不动";
+                }
+            }
+            if (StackScan.findTaskAnywhere(out, pkg) == null) {
+                return ABSENT + "目标任务不在任何屏（可能已退出）";
             }
         }
-        // 源 = 主屏(display 0)上的目标任务；搬到目标屏
-        StackScan.TaskRef src = StackScan.findTaskOnDisplay(out, pkg, 0);
-        if (src == null) return ABSENT + "目标任务不在主屏也不在虚拟屏（可能已退出）";
+        String anchorPkg = ctx.getPackageName();
         PrivClient.init(ctx);
-        if (PrivClient.move(src.taskId, displayId)) {
-            return "已搬回虚拟屏（守护进程 moveRootTaskToDisplay " + src + "）";
+        // ① 守护进程反射（不依赖 am stack list 是否可解析）
+        if (PrivClient.moveToRoot(pkg, displayId, anchorPkg)) {
+            return "已搬回虚拟屏（守护进程 moveTaskToRootTask）";
         }
-        String cmdOut = Caps.exec("am task move-task " + src.taskId + " " + displayId);
-        boolean ok = cmdOut != null && !cmdOut.toLowerCase().contains("error")
-                && !cmdOut.toLowerCase().contains("exception");
-        return ok ? "已搬回虚拟屏（am task move-task " + src + "）"
-                : "搬回失败：" + (cmdOut == null ? "无回显" : cmdOut.trim());
+        if (parsed) {
+            // ② shell 锚点 + move-task
+            if (shellMoveToAnchorRoot(pkg, displayId, anchorPkg)) {
+                return "已搬回虚拟屏（am stack move-task）";
+            }
+            // ③ 旧命令链：部分 ROM 只认 am task move-task
+            StackScan.TaskRef src = StackScan.findTaskAnywhere(out, pkg);
+            if (src != null) {
+                String cmdOut = Caps.exec("am task move-task " + src.taskId + " " + displayId + " true");
+                if (shellOk(cmdOut)) {
+                    return "已搬回虚拟屏（am task move-task " + src.taskId + "）";
+                }
+            }
+            return "自愈：栈结构可解析但所有搬运通道都失败";
+        }
+        return "am stack list 不可用且守护进程搬屏失败，跳过自愈";
     }
 
     /* ---------------- 诊断 ---------------- */

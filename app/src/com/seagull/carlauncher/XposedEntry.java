@@ -355,64 +355,65 @@ public class XposedEntry implements IXposedHookLoadPackage {
     // ===================== B) H1~H3 窗口语义配合 =====================
 
     /**
-     * H1：如实上报多窗口状态。
-     * 只有窗口确实小于物理屏时才返回 true —— 全屏时保持真实值，
-     * 否则会误伤目标 App 自己的全屏布局决策。
+     * H1：谎报「不在多窗口」—— 对齐 CarWithX gaodehook（复刻蓝图 §4.2，
+     * 全文最反直觉、也最容易做反的一处）。
+     *
+     * 目标 App 在我们的虚拟屏画布里，窗口实际小于物理屏。如实上报会让它判定
+     * 「我在小窗里」，进而走简化布局并锁竖屏 —— 塞进横屏画布就是竖版 + 左右黑边
+     * （用户长期反馈的直接病根）。车联的解法是**一律回 false**：告诉它「你就是全屏」，
+     * 它才肯按当前窗口尺寸铺满整块画布。
+     *
+     * 与上一版的差异：上一版返回 windowIsSmallerThanScreen（小屏时为 true），
+     * 方向语义与参考**正好相反**，铺满一定失败 —— 批次 AB 按参考改正为恒 false，
+     * 并补上 onMultiWindowModeChanged 回调里的同一谎报。
      */
     private void hookMultiWindowPretence() {
         XposedHelpers.findAndHookMethod(Activity.class, "isInMultiWindowMode",
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Activity a = (Activity) param.thisObject;
-                        // 系统已判定为 PiP 时直接 true：不能再走 decorView 度量，
-                        // 那条路可能再次触发本方法，形成 hook 递归
-                        if (a.isInPictureInPictureMode()) {
-                            param.setResult(Boolean.TRUE);
-                            return;
-                        }
-                        param.setResult(windowIsSmallerThanScreen(a));
+                        param.setResult(Boolean.FALSE);          // ★ 谎报"不在多窗口"
                     }
                 });
-        log("H1 hookMultiWindowPretence OK");
-    }
-
-    /** Display.getRealMetrics 拿物理屏尺寸；decorView 拿当前窗口实际尺寸。 */
-    private static boolean windowIsSmallerThanScreen(Activity a) {
+        // 回调里也告诉它"不在多窗口"（对齐 gaodehook 的 onMultiWindowModeChanged hook）
         try {
-            WindowManager wm = a.getWindowManager();
-            if (wm == null) return false;
-            Display display = wm.getDefaultDisplay();
-            if (display == null) return false;
-            DisplayMetrics real = new DisplayMetrics();
-            display.getRealMetrics(real);
-            android.view.View view = a.getWindow() == null
-                    ? null : a.getWindow().peekDecorView();
-            if (view == null) return false;   // 窗口还没建，不谎报
-            int margin = (int) (24 * a.getResources().getDisplayMetrics().density);
-            return view.getWidth() < real.widthPixels - margin
-                    || view.getHeight() < real.heightPixels - margin;
+            XposedHelpers.findAndHookMethod(Activity.class, "onMultiWindowModeChanged",
+                    boolean.class, android.content.res.Configuration.class, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            if (param.args.length > 0) param.args[0] = Boolean.FALSE;
+                        }
+                    });
+            log("H1 onMultiWindowModeChanged OK");
         } catch (Throwable t) {
-            return false;
+            log("H1 onMultiWindowModeChanged failed: " + t);
         }
+        log("H1 hookMultiWindowPretence OK (谎报 isInMultiWindowMode=false)");
     }
 
     /**
-     * H2：方向劫持。set 与 get 两面都改 —— 有的 App 先读回自己锁的方向
-     * 再决定布局，只 hook set 会被它读回原值后带跑。
+     * H2：方向劫持（对齐 CarWithX gaodehook：任何「可能落成竖屏」的方向值，
+     * 以及 UNSPECIFIED(-1)，一律改成目标方向；set 与 get 两面都改）。
+     *
+     * 竖屏系列（ActivityInfo）：
+     *   PORTRAIT(1) / SENSOR_PORTRAIT(7) / REVERSE_PORTRAIT(9) / USER_PORTRAIT(12) / LOCKED(14)
+     * 车联的判据就是「这些值全部改 0(LANDSCAPE)」；未指定(-1)也一并改，
+     * 否则 App 首帧按 manifest 写死的 PORTRAIT 建窗 → 竖版 + 左右黑边。
      */
     private void hookOrientationOverride() {
         final int target = desiredOrientation();
-        if (target == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) return;
+        if (target == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) return;   // 跟随模式：不干预
 
         XposedHelpers.findAndHookMethod(Activity.class, "setRequestedOrientation",
                 int.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         int req = (Integer) param.args[0];
-                        if (req == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) return;
-                        if (req == target) return;
-                        param.args[0] = target;
+                        // 复刻 gaodehook：竖屏系列 或 UNSPECIFIED → 目标方向
+                        if (isPortraitSeries(req)
+                                || req == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+                            param.args[0] = target;
+                        }
                     }
                 });
 
@@ -445,7 +446,30 @@ public class XposedEntry implements IXposedHookLoadPackage {
                         }
                     }
                 });
+
+        // 对齐 gaodehook：每次 onResume 再补一次 —— 跳页回来后 manifest 方向可能又被
+        // WM 按原值重建窗口，只在 onCreate 补会漏掉「回来那一次」。
+        XposedHelpers.findAndHookMethod(Activity.class, "onResume",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Activity a = (Activity) param.thisObject;
+                        try {
+                            a.setRequestedOrientation(target);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
         log("H2 hookOrientationOverride OK -> " + target);
+    }
+
+    /** 竖屏系列方向值（CarWithX gaodehook.isPortrait 同款判据）。 */
+    private static boolean isPortraitSeries(int o) {
+        return o == ActivityInfo.SCREEN_ORIENTATION_PORTRAIT          // 1
+                || o == ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT   // 7
+                || o == ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT  // 9
+                || o == ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT     // 12
+                || o == ActivityInfo.SCREEN_ORIENTATION_LOCKED;           // 14
     }
 
     /**

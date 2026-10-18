@@ -22,6 +22,14 @@ public final class PrivCodec {
     public static final String OP_LAUNCH = "LAUNCH";
     public static final String OP_MOTION = "MOTION";
     public static final String OP_MOVE = "MOVE";
+    /**
+     * MOVE_ROOT：把目标包的任务搬进「锚点 Activity 所在的那个 root task」。
+     * 与 MOVE（moveRootTaskToDisplay，靠 displayId 落点）不同：这条走
+     * CarWithX TaskMover 的原逻辑（getTasks 找任务 → getAllRootTaskInfosOnDisplay
+     * 找锚点 root task → moveTaskToRootTask），落点由 root task 决定，不依赖
+     * ROM 是否保留 `am stack move-task` 子命令，也不需要解析 am 的文本输出。
+     */
+    public static final String OP_MOVE_ROOT = "MOVE_ROOT";
     public static final String OP_REMOVE = "REMOVE";
 
     /** 线协议里 motion 的 action 用 MotionEvent 原始 action（含 pointer index 高位）。 */

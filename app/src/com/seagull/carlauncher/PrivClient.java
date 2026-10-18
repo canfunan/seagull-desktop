@@ -215,6 +215,24 @@ public final class PrivClient {
         return true;
     }
 
+    /**
+     * 把 pkg 的任务搬进「锚点包 anchorPkg 在 displayId 屏上的那个 root task」。
+     * 复刻 CarWithX TaskMover 的 app_process 逻辑（见 RootMain.doMoveRoot）：
+     * 不解析 am 文本、不依赖 `am stack move-task` 子命令，是路① 的守护进程主路。
+     * 只在后台线程调用（ensure() 会 fork su）。
+     */
+    public static synchronized boolean moveToRoot(String pkg, int displayId, String anchorPkg) {
+        if (!ensure()) return false;
+        PrivCodec.Response r = roundTrip(PrivCodec.encodeRequest(nextSeq(),
+                PrivCodec.OP_MOVE_ROOT, pkg, Integer.toString(displayId), anchorPkg));
+        if (r == null || !r.ok) {
+            Log.w(TAG, "MOVE_ROOT 失败: " + (r == null ? "无应答" : r.payload));
+            return false;
+        }
+        Log.i(TAG, "MOVE_ROOT " + pkg + " → display " + displayId + " : " + r.payload);
+        return true;
+    }
+
     public static synchronized boolean remove(int taskId) {
         if (!ensure()) return false;
         PrivCodec.Response r = roundTrip(PrivCodec.encodeRequest(nextSeq(),

@@ -17,6 +17,7 @@ import java.io.OutputStreamWriter;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * root 守护进程 —— 由 PrivClient 通过 `su -c app_process` 拉起。
@@ -204,6 +205,8 @@ public final class RootMain {
                     return doMotion(r.args);
                 case PrivCodec.OP_MOVE:
                     return doMove(r.args);
+                case PrivCodec.OP_MOVE_ROOT:
+                    return doMoveRoot(r.args);
                 case PrivCodec.OP_REMOVE:
                     return doRemove(r.args);
                 default:
@@ -359,6 +362,111 @@ public final class RootMain {
         return Boolean.TRUE.equals(res)
                 ? "moved task " + taskId + " → display " + displayId
                 : "moveRootTaskToDisplay 返回 " + res;
+    }
+
+    /**
+     * MOVE_ROOT：复刻 CarWithX `com.leting.pip.TaskMover.main()` 的 app_process 逻辑
+     * （对应复刻蓝图 §2.2「锚点 + move-task」）。三段：
+     *   ① getTasks 找 pkg 的任务 → taskId（**要求它在主屏或目标屏**，
+     *      别的虚拟屏上的同名任务属于对槽，绝不抢）
+     *   ② getAllRootTaskInfosOnDisplay(displayId) 找 **锚点包** 所在的 root task → rootTaskId，
+     *      锚点行匹配不到就用该屏第一个 root task 兜底
+     *   ③ moveTaskToRootTask(taskId, rootTaskId, true)
+     *
+     * 为什么比 shell `am stack move-task` 稳：不解析 am 的文本输出、不依赖 ROM
+     * 是否保留该子命令、也没有一次 fork 一个 su 的开销。@hide 接口方法在
+     * app_process（uid 0）里没有 hidden-api enforcement，AIDL 代理方法都是 public。
+     *
+     * 参数顺序：pkg displayId anchorPkg。
+     */
+    private static String doMoveRoot(String[] a) throws Exception {
+        if (a.length < 3) return "err:args";
+        String pkg = a[0];
+        int displayId = Integer.parseInt(a[1]);
+        String anchorPkg = a[2];
+
+        IBinder b = service("activity_task");
+        Class<?> iatm = Class.forName("android.app.IActivityTaskManager");
+        Object svc = iatm.getMethod("asInterface", IBinder.class).invoke(null, b);
+
+        // ① 源任务：优先主屏(0)或目标屏上的实例；先记账，避免把对槽的任务抢走
+        int taskId = -1, taskDisplay = -1;
+        int fallbackId = -1, fallbackDisplay = -1;
+        for (Object t : getTasks(iatm, svc)) {
+            if (!(componentOf(t, "topActivity").contains(pkg)
+                    || componentOf(t, "baseActivity").contains(pkg))) continue;
+            int id = intField(t, "taskId");
+            int d = optionalIntField(t, "displayId", -1);
+            if (d == 0 || d == displayId) { taskId = id; taskDisplay = d; break; }
+            if (fallbackId < 0) { fallbackId = id; fallbackDisplay = d; }
+        }
+        if (taskId < 0) { taskId = fallbackId; taskDisplay = fallbackDisplay; }
+        if (taskId < 0) return "err:target task not found";
+        if (taskDisplay == displayId) return "already on display " + displayId + " task=" + taskId;
+        // 源任务在别的虚拟屏（对槽的实例）→ 明确拒绝，别把另一块画布上的应用搬走
+        if (taskDisplay > 0) return "err:target task on other display " + taskDisplay + " , skip";
+
+        // ② 落点 root task：锚点包所在栈；没有就用该屏第一个 root task 兜底
+        int rootId = -1;
+        @SuppressWarnings("unchecked")
+        List<Object> roots = (List<Object>) iatm
+                .getMethod("getAllRootTaskInfosOnDisplay", int.class).invoke(svc, displayId);
+        if (roots != null) {
+            for (Object rt : roots) {
+                if (componentOf(rt, "topActivity").contains(anchorPkg)
+                        || componentOf(rt, "baseActivity").contains(anchorPkg)) {
+                    rootId = intField(rt, "taskId");
+                    break;
+                }
+            }
+            if (rootId < 0 && !roots.isEmpty()) rootId = intField(roots.get(0), "taskId");
+        }
+        if (rootId < 0) return "err:no root task on display " + displayId;
+
+        // ③ 搬（返回 void，不抛异常即成功）
+        iatm.getMethod("moveTaskToRootTask", int.class, int.class, boolean.class)
+                .invoke(svc, taskId, rootId, true);
+        return "moved task=" + taskId + " root=" + rootId + " display=" + displayId;
+    }
+
+    /**
+     * getTasks：优先 am 同款 4 参重载（A12+），老 SDK 回落 1 参版。
+     * displayId 传 -1 = 不按屏过滤（CarWithX 原值），我们在结果里再按 displayId 挑。
+     */
+    private static List<?> getTasks(Class<?> iatm, Object svc) throws Exception {
+        try {
+            Object r = iatm.getMethod("getTasks",
+                            int.class, boolean.class, boolean.class, int.class)
+                    .invoke(svc, 200, false, false, -1);
+            return r instanceof List ? (List<?>) r : java.util.Collections.emptyList();
+        } catch (NoSuchMethodException old) {
+            Object r = iatm.getMethod("getTasks", int.class).invoke(svc, 200);
+            return r instanceof List ? (List<?>) r : java.util.Collections.emptyList();
+        }
+    }
+
+    /** 公开字段取值（RunningTaskInfo / RootTaskInfo 的字段都是 public）。读不到返回 ""。 */
+    private static String componentOf(Object o, String field) {
+        try {
+            Object v = o.getClass().getField(field).get(o);
+            return v == null ? "" : v.toString();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static int intField(Object o, String field) throws Exception {
+        return ((Number) o.getClass().getField(field).get(o)).intValue();
+    }
+
+    /** 同 intField，但字段缺失/取不到时回落 def（老 ROM 上 RunningTaskInfo 可能没有 displayId）。 */
+    private static int optionalIntField(Object o, String field, int def) {
+        try {
+            Object v = o.getClass().getField(field).get(o);
+            return v instanceof Number ? ((Number) v).intValue() : def;
+        } catch (Throwable t) {
+            return def;
+        }
     }
 
     private static String doRemove(String[] args) throws Exception {
