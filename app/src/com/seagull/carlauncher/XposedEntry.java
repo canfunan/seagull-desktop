@@ -156,6 +156,14 @@ public class XposedEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("H3 失败: " + t);
         }
+        // C0 总闸（批次 AG）：Instrumentation.execStartActivity 是所有 Activity 启动
+        // 的必经终点，一条 hook 覆盖全部入口。对所有 TARGETS 生效 —— 这是「应用在
+        // 画布内点击后必须留在画布」的根治 hook，对齐高德的固定效果全靠它。
+        try {
+            hookExecStartActivity();
+        } catch (Throwable t) {
+            log("C0 失败: " + t);
+        }
         // D 段（批次 AA）：应用进程内的「窄屏强制竖屏」配置改写（网易云车机版
         // IotActivityBase.attachBaseContext 宽高比 ≤1.3 时 applyOverrideConfiguration
         // 锁竖屏，反编译坐实）。必须独立 try/catch，别让它失败牵连 H1~H3。
@@ -615,6 +623,12 @@ public class XposedEntry implements IXposedHookLoadPackage {
     // android.app.ContextImpl（所有非 Activity Context 的最终实现，ContextWrapper 的
     // mBase 就是它）—— 这样才能真的盖住 Service/Application 起的 Activity。
     //
+    // 【批次 AG：C0 总闸】C1~C6 挂在 startActivity 的 6 个入口上，但它们不是全部
+    // —— 所有 Activity 启动的必经终点是 Instrumentation.execStartActivity
+    // （Activity.startActivityForResult 与 ContextImpl.startActivity 最终都调它）。
+    // 总闸一条 = 全路径覆盖，而且对所有 TARGETS（高德/百度/QQ音乐…）都生效，
+    // 不再只是网易云。挂了 C0 之后 C1~C6 变冗余，保留作双保险（hook 幂等）。
+    //
     // 每条 hook 各自 try/catch：某台 ROM 上少了某个方法签名，不该连带把后面几条全吞掉
     // （参考实现就是每条一个 try/catch）。
 
@@ -757,6 +771,107 @@ public class XposedEntry implements IXposedHookLoadPackage {
         log("C hookNeteaseDisplayId OK");
     }
 
+    // ===================== C0 总闸：Instrumentation.execStartActivity =====================
+
+    /**
+     * ActivityOptions 里 launchDisplayId 的 Bundle 键。AOSP 常量是 @hide
+     * （ActivityOptions.KEY_LAUNCH_DISPLAY_ID），但字符串自 API 26 引入该功能起
+     * 一直稳定；系统侧 ActivityStarter 从 options Bundle 里按这个键读显示，
+     * 未知键被忽略 —— 所以直接 putInt 进应用自带的 Bundle 也能生效，
+     * 动画/共享元素等自有参数原样保留。
+     */
+    private static final String KEY_LAUNCH_DISPLAY_ID = "android.activity.launchDisplayId";
+
+    /**
+     * C0 总闸（批次 AG）：hook Instrumentation.execStartActivity —— 应用进程内
+     * 所有 Activity 启动（Activity.startActivityForResult、ContextImpl.startActivity、
+     * Service/Application 侧拉起）最终都经过它。一条 hook = 全路径覆盖，
+     * C1~C6 那 6 个入口挂不全的漏网路径全部在这里收口。
+     *
+     * 规则：
+     *   · 启动方（源 Activity / Context）不在虚拟屏上（displayId=0，用户正常在手机
+     *     上用）→ 不干预，绝不能把主屏使用也钉到画布；
+     *   · 目标是自己应用的组件（或解析不出组件）→ 注入 launchDisplayId 留在画布
+     *     ——「画布内导航不出画布」；
+     *   · 目标是别的应用（外跳浏览器/分享）→ 不注入，交给系统正常解析。
+     */
+    private void hookExecStartActivity() {
+        // 【批次 AG】桩 jar（api-82）没有 XposedBridge.hookAllMethods 便捷 API，
+        // 手动枚举同名重载逐个 hookMethod —— 顺带把「某条重载挂不上」的失败
+        // 收敛到单条日志，不再牵连其余重载。
+        int n = 0;
+        for (java.lang.reflect.Method m
+                : android.app.Instrumentation.class.getDeclaredMethods()) {
+            if (!"execStartActivity".equals(m.getName())) continue;
+            try {
+                XposedBridge.hookMethod(m, mExecHook);
+                n++;
+            } catch (Throwable t) {
+                log("C0 hook " + m.getName() + " 失败: " + t);
+            }
+        }
+        if (n == 0) throw new IllegalStateException("execStartActivity 一条重载都没挂上");
+        log("C0 hookExecStartActivity OK (" + n + " 个重载)");
+    }
+
+    /** C0 的 hook 体（在 hookExecStartActivity 里逐重载挂载）。 */
+    private final XC_MethodHook mExecHook = new XC_MethodHook() {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam param) {
+            try {
+                Activity srcAct = null;
+                Context who = null;
+                Intent intent = null;
+                Bundle options = null;
+                int optIdx = -1;
+                Object[] args = param.args;
+                // options 槽定位：已知签名里 options 都带 Bundle（值可能为 null
+                // —— null instanceof 不成立，不能纯按类型扫）。从尾部扫 Bundle，
+                // 没有且末参是 null 时认定末参就是 options 槽（options 恒为末参）。
+                for (int i = args.length - 1; i >= 0; i--) {
+                    if (args[i] instanceof Bundle) {
+                        options = (Bundle) args[i];
+                        optIdx = i;
+                        break;
+                    }
+                }
+                if (optIdx < 0 && args.length > 0 && args[args.length - 1] == null) {
+                    optIdx = args.length - 1;
+                }
+                for (int i = 0; i < args.length; i++) {
+                    Object a = args[i];
+                    if (a instanceof Activity && srcAct == null) srcAct = (Activity) a;
+                    if (a instanceof Context && who == null) who = (Context) a;
+                    if (a instanceof Intent && intent == null) intent = (Intent) a;
+                }
+                if (intent == null || optIdx < 0) return;
+                int id = srcAct != null ? displayIdOf(srcAct)
+                        : (who != null ? displayIdOf(who) : -1);
+                if (id < 0) return;   // 启动方在主屏：不干预
+                // 只钉「应用自己内部跳转」：目标组件是本应用，或解析不出。
+                // 外跳别的应用（浏览器/分享）不钉，否则外跳会被塞进私有画布被拒。
+                ComponentName cn = intent.getComponent();
+                String self = who != null ? who.getPackageName()
+                        : (srcAct != null ? srcAct.getPackageName() : null);
+                if (cn != null && self != null && !cn.getPackageName().equals(self)) {
+                    return;
+                }
+                if (options != null) {
+                    options.putInt(KEY_LAUNCH_DISPLAY_ID, id);
+                    log("C0 注入 displayId=" + id + " execStartActivity "
+                            + (cn != null ? cn.getClassName() : "(隐式)"));
+                } else {
+                    ActivityOptions o = ActivityOptions.makeBasic();
+                    o.setLaunchDisplayId(id);
+                    param.args[optIdx] = o.toBundle();
+                    log("C0 注入 displayId=" + id + " execStartActivity (新建 options)");
+                }
+            } catch (Throwable t) {
+                log("C0 execStartActivity 处理异常: " + t);
+            }
+        }
+    };
+
     /** 当前 Activity 所在 displayId；在主屏(0)上返回 -1（无需注入）。 */
     private static int displayIdOf(Activity a) {
         // 优先 getDisplay()：Activity 在虚拟屏上时它比 WindowManager 更准（对齐参考）
@@ -796,37 +911,29 @@ public class XposedEntry implements IXposedHookLoadPackage {
 
     /**
      * 把 setLaunchDisplayId 写进 options Bundle。
-     * 原 Bundle 非空时必须先还原成 ActivityOptions —— 而还原用的
-     * `ActivityOptions.fromBundle` 是 @hide，公开 SDK 里没有，只能反射；
-     * 反射被 hidden-api 拦截时宁可原样返回（不注入），也不要用 makeBasic
-     * 顶掉 App 自己带过来的动画/共享元素参数。
+     *
+     * 【批次 AG 重写】旧实现对「已有 Bundle」走 ActivityOptions.fromBundle 反射 ——
+     * fromBundle 是 @hide，API 28+ 被 hidden-api 拦截，反射在真机上**必失败**，
+     * 返回原样 → C2/C4/C5（凡是应用自带 options 的路径）静默一条都没注入。
+     * 这正是「模块挂上了还是跳」的代码级根因。
+     *
+     * 新实现直接往 Bundle 里 putInt(KEY_LAUNCH_DISPLAY_ID)：系统侧 ActivityStarter
+     * 拿到 Bundle 按同一键读显示，未知键忽略、该键读取 —— 应用自带的动画/共享元素
+     * 参数原样保留，零 hidden-api 依赖。
      */
     private static Bundle injectDisplayId(int id, Intent intent, Bundle existing) {
         if (id < 0 || !shouldPin(intent)) return existing;
         try {
-            ActivityOptions options;
             if (existing != null) {
-                options = optionsFromBundle(existing);
-                if (options == null) return existing;
-            } else {
-                options = ActivityOptions.makeBasic();
+                existing.putInt(KEY_LAUNCH_DISPLAY_ID, id);
+                return existing;
             }
+            ActivityOptions options = ActivityOptions.makeBasic();
             options.setLaunchDisplayId(id);
             return options.toBundle();
         } catch (Throwable t) {
             log("injectDisplayId failed: " + t);
             return existing;
-        }
-    }
-
-    /** ActivityOptions.fromBundle 是 @hide，公开 SDK 无此签名，只能反射。 */
-    private static ActivityOptions optionsFromBundle(Bundle b) {
-        try {
-            Object o = ActivityOptions.class.getMethod("fromBundle", Bundle.class)
-                    .invoke(null, b);
-            return o instanceof ActivityOptions ? (ActivityOptions) o : null;
-        } catch (Throwable t) {
-            return null;
         }
     }
 

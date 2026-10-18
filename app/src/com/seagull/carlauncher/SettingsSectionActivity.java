@@ -1017,9 +1017,24 @@ public class SettingsSectionActivity extends BaseActivity {
             } else if (hitAmap) {
                 sb.append("  方向劫持就绪标志：日志里的「H2 hookOrientationOverride OK -> 0」（0=横屏）。\n");
             }
+            // C0 总闸是否真的在干活（批次 AG）：出现「C0 注入」= 应用内跳转已被
+            // 钉回虚拟屏；一次都没有 = 模块没注入目标进程，或跳转没发生在虚拟屏里。
+            int c0 = countStr(logTxt, "C0 注入");
+            sb.append("   displayId 注入: ").append(c0).append(" 次")
+                    .append(c0 > 0 ? " ✓（画布内跳转已被钉住）"
+                            : "（0 次：模块未注入目标进程，或还没在画布里点过页面）")
+                    .append('\n');
         }
         sb.append("\n前提：本次开机后至少打开过一次目标应用，模块在它进程里跑过才有日志。\n");
         return sb.toString();
+    }
+
+    /** 子串计数（自检报告用：数「C0 注入」出现的次数）。 */
+    private static int countStr(String s, String sub) {
+        if (s == null || sub == null || sub.isEmpty()) return 0;
+        int n = 0, from = 0;
+        while ((from = s.indexOf(sub, from)) >= 0) { n++; from += sub.length(); }
+        return n;
     }
 
     /** 17.3 检查更新：打 GitHub releases/latest，跟本机 versionName 比。 */

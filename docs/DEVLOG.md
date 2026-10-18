@@ -12,6 +12,60 @@
 
 ---
 
+## 批次 AG — 「为什么网易云有的地方点了就跳主屏？」：C0 总闸 + 注入去 hidden-api 化
+
+**目标**：用户要求网易云"像高德那样固定好"。先讲清机制再改代码。
+
+### 为什么高德不跳、网易云跳
+
+高德车机使用全程在一个 Activity 里（点击不启动新 Activity），没有"跳"的机会。
+网易云点歌词/封面要启动**新 Activity**，而系统要把新 Activity 放到某个屏上——
+画布是本应用自建的**私有虚拟屏**，系统判定"别的应用不许往里放"，
+落点回落主屏，singleTask 任务整体被拉走。
+
+### 病根（读码坐实两条，都在模块 C 段）
+
+**① 6 个入口 hook 挂不全。** C1~C6 挂在 startActivity 的 6 个签名上，但应用进程内
+所有 Activity 启动的**必经终点是 Instrumentation.execStartActivity**
+（Activity.startActivityForResult 与 ContextImpl.startActivity 最终都调它）。
+任何一条内部路径绕过这 6 个口就直接漏掉。
+
+**② 注入对"已有 options"静默失败。** 旧 `injectDisplayId` 对应用自带的 options
+Bundle 走 `ActivityOptions.fromBundle` 反射还原 —— fromBundle 是 @hide，
+API 28+ 被 hidden-api 拦截，真机上**反射必失败 → 原样返回 → 一条都没注入**。
+凡是网易云自带跳转参数的路径（它的页面转场基本都带）等于裸奔。
+
+### 修复
+
+**C0 总闸**（XposedEntry.hookExecStartActivity，挂在全部 TARGETS）：
+枚举 `Instrumentation.execStartActivity` 全部重载逐条 `hookMethod` 挂载
+（桩 jar 没有 hookAllMethods，且桩补了 `XposedBridge.hookMethod` —— Xposed
+原始 API，所有框架版本都有，不受 api-82 桩限制）。规则：
+
+- 启动方在主屏（displayId=0）→ 不干预，绝不能把手机上的正常使用钉进画布；
+- 目标组件是本应用（或解析不出）→ 注入 launchDisplayId 留在画布
+  ——「画布内导航不出画布」，这就是高德式固定；
+- 目标是别的应用（外跳浏览器/分享）→ 不注入，外跳正常走。
+
+**注入去 hidden-api 化**（injectDisplayId 重写）：对已有 Bundle 直接
+`putInt("android.activity.launchDisplayId", id)` —— 该键是 AOSP
+ActivityOptions.KEY_LAUNCH_DISPLAY_ID 的稳定字符串（API 26 起），
+系统侧按同键读取、未知键忽略；应用自带的动画/共享元素参数原样保留。
+零 hidden-api 依赖，C2/C4/C5 从"必失败"变"必成功"。
+
+**自检升级**（SettingsSectionActivity.lspCheckReport）：报告新增
+「displayId 注入: N 次」—— C0 真正工作时计数 >0，用户不抓日志即可确认
+"注入"这件事本身在发生，不再只看"进程挂载"。
+
+**验证**：javac --release 11 全树通过（167 class，桩 jar 重打）。
+真机口径：装新包 → LSPosed 确认模块启用 + 作用域 → 强杀网易云重开 →
+进画布点歌词/封面 → 应不再跳主屏；自检里「displayId 注入」应 >0 次。
+
+**遗留**：PendingIntent（通知栏点击）走系统进程，模块够不着 —— 那类跳转
+仍靠批次 AF 的 2.5s 巡检搬回兜底。
+
+---
+
 ## 批次 AF — 网易云「点歌词/封面就跳主屏 + 回桌面画布黑屏」：自愈通道补全 + 常驻巡检搬回
 
 **目标**：用户实测两个症状：① 画中画里点网易云的歌词/封面等页面，应用直接全屏跑回
