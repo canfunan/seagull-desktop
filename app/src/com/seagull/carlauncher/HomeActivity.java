@@ -251,6 +251,13 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         pip = new PipBoard(this, slot -> PipBoard.showPicker(this, slot, pip), true, model);
         // 点画布 = 进入该应用：铺满内容区 + 底栏高亮跟随（导航栏原地不动）
         pip.setOnEnterSlot(this::expandSlot);
+        // 批次 AA：画布键条「桌面」= 与导航栏首页同路径 —— 退回分屏主页，
+        // 应用留在虚拟屏后台不杀，再点画布秒回（MirrorHost 只断 Surface 不拆屏）
+        pip.setOnExitSlot(which -> {
+            pip.showSplit();
+            enableSwipe(true);
+            syncDock(DockBar.HOME);
+        });
         // 批次 AD：画布直接铺到内容区底部（与底栏零缝隙）；只有媒体条显形时才让出 36dp
         page.addView(pip, new FrameLayout.LayoutParams(-1, -1));
 

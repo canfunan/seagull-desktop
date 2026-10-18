@@ -75,6 +75,8 @@ public final class PipBoard extends LinearLayout {
     private static final long LUX_INTERVAL_MS = 1000;
     private static final float LUX_NIGHT = 20f;   // 低于它算夜间（带回差）
     private static final float LUX_DAY = 2000f;   // 高于它算白天强光
+    /** 批次 AA：底部常驻键条高度。显示时挤压画布盒的底边距，应用窗口随 VD resize。 */
+    private static final int KEYBAR_DP = 34;
 
     private final Activity act;
     private final Host host;
@@ -98,6 +100,8 @@ public final class PipBoard extends LinearLayout {
     private MirrorSlot slotA, slotB;
     private SurfaceView svA, svB;
     private FrameLayout colA, colB;       // 两块画布的容器（单应用模式下隐藏其一）
+    private FrameLayout boxA, boxB;       // 画布盒：Surface/提示/空态/遮罩都在里面，键条挤压它的底边距
+    private LinearLayout barA, barB;      // 批次 AA：底部常驻键条（返回/桌面），单应用铺满时才显示
     private View splitter;                // 中间可拖的分隔把手：拖它 = 改两块画布的占比
     private TextView hintA, hintB;        // 画布中央状态行（启动中…/需要录屏授权…）
     private View emptyA, emptyB;          // 空态大按钮（空画布才有）
@@ -123,6 +127,11 @@ public final class PipBoard extends LinearLayout {
     public interface EnterListener { void onEnter(int which); }
 
     public void setOnEnterSlot(EnterListener l) { this.enterListener = l; }
+    /** 批次 AA：键条「桌面」键 = 退回桌面分屏（宿主同步底栏高亮/翻页），没注入就本地 showSplit。 */
+    public interface ExitListener { void onExit(int which); }
+    private ExitListener exitListener;
+
+    public void setOnExitSlot(ExitListener l) { this.exitListener = l; }
     private final boolean[] longFired = {false, false, false};
     /** armed[i] = 本手势（从 DOWN 起）发生在这块画布已是焦点的时候，才允许外注入。 */
     private final boolean[] armed = {false, false, false};
@@ -280,8 +289,14 @@ public final class PipBoard extends LinearLayout {
         card.setBackground(null);
         card.setClipChildren(false);
 
+        // 批次 AA：画布盒 —— Surface/提示/空态/遮罩全收进来；键条显示时挤压盒底边距，
+        // 应用窗口跟着 VD resize（attachTo/syncSize 按盒实际尺寸走），不用改任何坐标换算。
+        FrameLayout box = new FrameLayout(act);
+        if (which == 1) boxA = box; else boxB = box;
+        box.setClipChildren(false);
+
         SurfaceView view = which == 1 ? svA : svB;
-        card.addView(view, new FrameLayout.LayoutParams(-1, -1));
+        box.addView(view, new FrameLayout.LayoutParams(-1, -1));
 
         TextView hint = which == 1 ? hintA : hintB;
         hint.setText("长按选择应用");
@@ -290,12 +305,12 @@ public final class PipBoard extends LinearLayout {
         hint.setGravity(Gravity.CENTER);
         hint.setBackgroundColor(0x80000000);
         hint.setVisibility(View.GONE);
-        card.addView(hint, new FrameLayout.LayoutParams(-1, -1));
+        box.addView(hint, new FrameLayout.LayoutParams(-1, -1));
 
         View empty = which == 1 ? (emptyA = emptyButton()) : (emptyB = emptyButton());
         FrameLayout.LayoutParams ep = new FrameLayout.LayoutParams(-2, -2);
         ep.gravity = Gravity.CENTER;
-        card.addView(empty, ep);
+        box.addView(empty, ep);
         // 空态大按钮自己收点击（它是可点击的 child，触摸不经卡容器）。
         // 【坑】卡内 SurfaceView 绝不能 setClickable(true)：一旦可点击，它会吞掉
         // 整块画布的触摸（批次 N 因此两块画布都弹不出选择器），卡容器的长按/转发
@@ -306,7 +321,13 @@ public final class PipBoard extends LinearLayout {
         mask.setAlpha(0f);
         mask.setVisibility(View.GONE);
         if (which == 1) maskA = mask; else maskB = mask;
-        card.addView(mask, new FrameLayout.LayoutParams(-1, -1));
+        box.addView(mask, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout keybar = buildKeybar(which);
+        if (which == 1) barA = keybar; else barB = keybar;
+        card.addView(box, new FrameLayout.LayoutParams(-1, -1));
+        card.addView(keybar, new FrameLayout.LayoutParams(-1, dp(KEYBAR_DP), Gravity.BOTTOM));
+        keybar.setVisibility(View.GONE);   // 分屏（预览）模式没有键条；进入单应用才顶出来
 
         // 批次 AD：删掉焦点描边。两块画布之间那条亮线正是用户说的"框框 / 边框感"。
 
@@ -525,7 +546,80 @@ public final class PipBoard extends LinearLayout {
         }
     }
 
-    /* ------------------------- 单应用 / 分屏 ------------------------- */
+    /* ------------------------- 键条（批次 AA） ------------------------- */
+
+    /**
+     * 底部常驻键条【返回 | 桌面】—— 只在单应用铺满时显示。
+     *
+     * 为什么必须由桌面画：我们的画中画是 VirtualDisplay（flags=0 私有屏），
+     * 系统装饰（导航栏）只属于带 system decorations 的屏 —— SystemUI 不会在
+     * 私有 VD 上画导航栏，应用自己也没有「底部导航栏」这个形态（反编译：
+     * 车机版横屏=左侧栏、竖屏=顶部 Tab）。键条是画布内导航的唯一可靠入口：
+     *   · 返回 = input -d <id> keyevent 4（KEYCODE_BACK 注进应用）；
+     *   · 桌面 = 退回分屏主页（与 DockBar.HOME 同一路径），应用留在后台不杀。
+     * 键条是普通 View 层（PipBoard 纪律③：常驻 chrome 不被 App 覆盖），
+     * 应用自己的沉浸 flag、全屏请求都影响不到它。
+     */
+    private LinearLayout buildKeybar(int which) {
+        LinearLayout bar = new LinearLayout(act);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setBackgroundColor(0xF2101418);
+        bar.setGravity(Gravity.CENTER);
+        bar.setClickable(true);   // 吃掉键条区域的触摸，别穿透进应用（尤其左右两键之间）
+        int vpad = dp(4);
+
+        TextView back = keyButton("返回");
+        back.setOnClickListener(v -> {
+            MirrorSlot s = slotOf(which);
+            final int d = s != null ? s.displayId() : -1;
+            if (d <= 0) return;
+            new Thread(() -> RootOps.injectKey(d, 4), "pip-key-back" + which).start();
+        });
+
+        View sep = new View(act);
+        LinearLayout.LayoutParams seplp = new LinearLayout.LayoutParams(dp(1), -1);
+        seplp.setMargins(dp(2), vpad, dp(2), vpad);
+        sep.setBackgroundColor(0x33FFFFFF);
+
+        TextView home = keyButton("桌面");
+        home.setOnClickListener(v -> {
+            if (exitListener != null) exitListener.onExit(which);
+            else showSplit();
+        });
+
+        bar.addView(back, new LinearLayout.LayoutParams(0, -1, 1f));
+        bar.addView(sep, seplp);
+        bar.addView(home, new LinearLayout.LayoutParams(0, -1, 1f));
+        return bar;
+    }
+
+    /** 键条按钮：等宽、白字、车机可点的最小高度，按压出反馈色。 */
+    private TextView keyButton(String text) {
+        TextView b = new TextView(act);
+        b.setText(text);
+        b.setGravity(Gravity.CENTER);
+        b.setTextColor(0xF0FFFFFF);
+        b.setTextSize(13);
+        b.setClickable(true);
+        b.setHapticFeedbackEnabled(true);
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(0x00000000);
+        g.setCornerRadius(dp(8));
+        b.setBackground(g);
+        b.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    b.setBackgroundColor(0x30FFFFFF);
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    b.setBackground(null);
+                    break;
+            }
+            return false;   // 继续走 click
+        });
+        return b;
+    }
 
     /** 单应用模式：把某块画布铺满内容区。另一块只是隐藏，**不销毁、不杀进程**。 */
     public void showSingle(int which) {
@@ -570,8 +664,36 @@ public final class PipBoard extends LinearLayout {
         }
         colA.setLayoutParams(la);
         colB.setLayoutParams(lb);
+        applyKeybar(singleMode ? singleWhich : 0);
         applyFocusVisuals(false);
         reattachAll();
+    }
+
+    /**
+     * 批次 AA：键条显隐 + 画布盒底边距挤压。
+     * which=0 是分屏 —— 两条键条都藏、盒边距归零；单应用只亮当前槽那条。
+     * 挤压盒而不是留键条叠在画面上：SurfaceView 变小 → surfaceChanged →
+     * attachTo 按 new 尺寸 resize VD，应用窗口天然不被键条盖住（私有 VD 没有
+     * SystemUI 导航栏，应用布局不知道要留边，只能物理让位）。
+     */
+    private void applyKeybar(int which) {
+        int squeeze = which != 0 ? dp(KEYBAR_DP) : 0;
+        if (boxA != null) {
+            FrameLayout.LayoutParams pa = (FrameLayout.LayoutParams) boxA.getLayoutParams();
+            if (pa.bottomMargin != squeeze) {
+                pa.bottomMargin = squeeze;
+                boxA.setLayoutParams(pa);
+            }
+        }
+        if (boxB != null) {
+            FrameLayout.LayoutParams pb = (FrameLayout.LayoutParams) boxB.getLayoutParams();
+            if (pb.bottomMargin != squeeze) {
+                pb.bottomMargin = squeeze;
+                boxB.setLayoutParams(pb);
+            }
+        }
+        if (barA != null) barA.setVisibility(which == 1 ? View.VISIBLE : View.GONE);
+        if (barB != null) barB.setVisibility(which == 2 ? View.VISIBLE : View.GONE);
     }
 
     /**

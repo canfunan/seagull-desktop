@@ -236,6 +236,19 @@ public final class RootOps {
         return out != null;
     }
 
+    /**
+     * 往虚拟屏注入按键（批次 AA：画中画卡片底部常驻键条用）。
+     * 语法与 injectTouch 一致（input -d <id> keyevent <code>），back=4 home=3。
+     * 私有 VD 没有系统装饰、SystemUI 不会给它画导航栏，键条是唯一可靠的返回/桌面入口。
+     */
+    public static boolean injectKey(int displayId, int keycode) {
+        if (displayId <= 0) return false;
+        String out = Caps.exec("input -d " + displayId + " keyevent " + keycode);
+        boolean ok = out != null;
+        Log.i(TAG, "injectKey d" + displayId + " code=" + keycode + " ok=" + ok);
+        return ok;
+    }
+
     /* ---------------- TRUSTED 虚拟屏（批次 K，carlink m13 同款） ---------------- */
 
     private static volatile Boolean trustedRoleGranted = null;

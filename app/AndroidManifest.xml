@@ -74,7 +74,7 @@
         -->
         <meta-data android:name="xposedmodule" android:value="true" />
         <meta-data android:name="xposeddescription"
-            android:value="海鸥桌面：高德 PiP 尺寸缩放(60%) + 目标应用 H1/H2/H3 窗口语义 + 网易云跨屏 displayId 注入" />
+            android:value="海鸥桌面：高德 PiP 尺寸缩放(60%) + H1/H2/H3 窗口语义 + D段窄屏竖屏配置改写(网易云车机版) + 网易云跨屏 displayId 注入" />
         <meta-data android:name="xposedminversion" android:value="82" />
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
 

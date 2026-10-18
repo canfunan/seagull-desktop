@@ -12,6 +12,76 @@
 
 ---
 
+## 批次 AA — 网易云车机版强制横屏（反编译坐实两条病根）+ 画布键条（返回/桌面）+ 重挂载
+
+**目标**：用户报「网易云车机版 3.1.0 竖版 / 没有底部导航 / 返回桌面后点不回去」，
+要求像 hook 高德一样：强制横屏、进入应用固定底部键条（导航栏）、返回桌面能重新挂载。
+先反编译 APK 找病根再动手。
+
+### 反编译结论（jadx，com.netease.cloudmusic.iot，targetSdk 29）
+
+1. **manifest 全家 `screenOrientation="sensor"`** —— 旧 H2 判据（竖屏系列 or
+   UNSPECIFIED）对 sensor(4) 一条不改，首帧方向由 VD 自然方向决定 → 横屏不成立；
+2. **IotActivityBase.attachBaseContext 宽高比 ≤1.3 时 `new Configuration();
+   orientation=1; applyOverrideConfiguration(...)`** —— 在应用进程内把 Resources
+   配置按竖屏摆，走 ContextThemeWrapper 层，WM 侧 H2 够不着 → 画布不够宽就整体切
+   竖版形态（顶部 Tab）。反编译确认该应用**任何形态都没有底部导航栏**
+   （sw1080dp-land / land = 左侧栏，port = 顶部 Tab），底部键条只能桌面自绘。
+
+### 改了什么
+
+1. `XposedEntry.java`：
+   - **H2 判据扩写**：新增 `shouldRewrite(req, target)` —— 与目标同侧放行；
+     异侧 / 竖屏系列 / 跟随类（sensor / fullSensor / user / fullUser / nosensor /
+     behind / locked / unspecified）一律改 target。网易云 manifest 的 sensor 从此
+     进门就改横屏；
+   - **新增 D 段** `hookPortraitConfigOverride()`：hook 框架类
+     `ContextThemeWrapper.applyOverrideConfiguration`（公开 API 不受混淆影响），
+     只拦「显式 orientation=PORTRAIT」的 override，目标为横屏时改写成 LANDSCAPE，
+     其余（含 AppCompat 合法调用）原样放行。独立 try/catch，失败不牵连 H1~H3。
+2. `PipBoard.java`（画布键条）：
+   - 每块画布 = 画布盒(box) + 底部键条(bar) 嵌套；键条【返回 | 桌面】两键，
+     `KEYBAR_DP=34`，分屏预览模式隐藏，单应用铺满才顶出（`applyKeybar`）；
+   - **键条挤压画布盒底边距**而非叠在画面上：SurfaceView 变小 → surfaceChanged →
+     attachTo 按新尺寸 resize VD —— 私有 VD 无 SystemUI 导航栏、应用布局不知道
+     要留边，物理让位是唯一不被盖的方案；
+   - **返回键** = `RootOps.injectKey(displayId, 4)`（input -d <id> keyevent 4，
+     注进应用）；**桌面键** = `ExitListener.onExit` 回宿主（无监听则本地降级
+     showSplit）。键条 setClickable 吃掉自身区域触摸，不穿透；
+   - 触摸纪律不变：单应用模式全量转发（DOWN 上 syncCanvasSize 校尺寸），分屏
+     预览只切焦点/进应用。
+3. `HomeActivity.java`：`pip.setOnExitSlot(...)` —— 键条「桌面」与导航栏「首页」
+   同路径：showSplit + enableSwipe(true) + syncDock(HOME)。应用留在虚拟屏后台
+   不杀，MirrorHost 只断 Surface 不拆屏，再点画布秒回。
+4. `RootOps.java`：新增 `injectKey(displayId, keycode)`。
+5. `MirrorHost.java`：`relaunchIfAbsent` 重载带 `force` —— 用户主动点画布 /
+   键条属显式意图，绕过 60s 重拉节流（正是「返回桌面后点不回去」的挡板）；
+   后台自愈仍走节流防连环 force-stop。
+6. `AndroidManifest.xml`：xposeddescription 补 D 段说明。
+
+### 验证
+
+- javac --release 11 全树 0 错误（64 源文件，含历史 gen 的 R.java）；
+- CI 构建（build-apk.yml）出包，versionName 1.0.<git 短哈希> 供核对。
+
+### 真机验收清单
+
+1. 画布选网易云车机版 → 铺满后应横屏无黑边（若仍竖版：先看 LSPosed 作用域
+   是否勾了网易云 + 强杀其进程重开，再用「LSPosed 模块自检」看 D 段日志）；
+2. 单应用底部应有常驻【返回 | 桌面】键条，应用画面不被盖（键条下应用窗口
+   物理缩让）；
+3. 键条「返回」应触发应用内返回；「桌面」退回分屏主页；
+4. 退桌面后立刻点画布 → 应用应能重新挂上（不受 60s 节流限制）。
+
+### 遗留
+
+- D 段 hook 挂在 ContextThemeWrapper 上，凡显式竖屏 override 都会被改横 ——
+  目标应用内的确要竖屏的页面（若有）也会被拉横，与 H2 口径一致，车机场景可接受；
+- 键条按钮圆角按压态用了 setBackground(null) 切换，个别 ROM 上高亮可能不显，
+  不影响功能。
+
+---
+
 ## 批次 Z — 用户「不方便抓日志，直接改」：三条不依赖框架的确定性修法
 
 **目标**：用户明确说不方便抓 logcat，要求直接改。没有现场日志时，能坐实的只有

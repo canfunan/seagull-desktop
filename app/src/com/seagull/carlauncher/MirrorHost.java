@@ -117,10 +117,20 @@ public final class MirrorHost {
      * RootOps.ABSENT 只在栈结构解析成功时返回，解析失败绝不会走到这（红线保持）。
      */
     public static void relaunchIfAbsent(Context ctx, int which, String pkg, int displayId) {
+        relaunchIfAbsent(ctx, which, pkg, displayId, false);
+    }
+
+    /**
+     * force=true 的重拉（批次 AA）：给「用户主动进入该槽」的路径用 —— 点画布/键条
+     * 是显式意图，被 60s 节流挡掉就是用户报的「返回桌面后点不回去（不能重新挂载）」；
+     * 而后台自愈（selfHeal/healHome）仍走节流，防连环 force-stop。
+     */
+    public static void relaunchIfAbsent(Context ctx, int which, String pkg, int displayId,
+                                        boolean force) {
         if (pkg == null || pkg.isEmpty() || displayId <= 0 || which < 1 || which > 2) return;
         long now = SystemClock.elapsedRealtime();
         synchronized (RELAUNCH_LOCK) {
-            if (now - lastRelaunch[which] < RELAUNCH_MIN_INTERVAL_MS) {
+            if (!force && now - lastRelaunch[which] < RELAUNCH_MIN_INTERVAL_MS) {
                 Log.i(TAG, "槽 " + which + " 应用缺席，重拉节流中");
                 return;
             }
@@ -128,7 +138,8 @@ public final class MirrorHost {
         }
         final Context app = ctx.getApplicationContext();
         new Thread(() -> {
-            Log.w(TAG, "槽 " + which + " 应用缺席 → 重拉 " + pkg + " -> d" + displayId);
+            Log.w(TAG, "槽 " + which + " 应用缺席 → 重拉" + (force ? "(用户触发)" : "")
+                    + " " + pkg + " -> d" + displayId);
             RootOps.launchOnDisplay(app, pkg, displayId);
         }, "pip-relaunch" + which).start();
     }

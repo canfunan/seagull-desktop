@@ -156,6 +156,14 @@ public class XposedEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("H3 失败: " + t);
         }
+        // D 段（批次 AA）：应用进程内的「窄屏强制竖屏」配置改写（网易云车机版
+        // IotActivityBase.attachBaseContext 宽高比 ≤1.3 时 applyOverrideConfiguration
+        // 锁竖屏，反编译坐实）。必须独立 try/catch，别让它失败牵连 H1~H3。
+        try {
+            hookPortraitConfigOverride();
+        } catch (Throwable t) {
+            log("D 失败: " + t);
+        }
     }
 
     // ===================== A) SystemUI：AmapPip 尺寸缩放 =====================
@@ -409,9 +417,12 @@ public class XposedEntry implements IXposedHookLoadPackage {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         int req = (Integer) param.args[0];
-                        // 复刻 gaodehook：竖屏系列 或 UNSPECIFIED → 目标方向
-                        if (isPortraitSeries(req)
-                                || req == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+                        // 批次 AA 扩写：竖屏系列之外，sensor(4)/fullSensor(10)/user(2)/
+                        // fullUser(13) 也可能落成竖屏或跟随显示方向 —— 网易云车机版
+                        // manifest 全家就是 screenOrientation="sensor"，旧判据放行后
+                        // 首帧方向由 VD 自然方向决定，强制横屏就不成立。改写口径：
+                        // 与 target 同侧的值放行，异侧与跟随类一律改 target。
+                        if (shouldRewrite(req, target)) {
                             param.args[0] = target;
                         }
                     }
@@ -470,6 +481,78 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 || o == ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT  // 9
                 || o == ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT     // 12
                 || o == ActivityInfo.SCREEN_ORIENTATION_LOCKED;           // 14
+    }
+
+    /**
+     * setRequestedOrientation 的改写判据（批次 AA，替换旧「竖屏系列 or UNSPECIFIED」）。
+     * 旧判据放行了 sensor(4)/fullSensor(10)/user(2)/fullUser(13) —— 这些值语义是
+     * 「跟随显示/传感器」，在物理屏上跟随用户习惯没毛病，但我们的目标是把应用
+     * 钉死在一块方向固定的虚拟屏上，跟随类必须一并接管，否则：
+     *   · 网易云车机版 manifest 全家 screenOrientation="sensor" → 旧判据一条不改；
+     *   · 应用自己 setRequestedOrientation(SENSOR) 做横竖切换 → 把 WM 侧又带跑。
+     * 口径：请求值与 target 已经同侧（都横 / 都竖）放行；异侧、竖/横系列、
+     * 跟随类、LOCKED、UNSPECIFIED 一律改 target。
+     */
+    private static boolean shouldRewrite(int req, int target) {
+        if (req == target) return false;
+        boolean targetLandscape = target != ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+        boolean reqPortrait = isPortraitSeries(req)
+                || req == ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+        boolean reqLandscape = req == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE            // 0
+                || req == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE                 // 6
+                || req == ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE;               // 8
+        boolean reqFollow = req == ActivityInfo.SCREEN_ORIENTATION_SENSOR                  // 4
+                || req == ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR                      // 10
+                || req == ActivityInfo.SCREEN_ORIENTATION_USER                             // 2
+                || req == ActivityInfo.SCREEN_ORIENTATION_FULL_USER                        // 13
+                || req == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED                      // -1
+                || req == ActivityInfo.SCREEN_ORIENTATION_LOCKED                           // 14
+                || req == ActivityInfo.SCREEN_ORIENTATION_NOSENSOR                         // 5
+                || req == ActivityInfo.SCREEN_ORIENTATION_BEHIND;                          // 3
+        if (targetLandscape) return reqPortrait || reqFollow;
+        return reqLandscape || reqFollow;
+    }
+
+    /**
+     * D 段：掐掉应用自带的「窄屏强制竖屏」配置改写（批次 AA，反编译坐实）。
+     *
+     * 网易云车机版所有 Activity 的基座 IotActivityBase.attachBaseContext 里：
+     *   宽高比 ≤ 1.3 → new Configuration(); orientation = 1(竖屏);
+     *                  applyOverrideConfiguration(configuration);
+     * 这是在**应用进程内**把自己 Resources/Window 的配置按竖屏摆 —— 走的是
+     * ContextThemeWrapper 层，WM 方向 hook（H2）与 ActivityInfo 根本够不着它。
+     * 画布一不够宽（比例 ≤1.3，桌面分屏小卡经常如此），整个应用 UI 立刻切回
+     * 竖屏形态（顶部 Tab、窄版布局），这就是「模块明明挂上了还是竖版」的另一条病根。
+     *
+     * hook 挂在框架类 android.view.ContextThemeWrapper 上（公开 API，不受混淆影响），
+     * 只改「显式要求竖屏」的 override：目标方向是横屏时改成 2(横屏)，其余原样放行
+     * （含 orientation=UNDEFINED 的普通调用，比如 AppCompat 内部的合法用法）。
+     */
+    private void hookPortraitConfigOverride() {
+        XposedHelpers.findAndHookMethod(
+                android.view.ContextThemeWrapper.class,
+                "applyOverrideConfiguration",
+                android.content.res.Configuration.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        android.content.res.Configuration c =
+                                (android.content.res.Configuration) param.args[0];
+                        if (c == null) return;
+                        if (c.orientation
+                                != android.content.res.Configuration.ORIENTATION_PORTRAIT) {
+                            return;   // 只拦显式竖屏，其余放行
+                        }
+                        int target = desiredOrientation();
+                        if (target == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                                || target == ActivityInfo.SCREEN_ORIENTATION_PORTRAIT) {
+                            return;   // 跟随模式 / 目标本就是竖屏：别动应用自己的选择
+                        }
+                        c.orientation = android.content.res.Configuration.ORIENTATION_LANDSCAPE;
+                        log("D 改写 applyOverrideConfiguration: 竖屏 → 横屏");
+                    }
+                });
+        log("D hookPortraitConfigOverride OK");
     }
 
     /**
