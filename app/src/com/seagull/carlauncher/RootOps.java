@@ -97,17 +97,30 @@ public final class RootOps {
             Log.w(TAG, "launchOnDisplay: 找不到 " + pkg + " 的合法启动组件（" + comp + "）");
             return false;
         }
-        // 【坑 #5】am start 对已在运行的应用会静默投递到主屏实例：singleTask 复用
-        // display 0 上的老栈，画中画黑屏、手机屏反被应用盖住（"有的软件跳转到
-        // 应用界面，返回桌面也显示不了"）。先 force-stop 砍掉主屏实例再起。
-        String killOut = Caps.exec("am force-stop " + pkg);
-        Log.i(TAG, "部署前 force-stop " + pkg + " -> "
-                + (killOut == null ? "无回显" : killOut.trim()));
+        // 【坑 #5，批次 AC 修正】am start 对已在运行的应用会静默投递到主屏实例：
+        // singleTask 复用 display 0 上的老栈，画中画黑屏、手机屏反被应用盖住。
+        // 旧实现无条件 `am force-stop` 砍掉老实例再冷启动 —— 这会杀掉正在导航 /
+        // 放歌的进程，用户实测「从应用返回桌面导航和音乐都会暂停」正是它。
+        //
+        // 车联助手的 deploy 顺序是「先搬已有任务、搬不动才冷启动」，这里对齐：
+        //   · 已有运行中的任务 → 只把它的任务搬到锚点栈（moveToAnchorRoot），
+        //     进程与运行状态（导航中 / 播放中）不被打断，绝不 force-stop；
+        //   · 确实没有任务 → 冷启动，本就没有进程，更不需要 force-stop。
+        String stackOut = Caps.exec("am stack list");
+        boolean exists = stackOut != null && StackScan.findTaskAnywhere(stackOut, pkg) != null;
+        if (exists) {
+            if (moveToAnchorRoot(ctx, pkg, displayId)) {
+                Log.i(TAG, "launchOnDisplay[" + pkg + "] 已有任务，搬屏成功（不杀进程）-> " + displayId);
+                return true;
+            }
+            Log.i(TAG, "launchOnDisplay[" + pkg + "] 已有任务但搬屏失败，走不强杀的投递路径");
+        } else {
+            Log.i(TAG, "launchOnDisplay[" + pkg + "] 无已存在任务 → 冷启动");
+        }
         // 【批次 Z】兼容位必须在「起进程之前」写。am compat enable 只对之后新起的进程生效；
         // 旧顺序是「先起、起成功后才 relaxCompat」，于是当前这次部署根本不读新设置 ——
         // 高德照旧按 manifest 的 PORTRAIT 建窗，塞进横屏画布就是竖版 + 左右黑边，
         // 要等下一次部署才吃到配置（用户看到的"改了没用"正是这一条）。
-        // 移到 force-stop 之后、launch 之前，本次即生效。
         relaxCompat(pkg);
         PrivClient.init(ctx);
         if (PrivClient.launch(displayId, comp, LAUNCH_FLAGS_INT)) {

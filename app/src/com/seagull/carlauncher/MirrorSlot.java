@@ -43,6 +43,8 @@ public final class MirrorSlot implements CanvasSource {
     private VirtualDisplay vd;
     private volatile int displayId = -1;
     private volatile boolean ready;
+    /** 最近一次建屏/改尺寸后的 VD 像素尺寸：触摸前用它校验「画布 ⇄ 虚拟屏」是否还对齐。 */
+    private volatile int vdW, vdH;
     /** 批次 K：true = 本次 VD 是 TRUSTED 受信屏（任务才不会被系统拉回主屏）。 */
     private volatile boolean trusted;
     /** 批次 R：建屏方式（日志/诊断用）。"直建(flags=0)" / "TRUSTED" / "投影"。 */
@@ -336,6 +338,8 @@ public final class MirrorSlot implements CanvasSource {
         if (surface == null || !surface.isValid()) return false;
         try {
             vd.resize(w, h, dpi);
+            vdW = w;
+            vdH = h;
             vd.setSurface(surface);
             ready = true;
             lastSig = lastPkg + "|" + System.identityHashCode(surface) + "|" + w + "x" + h;
@@ -349,6 +353,26 @@ public final class MirrorSlot implements CanvasSource {
     }
 
     /* ---------------- 触摸回注 ---------------- */
+
+    /**
+     * 手势开始前校准尺寸（批次 AD·修「点击错位」）。
+     *
+     * 画布被改成半屏 / 铺满之后，若 VD 没有跟着 resize 到同一像素尺寸，应用仍按旧尺寸
+     * 渲染、被合成器缩放到画布上；而触摸是按新尺寸原样注入的 —— 于是越往右下越偏。
+     * 这里在每根手势的 DOWN 上比一次，只在尺寸真的漂了才 resize（同尺寸直接返回，零开销）。
+     */
+    public void syncSize(int w, int h, int dpi) {
+        if (vd == null || displayId <= 0 || w <= 0 || h <= 0) return;
+        if (vdW == w && vdH == h) return;
+        try {
+            vd.resize(w, h, dpi);
+            vdW = w;
+            vdH = h;
+            Log.i(TAG, "[" + name + "] VD 尺寸校准 → " + w + "x" + h + "@" + dpi + "dpi");
+        } catch (Throwable t) {
+            Log.w(TAG, "[" + name + "] VD 尺寸校准失败: " + t);
+        }
+    }
 
     /** SurfaceView 触摸转发：点/滑/长按都交给 TouchForward（12.1）。 */
     public void onTouch(MotionEvent e) {

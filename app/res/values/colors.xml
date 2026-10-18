@@ -7,8 +7,8 @@
     <color name="ground">#ff000000</color>
     <color name="panel">#ff1c1c1e</color>
     <color name="card">#ff2c2c2e</color>
-    <color name="leaf">#ff0a84ff</color>
-    <color name="leaf_dim">#ff0060df</color>
+    <color name="leaf">#ff0f77ff</color>
+    <color name="leaf_dim">#ff0a5ed6</color>
     <color name="text">#ffffffff</color>
     <color name="text_dim">#ff8e8e93</color>
     <color name="bad">#ffff453a</color>

@@ -65,13 +65,13 @@ public final class PipBoard extends LinearLayout {
     private static final int REQ_CONSENT = 0x5EA4;
     private static final String PREFS = "seagull";
 
-    private static final int CARD_PAD = 12;       // 卡底比画布大出的余量（将来真圆角用）
-    private static final int CARD_GAP = 8;        // 两卡之间的缝
-    private static final int BORDER_FOCUS_DP = 2; // 焦点描边宽
+    private static final int SPLIT_W = 16;        // 分隔把手热区宽（自绘细线居中，肉眼几乎不可见）
+    private static final float SPLIT_MIN = 0.22f; // 单侧最小占比，防止把手拖到某块画布消失
     private static final int FADE_MS = 150;       // 焦点/遮罩淡入，不做缩放弹跳（防分心）
-    private static final float MASK_LOW = 0.28f;  // 白天强光：遮罩最薄，画面要看得清
-    private static final float MASK_MID = 0.35f;  // 常态
-    private static final float MASK_HI = 0.45f;   // 夜间：遮罩最厚
+    // 批次 AD：去框感 —— 描边、卡底、内边距全删，遮罩也压到几乎看不出"另一块被罩住"
+    private static final float MASK_LOW = 0.10f;  // 白天强光：遮罩最薄，画面要看得清
+    private static final float MASK_MID = 0.16f;  // 常态
+    private static final float MASK_HI = 0.24f;   // 夜间：遮罩最厚
     private static final long LUX_INTERVAL_MS = 1000;
     private static final float LUX_NIGHT = 20f;   // 低于它算夜间（带回差）
     private static final float LUX_DAY = 2000f;   // 高于它算白天强光
@@ -97,10 +97,32 @@ public final class PipBoard extends LinearLayout {
     }
     private MirrorSlot slotA, slotB;
     private SurfaceView svA, svB;
+    private FrameLayout colA, colB;       // 两块画布的容器（单应用模式下隐藏其一）
+    private View splitter;                // 中间可拖的分隔把手：拖它 = 改两块画布的占比
     private TextView hintA, hintB;        // 画布中央状态行（启动中…/需要录屏授权…）
     private View emptyA, emptyB;          // 空态大按钮（空画布才有）
     private View maskA, maskB;            // 非焦点遮罩
-    private View borderA, borderB;        // 焦点高亮描边
+    /** true = 单应用模式：一块画布铺满内容区，另一块藏起来但**不停用**（导航/播放不中断）。 */
+    private boolean singleMode;
+    private int singleWhich = 1;
+    private boolean draggingSplit;
+    private float splitDownRaw, splitDownRatio;
+    /**
+     * 拖动中的预览占比（&lt;0 = 没在拖）。
+     *
+     * 这是「拖了会变大变小、松手又弹回 55 开」的根治点：拖动过程**只画一条预览线**，
+     * 一次都不动虚拟屏 —— 松手才真正改两块画布的宽度。原来每帧改 weight 会连发
+     * resize，应用来不及按新尺寸重绘，看到的画面和触摸坐标就会错位。
+     */
+    private float previewRatio = -1f;
+    /** 点画布 = 进入该应用（由 HomeActivity 注入：铺满内容区 + 同步底栏高亮）。 */
+    private EnterListener enterListener;
+    private final android.graphics.Paint previewPaint = new android.graphics.Paint(
+            android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+    public interface EnterListener { void onEnter(int which); }
+
+    public void setOnEnterSlot(EnterListener l) { this.enterListener = l; }
     private final boolean[] longFired = {false, false, false};
     /** armed[i] = 本手势（从 DOWN 起）发生在这块画布已是焦点的时候，才允许外注入。 */
     private final boolean[] armed = {false, false, false};
@@ -129,18 +151,19 @@ public final class PipBoard extends LinearLayout {
         this.model = model != null ? model : new LauncherModel(act);
         setOrientation(HORIZONTAL);
         setBackgroundColor(Skin.c(R.color.ground));
-        int pad = dp(4);
-        setPadding(pad, pad, pad, pad);
+        setPadding(0, 0, 0, 0);   // 批次 AD：画布铺满内容区，不留任何内边距（去框感）
 
         svA = new SurfaceView(act);
         svB = new SurfaceView(act);
         hintA = new TextView(act);
         hintB = new TextView(act);
 
-        int wa = Math.max(1, this.model.pipWeightA);
-        int wb = Math.max(1, this.model.pipWeightB);
-        addView(column(1), new LinearLayout.LayoutParams(0, -1, wa));
-        addView(column(2), new LinearLayout.LayoutParams(0, -1, wb));
+        colA = column(1);
+        colB = column(2);
+        addView(colA, new LinearLayout.LayoutParams(0, -1, Math.max(1, this.model.pipWeightA)));
+        splitter = buildSplitter();
+        addView(splitter, new LinearLayout.LayoutParams(dp(SPLIT_W), -1));
+        addView(colB, new LinearLayout.LayoutParams(0, -1, Math.max(1, this.model.pipWeightB)));
 
         // 进程级常驻槽：上次退出没拆屏，直接拿回来接着用
         slotA = MirrorHost.slot(act, "pip1");
@@ -247,16 +270,14 @@ public final class PipBoard extends LinearLayout {
     /* ------------------------- 两张卡片（左右分割） ------------------------- */
 
     /**
-     * 一块画布 = 一张卡：深色卡底 + 1px 半透明白描边（方角，SurfaceView 裁不圆），
-     * 卡内 padding {@link #CARD_PAD} 比画布大一圈，将来开真圆角不露黑边。
-     * 画布上方依次叠：状态行 / 空态大按钮 / 非焦点遮罩 / 点击接管 / 焦点描边。
-     * 触摸统一走卡容器的 OnTouchListener（覆盖层都不是点击目标）。
+     * 一块画布 = 一个容器：**没有卡底、没有描边、没有内边距**（批次 AD）。
+     * 画布与画布、画布与底栏之间因此零缝隙，用户看到的"屏幕"直接拼在一起。
+     * 画布上方依次叠：状态行 / 空态大按钮 / 非焦点遮罩。
+     * 触摸统一走容器 OnTouchListener（覆盖层都不是点击目标）。
      */
-    private View column(int which) {
+    private FrameLayout column(int which) {
         FrameLayout card = new FrameLayout(act);
-        card.setBackground(cardBg());
-        int pad = dp(CARD_PAD);
-        card.setPadding(pad, pad, pad, pad);
+        card.setBackground(null);
         card.setClipChildren(false);
 
         SurfaceView view = which == 1 ? svA : svB;
@@ -287,11 +308,7 @@ public final class PipBoard extends LinearLayout {
         if (which == 1) maskA = mask; else maskB = mask;
         card.addView(mask, new FrameLayout.LayoutParams(-1, -1));
 
-        View border = new View(act);
-        border.setBackground(borderBg(Skin.c(R.color.leaf), BORDER_FOCUS_DP));
-        border.setAlpha(0f);
-        if (which == 1) borderA = border; else borderB = border;
-        card.addView(border, new FrameLayout.LayoutParams(-1, -1));
+        // 批次 AD：删掉焦点描边。两块画布之间那条亮线正是用户说的"框框 / 边框感"。
 
         // 单一触摸入口：焦点拦截 / 空态选择 / 手势转发全在这判
         final int w = which;
@@ -308,30 +325,33 @@ public final class PipBoard extends LinearLayout {
         });
         card.setOnTouchListener((v, e) -> {
             int a = e.getActionMasked();
-            if (a == MotionEvent.ACTION_DOWN) {
-                if (w != focusSlot) {
-                    // 安全红线：第一下只切焦点，不吃进 App。armed=false 让本手势
-                    // 后续的 MOVE/UP 也不外泄：否则失焦瞬间的 UP 会被注进旧 App
-                    // （地图里凭空多点一下），空画布上还会顺带弹选择器。
-                    armed[w] = false;
-                    switchFocus(w);
-                    return true;
-                }
-                armed[w] = true;
-                longFired[w] = false;
-            }
             MirrorSlot s = slotOf(w);
-            if (armed[w] && s != null && s.ready() && !longFired[w]) s.onTouch(e);
-            if (armed[w]) gd.onTouchEvent(e);
-            if (armed[w] && (s == null || !s.ready())) {
-                // 没 App 可误触：焦点态下点一下直接选应用（可发现性优先）
-                if (a == MotionEvent.ACTION_UP && !longFired[w]) openPick(w);
+            if (singleMode) {
+                // 单应用模式：整块画布就是应用界面本身，触摸全量转发（多指/长按都成立）
+                if (a == MotionEvent.ACTION_DOWN) {
+                    if (w != focusSlot) switchFocus(w);
+                    syncCanvasSize(s, view);
+                }
+                if (s != null && s.ready()) s.onTouch(e);
+                if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) armed[w] = false;
+                return true;
             }
-            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-                boolean tapped = armed[w] && a == MotionEvent.ACTION_UP && !longFired[w];
-                armed[w] = false;
-                if (tapped) healSlotSoon(w);
+            // 分屏模式：画布只当预览 —— 点一下 = 进入该应用（铺满内容区、底栏跟随），
+            // 手势不再往应用里注。两层好处：小画布上不会误操作应用；也彻底避开
+            // 「半个画布 + 虚拟屏 resize」期间的坐标错位。
+            if (a == MotionEvent.ACTION_DOWN) {
+                longFired[w] = false;
+                if (w != focusSlot) switchFocus(w);
+                syncCanvasSize(s, view);
+                gd.onTouchEvent(e);
+                return true;
             }
+            gd.onTouchEvent(e);
+            if (a == MotionEvent.ACTION_UP && !longFired[w]) {
+                if (s == null || !s.ready() || pkgOf(w).isEmpty()) openPick(w);
+                else enterSlot(w);
+            }
+            if (a == MotionEvent.ACTION_CANCEL) longFired[w] = false;
             return true;
         });
 
@@ -354,20 +374,207 @@ public final class PipBoard extends LinearLayout {
 
     private MirrorSlot slotOf(int which) { return which == 1 ? slotA : slotB; }
 
-    /** 深色卡底 + 1px 半透明白描边。方角：真要圆角得先把 SurfaceView 换 TextureView。 */
-    private GradientDrawable cardBg() {
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(Skin.c(R.color.card));
-        g.setStroke(dp(1), 0x40FFFFFF);
-        g.setCornerRadius(0);
-        return g;
+    /**
+     * 手势开始前把虚拟屏尺寸对齐到画布实际像素。
+     *
+     * 「点了选项却错位」的根因就在这：画布被拉伸/改宽之后，若虚拟屏没有跟着 resize
+     * 到同一尺寸，应用仍按旧尺寸出画面、被合成器缩放到画布上，而触摸按新尺寸原样注入
+     * —— 越往右下偏得越多。这里在每根手势的 DOWN 上校一次，尺寸漂了就 resize 一次。
+     */
+    private void syncCanvasSize(MirrorSlot s, SurfaceView sv) {
+        if (s == null || sv == null) return;
+        int wd = sv.getWidth();
+        int ht = sv.getHeight();
+        if (wd > 0 && ht > 0) s.syncSize(wd, ht, dpiFit(wd, ht));
     }
 
-    private GradientDrawable borderBg(int color, int widthDp) {
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(0x00000000);
-        g.setStroke(dp(widthDp), color);
-        return g;
+    /** 点画布进入应用：交给 HomeActivity（切单应用 + 同步底栏高亮），没注入就本地降级。 */
+    private void enterSlot(int which) {
+        if (enterListener != null) { enterListener.onEnter(which); return; }
+        showSingle(which);
+    }
+
+    /* ------------------------- 画布占比：可拖的分隔把手 ------------------------- */
+
+    /**
+     * 分隔把手（批次 AD 新增）：两块画布中间那 16dp 热区，居中自绘一条几乎看不见的
+     * 细线 + 三颗握持点，拖动它就改两块画布的宽度占比（例如让地图占得更宽）。
+     *
+     * 拖动时只改 layout weight（画布实时跟着变），**松手才落盘**：
+     *   · 拖动过程不写 SharedPreferences，避免每帧 IO；
+     *   · 落盘后下次进桌面沿用这个占比。
+     * 只改布局尺寸、不禁用/重启任何应用 —— 地图导航、音乐播放都不会中断。
+     */
+    private View buildSplitter() {
+        final View h = new View(act) {
+            private final android.graphics.Paint p = new android.graphics.Paint(
+                    android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+            @Override protected void onDraw(android.graphics.Canvas c) {
+                if (singleMode || draggingSplit) return;
+                float cx = getWidth() / 2f;
+                float cy = getHeight() / 2f;
+                p.setStyle(android.graphics.Paint.Style.FILL);
+                p.setColor(0x1FFFFFFF);                 // 握持区底色，让人找得到这条把手
+                c.drawRoundRect(cx - dp(9), cy - dp(36), cx + dp(9), cy + dp(36),
+                        dp(9), dp(9), p);
+                p.setStyle(android.graphics.Paint.Style.STROKE);
+                p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+                p.setStrokeWidth(Math.max(2f, dp(2)));
+                p.setColor(0x66FFFFFF);
+                c.drawLine(cx, cy - dp(22), cx, cy + dp(22), p);
+            }
+        };
+        h.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    if (singleMode) return false;
+                    draggingSplit = true;
+                    splitDownRaw = e.getRawX();
+                    splitDownRatio = currentRatio();
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                    PipBoard.this.invalidate();
+                    h.invalidate();
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    if (!draggingSplit) return true;
+                    int w = PipBoard.this.getWidth();
+                    if (w <= 0) return true;
+                    // 只更新预览线位置，绝不改 layout：一次 resize 都不发
+                    previewRatio = clampRatio(splitDownRatio + (e.getRawX() - splitDownRaw) / w);
+                    PipBoard.this.invalidate();
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL: {
+                    if (!draggingSplit) return true;
+                    draggingSplit = false;
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                    float r = previewRatio > 0f ? previewRatio : currentRatio();
+                    previewRatio = -1f;
+                    applySplitRatio(r, true);   // 松手才真正改宽度：整个拖动过程只 resize 一次
+                    PipBoard.this.invalidate();
+                    h.invalidate();
+                    return true;
+                }
+                default:
+                    return true;
+            }
+        });
+        return h;
+    }
+
+    /** 拖动预览线：画在画布之上、底栏之下，松手前不碰任何虚拟屏。 */
+    @Override protected void dispatchDraw(android.graphics.Canvas c) {
+        super.dispatchDraw(c);
+        if (previewRatio <= 0f) return;
+        float x = getWidth() * previewRatio;
+        previewPaint.setColor(0xFF0F77FF);              // 品牌蓝：拖动时唯一的高亮
+        previewPaint.setStrokeWidth(Math.max(2f, dp(2)));
+        previewPaint.setStyle(android.graphics.Paint.Style.STROKE);
+        previewPaint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+        c.drawLine(x, dp(8), x, getHeight() - dp(8), previewPaint);
+    }
+
+    private static float clampRatio(float r) {
+        if (r < SPLIT_MIN) return SPLIT_MIN;
+        if (r > 1f - SPLIT_MIN) return 1f - SPLIT_MIN;
+        return r;
+    }
+
+    /** 当前左画布占比（0~1）。 */
+    private float currentRatio() {
+        float a = Math.max(1, model.pipWeightA);
+        float b = Math.max(1, model.pipWeightB);
+        return a / (a + b);
+    }
+
+    /** 设占比并立即改两块画布的 weight；persist=true 时落盘（松手那一下）。 */
+    private void applySplitRatio(float ratio, boolean persist) {
+        if (colA == null || colB == null) return;
+        ratio = clampRatio(ratio);
+        int a = Math.max(1, Math.round(ratio * 100f));
+        int b = Math.max(1, 100 - a);
+        LinearLayout.LayoutParams la = (LinearLayout.LayoutParams) colA.getLayoutParams();
+        LinearLayout.LayoutParams lb = (LinearLayout.LayoutParams) colB.getLayoutParams();
+        la.weight = a;
+        lb.weight = b;
+        colA.setLayoutParams(la);
+        colB.setLayoutParams(lb);
+        if (persist) {
+            try {
+                model.pipWeightA = a;
+                model.pipWeightB = b;
+                model.save();
+                Log.i(TAG, "画布占比已落盘 A:B = " + a + ":" + b);
+            } catch (Throwable t) {
+                Log.w(TAG, "画布占比落盘失败", t);
+            }
+        }
+    }
+
+    /* ------------------------- 单应用 / 分屏 ------------------------- */
+
+    /** 单应用模式：把某块画布铺满内容区。另一块只是隐藏，**不销毁、不杀进程**。 */
+    public void showSingle(int which) {
+        if (which != 1 && which != 2) return;
+        singleMode = true;
+        singleWhich = which;
+        applySingleVisuals();
+    }
+
+    /** 回到分屏（桌面主页）。 */
+    public void showSplit() {
+        if (!singleMode) return;
+        singleMode = false;
+        applySingleVisuals();
+    }
+
+    public boolean isSingle() { return singleMode; }
+
+    private void applySingleVisuals() {
+        if (colA == null || colB == null) return;
+        LinearLayout.LayoutParams la = (LinearLayout.LayoutParams) colA.getLayoutParams();
+        LinearLayout.LayoutParams lb = (LinearLayout.LayoutParams) colB.getLayoutParams();
+        if (singleMode) {
+            boolean a = singleWhich == 1;
+            colA.setVisibility(a ? View.VISIBLE : View.GONE);
+            colB.setVisibility(a ? View.GONE : View.VISIBLE);
+            la.weight = a ? 1 : 0;
+            lb.weight = a ? 0 : 1;
+            if (splitter != null) {
+                splitter.setVisibility(View.GONE);
+                splitter.requestLayout();
+            }
+        } else {
+            colA.setVisibility(View.VISIBLE);
+            colB.setVisibility(View.VISIBLE);
+            la.weight = Math.max(1, model.pipWeightA);
+            lb.weight = Math.max(1, model.pipWeightB);
+            if (splitter != null) {
+                splitter.setVisibility(View.VISIBLE);
+                splitter.invalidate();
+            }
+        }
+        colA.setLayoutParams(la);
+        colB.setLayoutParams(lb);
+        applyFocusVisuals(false);
+        reattachAll();
+    }
+
+    /**
+     * 单应用 ↔ 分屏切换后，把两块画布的 Surface 重新挂上。
+     *
+     * 「返回桌面后第二块画布黑屏」的根因：一列被 GONE 掉时 SurfaceView 会 surfaceDestroyed，
+     * 此时 detachSurface 只断输出（VD 和任务栈都还在），但再显示时 surfaceChanged 未必
+     * 会再来一次，或者来得太早（VD 刚做完 resize）。这里等布局稳定一帧后主动重挂 +
+     * 幂等补部署（已在跑就只搬屏），应用不会重启，导航/播放不断。
+     */
+    public void reattachAll() {
+        postDelayed(() -> {
+            redeployIfPossible();
+            deployIfBound();
+        }, 180);
     }
 
     /** 空态大按钮：≥80dp 高、16dp 圆角、半透明白描边、图标+文字上下排布。 */
@@ -421,16 +628,11 @@ public final class PipBoard extends LinearLayout {
         c.recycle();
     }
 
-    /** 焦点描边淡入；非焦点画布只盖一层环境光遮罩（不要多余控件）。 */
+    /** 非焦点画布只盖一层很薄的环境光遮罩（批次 AD 已删描边，不再有任何边框）。 */
     private void applyFocusVisuals(boolean animate) {
         for (int i = 1; i <= 2; i++) {
-            View border = i == 1 ? borderA : borderB;
             View mask = i == 1 ? maskA : maskB;
             boolean focus = (i == focusSlot);
-            if (border != null) {
-                if (animate) border.animate().alpha(focus ? 1f : 0f).setDuration(FADE_MS).start();
-                else border.setAlpha(focus ? 1f : 0f);
-            }
             boolean bound = !pkgOf(i).isEmpty();
             if (mask != null) {
                 mask.setVisibility(!focus && bound ? View.VISIBLE : View.GONE);
@@ -614,10 +816,9 @@ public final class PipBoard extends LinearLayout {
         return v;
     }
 
-    /** 没量到画布时的兜底宽度：整屏扣掉卡片留白，按权重比例切。 */
+    /** 没量到画布时的兜底宽度：整屏扣掉中间分隔把手，再按权重比例切。 */
     private int designW(int which) {
-        int avail = act.getResources().getDisplayMetrics().widthPixels
-                - dp(CARD_PAD * 4) - dp(CARD_GAP) - dp(8);
+        int avail = act.getResources().getDisplayMetrics().widthPixels - dp(SPLIT_W);
         int wa = Math.max(1, model.pipWeightA);
         int wb = Math.max(1, model.pipWeightB);
         int w = which == 1 ? wa : wb;

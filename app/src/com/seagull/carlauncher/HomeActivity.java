@@ -17,7 +17,6 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -27,34 +26,41 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * 桌面主界面 —— 海鸥桌面（公开版 HOME）。
+ * 桌面主界面 —— 复刻 Vivo 智能车载 CarLauncher 的三页横向桌面。
  *
- * 结构（批次 M 起，画中画优先）：顶栏（时钟/整理/搜索/设置）
- *   + 内容层（PipBoard 画中画 ⇄ DesktopView 桌面网格，二选一）
- *   + 底栏（画中画/桌面切换、全部应用、布局组件、工具）。
+ * 结构（对齐参考 activity_launcher.xml + carmode_dock_view.xml）：
+ *   [0] 壁纸桌面（WallpaperPage）         —— 左滑过来
+ *   [1] 主界面（PipBoard 画布：地图 / 音乐）—— 默认页，进应用就是它
+ *   [2] 全部应用（AppGridPage）            —— 右滑过来
+ *   + 常驻底部导航栏（DockBar：首页/地图/音乐/其他/退出），三页共用同一条
  *
- * 进应用默认就是画中画界面（用户原话："进入应用应该是画中画界面，
- * 不应该是设置里的子界面、界面太多不合理"）：桌面网格降为可切换的次级层，
- * 底栏第一个按钮切回去。
+ * 与参考一致的几条硬约束：
+ *   · 没有原生顶栏（参考里主布局顶部只有状态栏留白，没有标题条）——
+ *     用户原话「顶栏实在太丑了」，这里整条去掉，管理入口下沉到「全部应用」页；
+ *   · 导航栏常驻、不随翻页消失（参考的 carmode dock 就是常驻 overlay）；
+ *   · 打开应用后导航栏仍然在：应用画面渲染在桌面自己的画布窗口里，
+ *     点导航栏「首页」即回主界面 —— 对应参考的「导航栏不变、点击返回桌面」。
  *
- * 全部公开 API：不需要 root、不需要任何签名权限，装到 Android 29+ 设备即可当桌面使用。
- * 静态 API（PREFS / AppEntry / loadApps / pinStatic）被另外 5 个文件依赖，保持兼容不变。
+ * 静态 API（PREFS / AppEntry / loadApps / pinStatic）被另外几个文件依赖，保持兼容。
  */
-public class HomeActivity extends BaseActivity implements DesktopView.Host {
+public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     public static final String PREFS = "seagull";
 
+    private static final int PAGE_POSTER = 0;
+    private static final int PAGE_MAIN = 1;
+    private static final int PAGE_APPS = 2;
+
     private final Handler ui = new Handler(Looper.getMainLooper());
 
-    private DesktopView desktop;
+    private PagerView pager;
+    private DockBar dock;
+    private WallpaperPage poster;
+    private AppGridPage appsPage;
     private PipBoard pip;
     private MiniPlayer mini;
-    /** true = 首屏画中画（默认）；false = 桌面网格。底栏按钮切换。 */
-    private boolean pipMode = true;
-    private LinearLayout topBar, bottomBar, mainCol;
-    private FrameLayout content;
-    private TextView pipBox;
     private IslandView island;
+    private TextView pipBox;
     private String lastSkin = "";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
@@ -62,10 +68,6 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
         lastSkin = skinSignature();
         selfReport();
         setContentView(buildUi());
-        buildTopBar();
-        buildBottomBar();
-        // 首屏是画中画：桌面网格等切过去再刷（toggleMode 里会刷）
-        if (!pipMode) desktop.refresh();
         refreshMini();
         ui.postDelayed(tick, 30_000L);
     }
@@ -105,20 +107,14 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
             Skin.apply(model);
             model.loadApps();
             // 旧 pip 的待跑 redeploy/selfHeal 摘掉：setContentView 会造新的
-            // PipBoard，旧的没人 onDestroy，回调会对已废弃的树自愈（批次 T 坐实）
+            // PipBoard，旧的没人 onDestroy，回调会对已废弃的树自愈
             if (pip != null) pip.cancelPending();
             setContentView(buildUi());
-            buildTopBar();
-            buildBottomBar();
-            if (desktop != null) desktop.refresh();
         } else {
-            // 画中画是首屏：回来就重新挂 Surface / 自愈；桌面模式才刷网格
-            if (pipMode) {
-                if (pip != null) pip.onResume();
-            } else if (desktop != null) {
-                desktop.refresh();
-            }
-            buildTopBar();
+            if (pip != null) pip.onResume();
+            if (appsPage != null) appsPage.setApps(loadApps(this));
+            if (dock != null) dock.applySkin();
+            if (poster != null) { poster.applySkin(); poster.tick(); }
         }
         if (island != null) {
             island.bind(model);
@@ -133,13 +129,11 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
         Lyrics.start(this);         // 一秒一跳，组件条/菜园的歌词都从它出
         Lyrics.removeSink(islandSink);
         Lyrics.addSink(islandSink); // sink 恒为同一实例：CopyOnWrite 集合会永久持死
-        // 整个 HomeActivity，复用而非追加（旧实现无 remove，每次 onResume
-        // push 一次 = 每回一次桌面多跑一遍 bind + 保活一整个 Activity）
         refreshMini();              // 媒体条跟着会话状态走（没会话整条隐藏）
-        // 常驻画中画被系统拉回主屏时搬回去（批次 L；节流在 MirrorHost 里）
+        // 常驻画中画被系统拉回主屏时搬回去（节流在 MirrorHost 里）
         MirrorHost.healHome(this);
-        TaskEngine.fireDesktop(this);   // 13.2 桌面启动触发（同进程只跑一次）
-        TaskEngine.arm(this);           // 13.4 定时任务每分钟看一眼
+        TaskEngine.fireDesktop(this);   // 桌面启动触发（同进程只跑一次）
+        TaskEngine.arm(this);           // 定时任务每分钟看一眼
     }
 
     /** 岛上的歌词一秒一跳。 */
@@ -148,6 +142,7 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
             // 展示方（HomeActivity/岛）可能已被销毁：拿不住就别硬塞
             if (isFinishing() || isDestroyed()) return;
             if (model != null && model.islandLyric && island != null) island.bind(model);
+            if (poster != null) poster.tick();
         }
     };
 
@@ -169,13 +164,9 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
 
     private final Runnable tick = new Runnable() {
         @Override public void run() {
-            if (topBar != null) buildTopBar();
+            if (poster != null) poster.tick();
             if (island != null && model != null) island.bind(model);
-            if (pipMode) {
-                if (pip != null) pip.updateHintsPublic();
-            } else if (desktop != null) {
-                desktop.refresh();
-            }
+            if (pip != null) pip.updateHintsPublic();
             refreshMini();   // 30s 一次兜底扫描；播放态变化有 MediaController 回调即时刷
             // 周期自愈：应用中途把新 activity 落到默认屏（盖住桌面=返回也没用）时，
             // 30s 内搬回虚拟屏。onResume 也会立即跑一次。
@@ -194,51 +185,50 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
                 getResources().getDisplayMetrics()));
     }
 
+    /** 底部导航栏尺寸对齐参考 carmode_dock_height：74dp 条 + 10dp 离屏留白（浮动圆角条）。 */
+    private static final int DOCK_H = 74;
+    private static final int DOCK_SIDE = 20;
+    private static final int DOCK_BOTTOM = 10;
+
+    private int dockH() { return dp(DOCK_H + DOCK_BOTTOM); }
+
     /* ------------------------- UI 构建 ------------------------- */
 
     private View buildUi() {
         FrameLayout root = new FrameLayout(this);
         applyWallpaper(root);
 
-        mainCol = new LinearLayout(this);
-        mainCol.setOrientation(LinearLayout.VERTICAL);
-        root.addView(mainCol, new FrameLayout.LayoutParams(-1, -1));
+        // 三页横向分页（复刻参考的 CustomViewPager：左滑壁纸 / 中主界面 / 右全部应用）
+        pager = new PagerView(this);
+        poster = new WallpaperPage(this, model);
+        FrameLayout mainPage = buildMainPage();
+        appsPage = new AppGridPage(this, this);
+        appsPage.setApps(loadApps(this));
+        pager.addView(poster);
+        pager.addView(mainPage);
+        pager.addView(appsPage);
+        pager.setOnPageChanged(index -> onPageChanged(index));
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(-1, -1);
+        plp.bottomMargin = dockH();   // 常驻导航栏不被翻页内容盖住
+        root.addView(pager, plp);
 
-        topBar = new LinearLayout(this);
-        topBar.setOrientation(LinearLayout.HORIZONTAL);
-        topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(Skin.bar(R.color.panel));
-        topBar.setPadding(dp(14), dp(10), dp(14), dp(10));
-        mainCol.addView(topBar, new LinearLayout.LayoutParams(-1, dp(58)));
+        // 常驻底部导航栏（复刻 carmode_dock_view：首页｜地图/音乐/其他｜退出）
+        dock = new DockBar(this, this::onDock);
+        FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(-1, dp(DOCK_H), Gravity.BOTTOM);
+        dlp.leftMargin = dp(DOCK_SIDE);
+        dlp.rightMargin = dp(DOCK_SIDE);
+        dlp.bottomMargin = dp(DOCK_BOTTOM);
+        root.addView(dock, dlp);
 
-        desktop = new DesktopView(this, this);
-        pip = new PipBoard(this, slot -> PipBoard.showPicker(this, slot, pip), true, model);
-        content = new FrameLayout(this);
-        content.addView(desktop, new FrameLayout.LayoutParams(-1, -1));
-        content.addView(pip, new FrameLayout.LayoutParams(-1, -1));
-        mainCol.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
-
-        bottomBar = new LinearLayout(this);
-        bottomBar.setOrientation(LinearLayout.HORIZONTAL);
-        bottomBar.setGravity(Gravity.CENTER);
-        bottomBar.setBackgroundColor(Skin.bar(R.color.panel));
-        bottomBar.setPadding(dp(10), dp(8), dp(10), dp(8));
-        mainCol.addView(bottomBar, new LinearLayout.LayoutParams(-1, dp(62)));
-
-        // 常驻媒体条（批次 N）：层级在画布之上、底栏之下，没媒体会话时整条隐藏
-        mini = new MiniPlayer(this);
-        mini.setOnInfoClick(this::focusMediaCanvas);
-        mainCol.addView(mini, new LinearLayout.LayoutParams(-1, dp(36)));
-
-        // 野菜岛：顶部居中的胶囊，浮在桌面上（不进 mainCol，免得被布局挤动）
+        // 野菜岛：顶部居中的胶囊，浮在桌面上
         island = new IslandView(this);
         island.setOnClickListener(v -> startActivity(new Intent(this, SettingsSectionActivity.class)
                 .putExtra(SettingsSectionActivity.EXTRA_SECTION, "island")));
         island.setVisibility(model != null && model.islandEnabled ? View.VISIBLE : View.GONE);
         root.addView(island, new FrameLayout.LayoutParams(dp(model == null ? 320 : model.islandWidth),
-                dp(40), android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL));
+                dp(40), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
 
-        // 画中画形态下的精简视图（系统 PiP 里只显示这一层）
+        // 系统画中画形态下的精简视图（系统 PiP 里只显示这一层）
         pipBox = new TextView(this);
         pipBox.setText("海鸥桌面 · 画中画");
         pipBox.setTextColor(Skin.c(R.color.leaf));
@@ -248,33 +238,32 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
         pipBox.setVisibility(View.GONE);
         root.addView(pipBox, new FrameLayout.LayoutParams(-1, -1));
 
-        applyMode();   // 首屏 = 画中画（用户：进应用就是画中画界面）
+        pager.setCurrentItem(PAGE_MAIN, false);   // 首屏 = 主界面（地图/音乐）
+        syncDock(DockBar.HOME);
         return root;
     }
 
-    /**
-     * 内容层二选一：画中画（默认首屏）⇄ 桌面网格。
-     * 画中画是用户要的主界面，桌面网格是次级层，底栏第一个按钮来回切。
-     */
-    private void applyMode() {
-        if (content == null || desktop == null || pip == null) return;
-        desktop.setVisibility(pipMode ? View.GONE : View.VISIBLE);
-        pip.setVisibility(pipMode ? View.VISIBLE : View.GONE);
-        if (bottomBar != null) buildBottomBar();
-        if (topBar != null) buildTopBar();
+    /** 主界面（第 1 页）：PipBoard 双画布（地图 + 音乐）+ 底部常驻媒体条。 */
+    private FrameLayout buildMainPage() {
+        FrameLayout page = new FrameLayout(this);
+        page.setBackgroundColor(Skin.c(R.color.ground));
+
+        pip = new PipBoard(this, slot -> PipBoard.showPicker(this, slot, pip), true, model);
+        // 点画布 = 进入该应用：铺满内容区 + 底栏高亮跟随（导航栏原地不动）
+        pip.setOnEnterSlot(this::expandSlot);
+        // 批次 AD：画布直接铺到内容区底部（与底栏零缝隙）；只有媒体条显形时才让出 36dp
+        page.addView(pip, new FrameLayout.LayoutParams(-1, -1));
+
+        // 常驻媒体条：层级在画布之上，没媒体会话时整条隐藏
+        mini = new MiniPlayer(this);
+        mini.setOnInfoClick(this::focusMediaCanvas);
+        page.addView(mini, new FrameLayout.LayoutParams(-1, dp(36), Gravity.BOTTOM));
+        return page;
     }
 
-    private void toggleMode() {
-        pipMode = !pipMode;
-        applyMode();
-        if (!pipMode && desktop != null) desktop.refresh();
-    }
-
     /**
-     * MiniPlayer 空白区点击（批次 N 拍板的双场景规则）：
-     *   · 场景 A：媒体源正在画布里 → 导焦到那块画布（不新开页面）；
-     *   · 场景 B：媒体源在后台（没进画中画）→ 什么都不做，不挤占当前应用。
-     * 播放控制键不经过这里（MiniPlayer 直接对媒体会话下发 transport control）。
+     * MiniPlayer 空白区点击：媒体源正在画布里 → 导焦到那块画布（不新开页面）；
+     * 媒体源在后台（没进画布）→ 什么都不做，不挤占当前应用。
      */
     private void focusMediaCanvas() {
         MediaListenerService.Snap s = MediaListenerService.snap();
@@ -289,11 +278,27 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
         if (mini == null) return;
         MediaListenerService.refresh(this);
         mini.bind(MediaListenerService.snap());
+        applyMainInsets();
     }
 
     /**
-     * 壁纸铺底 + 背景遮罩（TODO P0-7）。
-     * 遮罩层加在 root 的最底层，mainCol 透明，就能透出壁纸。
+     * 媒体条显形时画布让出 36dp，隐藏时归零 —— 这条底边距就是用户看到的
+     * 「底栏和画中画之间那条大缝」。没媒体在放的时候必须为 0，画布贴到底栏。
+     */
+    private void applyMainInsets() {
+        if (pip == null || mini == null) return;
+        if (!(pip.getLayoutParams() instanceof FrameLayout.LayoutParams)) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) pip.getLayoutParams();
+        int want = mini.getVisibility() == View.VISIBLE ? dp(36) : 0;
+        if (lp.bottomMargin != want) {
+            lp.bottomMargin = want;
+            pip.setLayoutParams(lp);
+        }
+    }
+
+    /**
+     * 壁纸铺底 + 背景遮罩。遮罩层加在 root 的最底层，三页内容透明地盖在上面，
+     * 只有第 0 页（壁纸桌面）透出壁纸 —— 对齐参考「左滑是壁纸桌面」。
      */
     private void applyWallpaper(FrameLayout root) {
         int w = getResources().getDisplayMetrics().widthPixels;
@@ -323,134 +328,118 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
         return model.wallNight.isEmpty() ? model.wallDay : model.wallNight;
     }
 
-    private void buildTopBar() {
-        if (topBar == null) return;
-        // 批次 N：画中画模式顶栏压到 40dp，垂直空间让给画布（CarPlay 纪律：chrome 不挤内容）
-        topBar.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(pipMode ? 40 : 58)));
-        int pv = dp(pipMode ? 6 : 10);
-        topBar.setPadding(dp(14), pv, dp(14), pv);
-        // 顶部信息栏关掉时，时间挪到 Dock（TODO P0-8 7.11 / 7.12）
-        topBar.setVisibility(model.topInfoBar ? View.VISIBLE : View.GONE);
-        if (model.topInfoBar) buildInfoBar();
-        else model.dockShowClock = true;
-    }
+    /* ------------------------- 底部导航栏 ------------------------- */
 
-    /**
-     * 信息栏（批次 N）：画中画模式只留 时间 + 设置（用户：主驾场景优先，管理功能下沉）；
-     * 桌面模式才给全量（日期/整理/搜索/设置）。
-     */
-    private void buildInfoBar() {
-        topBar.removeAllViews();
-
-        TextView clock = new TextView(this);
-        clock.setText(SysOps.clockHHmm());
-        clock.setTextColor(Skin.c(R.color.text));
-        clock.setTextSize(pipMode ? 17 : 20);
-        topBar.addView(clock);
-
-        if (pipMode) {
-            View spacer = new View(this);
-            topBar.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
-            topBar.addView(chipBtn("设置", v ->
-                    startActivity(new Intent(this, SettingsHubActivity.class))));
-            return;
+    private void onDock(int which) {
+        switch (which) {
+            case DockBar.HOME:
+                // 「首页」= 桌面主页：从单应用模式退回分屏桌面，导航栏一直在原位
+                if (pip != null) pip.showSplit();
+                setPage(PAGE_MAIN, true);
+                enableSwipe(true);
+                syncDock(DockBar.HOME);
+                break;
+            case DockBar.MAP:
+                expandSlot(1);
+                break;
+            case DockBar.MUSIC:
+                expandSlot(2);
+                break;
+            case DockBar.APPS:
+                if (pip != null) pip.showSplit();
+                setPage(PAGE_APPS, true);
+                enableSwipe(true);
+                syncDock(DockBar.APPS);
+                break;
+            case DockBar.EXIT:
+            default:
+                exitLauncher();
+                break;
         }
-
-        TextView date = new TextView(this);
-        date.setText("   " + SysOps.dateCn());
-        date.setTextColor(Skin.c(R.color.text_dim));
-        date.setTextSize(12);
-        topBar.addView(date);
-
-        View spacer = new View(this);
-        topBar.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
-
-        boolean editing = desktop != null && desktop.editMode;
-        TextView edit = new TextView(this);
-        edit.setText(editing ? "✓ 完成" : "整理");
-        edit.setTextColor(editing ? Skin.c(R.color.leaf) : Skin.c(R.color.text));
-        edit.setTextSize(13);
-        edit.setPadding(dp(12), dp(7), dp(12), dp(7));
-        edit.setBackground(Skin.pill(Skin.c(R.color.card)));
-        edit.setOnClickListener(v -> {
-            desktop.editMode = !desktop.editMode;
-            buildTopBar();
-            toast(desktop.editMode
-                    ? "整理模式：长按一个图标，拖到另一个图标上松手 → 合并成文件夹"
-                    : "已退出整理模式");
-        });
-        topBar.addView(edit);
-
-        topBar.addView(chipBtn("搜索", v -> startActivity(new Intent(this, SearchActivity.class))));
-        topBar.addView(chipBtn("设置", v ->
-                startActivity(new Intent(this, SettingsHubActivity.class))));
-    }
-
-    /** 顶栏胶囊按钮（搜索/设置）。 */
-    private View chipBtn(String label, View.OnClickListener l) {
-        TextView tv = new TextView(this);
-        tv.setText(label);
-        tv.setTextColor(Skin.c(R.color.text));
-        tv.setTextSize(13);
-        tv.setPadding(dp(12), dp(7), dp(12), dp(7));
-        tv.setBackground(Skin.pill(Skin.c(R.color.card)));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-        lp.leftMargin = dp(8);
-        tv.setLayoutParams(lp);
-        tv.setOnClickListener(l);
-        return tv;
     }
 
     /**
-     * 底栏（批次 M 精简）：画中画 ⇄ 桌面 的切换 + 全部应用 / 布局组件 / 工具。
-     * 砍掉「镜像小窗」（画中画已是首屏，那个子页面没意义）和含义不明的「叶」键
-     * （菜园改从 设置 → 桌面 → 菜园 进）。
+     * 切到具体应用界面（批次 AD）：把该槽的画布铺满内容区，底部导航栏原地不动。
+     *
+     * 关键在「只改布局、不重启应用」：画布本身是应用的虚拟屏镜像，铺满只是把
+     * SurfaceView 变大，应用进程一直在跑 —— 所以导航不中断、音乐不暂停；
+     * 点导航栏「首页」即 showSplit() 退回桌面主页。
      */
-    private void buildBottomBar() {
-        if (bottomBar == null) return;
-        bottomBar.removeAllViews();
-        bottomBar.addView(barBtn(pipMode ? "桌面" : "画中画", R.color.leaf,
-                v -> toggleMode()), weight());
-        bottomBar.addView(gap(), new LinearLayout.LayoutParams(dp(8), 1));
-        bottomBar.addView(barBtn("全部应用", R.color.text,
-                v -> startActivity(new Intent(this, AppListActivity.class))), weight());
-        bottomBar.addView(gap(), new LinearLayout.LayoutParams(dp(8), 1));
-        bottomBar.addView(barBtn("布局组件", R.color.text,
-                v -> startActivity(new Intent(this, LayoutModeActivity.class))), weight());
-        bottomBar.addView(gap(), new LinearLayout.LayoutParams(dp(8), 1));
-        bottomBar.addView(barBtn("工具", R.color.warn,
-                v -> startActivity(new Intent(this, RootPanelActivity.class))), weight());
+    private void expandSlot(int which) {
+        if (pip == null) return;
+        setPage(PAGE_MAIN, true);
+        enableSwipe(false);              // 单应用模式锁住左右翻页，免得手一划把应用划走
+        pip.showSingle(which);
+        String pkg = PipBoard.loadPkg(this, which);
+        if (pkg == null || pkg.isEmpty()) {
+            PipBoard.showPicker(this, which, pip);   // 空槽：先让用户选应用
+        } else {
+            pip.focusSlot(which);
+            pip.deployIfBound();                     // 幂等：已在跑就只搬屏，不杀进程
+        }
+        syncDock(which == 1 ? DockBar.MAP : DockBar.MUSIC);
     }
 
-    private LinearLayout.LayoutParams weight() { return new LinearLayout.LayoutParams(0, -1, 1f); }
-
-    private View gap() { return new View(this); }
-
-    private View barBtn(String label, int colorRes, View.OnClickListener l) {
-        TextView tv = new TextView(this);
-        tv.setText(label);
-        tv.setTextColor(Skin.c(colorRes));
-        tv.setTextSize(13);
-        tv.setGravity(Gravity.CENTER);
-        tv.setBackground(Skin.round(Skin.c(R.color.card), 12f));
-        tv.setOnClickListener(l);
-        return tv;
+    private void setPage(int index, boolean animate) {
+        if (pager != null) pager.setCurrentItem(index, animate);
     }
 
-    /* ------------------------- DesktopView.Host ------------------------- */
-
-    @Override public LauncherModel model() { return model; }
-
-    @Override public void onOpenFolder(LauncherModel.Folder f) {
-        Intent i = new Intent(this, FolderActivity.class);
-        i.putExtra(FolderActivity.EXTRA_NAME, f.name);
-        startActivity(i);
+    private void enableSwipe(boolean on) {
+        if (pager != null) pager.setSwipeEnabled(on);
     }
 
-    @Override public void onToast(String msg) { toast(msg); }
+    /** 翻页时同步导航栏高亮（第 2 页高亮「其他」，其余高亮「首页」）。 */
+    private void onPageChanged(int index) {
+        // 单应用模式锁了翻页，正常划不动；万一被程序切走，这里兜底退回分屏
+        if (index != PAGE_MAIN && pip != null && pip.isSingle()) {
+            pip.showSplit();
+            enableSwipe(true);
+        }
+        if (index == PAGE_APPS) syncDock(DockBar.APPS);
+        else syncDock(DockBar.HOME);
+    }
 
-    @Override public void onRequestLayoutMode() {
-        startActivity(new Intent(this, LayoutModeActivity.class));
+    private void syncDock(int which) {
+        if (dock != null) dock.setActive(which);
+    }
+
+    /** 退出桌面：把桌面退到后台，回到系统上一屏。 */
+    private void exitLauncher() {
+        try {
+            moveTaskToBack(true);
+        } catch (Throwable t) {
+            finish();
+        }
+    }
+
+    /* ------------------------- AppGridPage.Host ------------------------- */
+
+    @Override public void onOpenApp(String pkg, int slot) {
+        if (pkg == null || pkg.isEmpty()) return;
+        int s = slot == 1 ? 1 : 2;
+        PipBoard.savePkg(this, s, pkg);
+        setPage(PAGE_MAIN, true);
+        enableSwipe(false);
+        if (pip != null) {
+            // 铺满内容区 = 「切到具体软件界面」，底部导航栏留在原位；应用进程不重启
+            pip.showSingle(s);
+            pip.deploySlotPublic(s);
+            pip.focusSlot(s);
+        }
+        syncDock(s == 1 ? DockBar.MAP : DockBar.MUSIC);
+    }
+
+    @Override public void onPinApp(String pkg) {
+        pinStatic(this, pkg);
+        toast("已固定到底部 Dock");
+    }
+
+    @Override public void onSearch() {
+        startActivity(new Intent(this, SearchActivity.class));
+    }
+
+    @Override public void onSettings() {
+        startActivity(new Intent(this, SettingsHubActivity.class));
     }
 
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
@@ -481,7 +470,12 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
 
     @Override public void onPictureInPictureModeChanged(boolean inPip, Configuration cfg) {
         super.onPictureInPictureModeChanged(inPip, cfg);
-        if (mainCol != null) mainCol.setVisibility(inPip ? View.GONE : View.VISIBLE);
+        if (pager != null) pager.setVisibility(inPip ? View.GONE : View.VISIBLE);
+        if (dock != null) dock.setVisibility(inPip ? View.GONE : View.VISIBLE);
+        if (island != null) {
+            island.setVisibility(inPip || model == null || !model.islandEnabled
+                    ? View.GONE : View.VISIBLE);
+        }
         if (pipBox != null) pipBox.setVisibility(inPip ? View.VISIBLE : View.GONE);
     }
 
@@ -489,8 +483,7 @@ public class HomeActivity extends BaseActivity implements DesktopView.Host {
         super.onUserLeaveHint();
         // 用户按 Home 离开桌面时自动进系统画中画。
         // 这与 XposedEntry 里目标应用的 onUserLeaveHint hook 配合：
-        // 目标应用进 PiP（SystemUI hook 缩放到 60%），
-        // 桌面自身也可进 PiP（pipBox 显示精简视图）。
+        // 目标应用进 PiP（SystemUI hook 缩放到 60%），桌面自身也可进 PiP（pipBox 显示精简视图）。
         enterPip(null);
     }
 
