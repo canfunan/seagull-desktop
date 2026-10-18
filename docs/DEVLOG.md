@@ -12,6 +12,51 @@
 
 ---
 
+## 批次 AF — 网易云「点歌词/封面就跳主屏 + 回桌面画布黑屏」：自愈通道补全 + 常驻巡检搬回
+
+**目标**：用户实测两个症状：① 画中画里点网易云的歌词/封面等页面，应用直接全屏跑回
+手机主屏；② 进入应用后返回桌面，画中画画布黑屏不再恢复。两个症状是同一条链：
+singleTask 任务被系统拉回默认屏后，**所有搬回通道都没把它搬回来**。
+
+### 病根：ensureOnDisplay 的保守放弃区间太宽
+
+搬回链有三条通道：① 守护进程反射 ② `am stack move-task` ③ `am task move-task`，
+但 ②③ 都依赖 `am stack list` 的文本可解析。真机上出现过解析不出（空段/格式差异）的
+ROM —— 这时只剩守护进程一条路，它一旦失败就走 `return "am stack list 不可用且守护
+进程搬屏失败，跳过自愈"`，**静默放弃**。表现恰好是：跳走 → tap 自愈两次全扑空 →
+回桌面 healHome 也放弃 → 画布永远黑屏。
+
+### 修复
+
+**① 第④搬运通道：dumpsys（RootOps.ensureViaDumpsys）**
+
+`dumpsys activity activities` 与 `am stack list` 是**两套完全独立的输出格式**
+（`Display #N` 段头归口 + `Task{...#id}`，TaskScan 解析）。am stack list 解析不出时
+它仍可能可用。通道内保持与解析路径同一条护栏：目标已在虚拟屏 → 不动；同名任务在
+其他虚拟屏（别的槽的实例）→ 不动；任何屏都找不到 → ABSENT（只搬不拉红线不变）。
+定位后走 moveTaskToDisplay（守护进程反射 → `am task move-task`）。
+
+**② 常驻巡检搬回（PipBoard.repinRun）**
+
+tap 自愈只在抬手后补两次（600/1600ms），跳页的开窗时序一变就全扑空。新增 2.5s 一拍
+的巡检：两槽逐个 ensureOnDisplay（单线程串行，不并发打 su），检测到"已搬回"就
+`redeployIfPossible` 补一次表面重挂。效果：**跳主屏从"永久黑屏"变成"最多 2.5s 自动
+回到画中画"**，move-task 不杀进程，播放/导航状态不中断。
+
+生命周期：onResume 里 `startRepin()`（幂等，先 removeCallbacks 再 post）；
+onDestroy / cancelPending 的 `removeCallbacksAndMessages(null)` 自然摘除，无需 onPause。
+
+只搬不拉的边界保持：应用真被用户退出（ABSENT）走既有 `relaunchIfAbsent` 节流重拉，
+巡检**绝不重拉** —— 防止虚拟屏里叠出第二个实例（m12 双画布一起坏的教训）。
+
+**验证**：javac --release 11 全树通过（166 class）。真机待验口径：
+点歌词/封面 → 应用闪到主屏后 2.5s 内自动回画中画；返回桌面画布不再黑。
+
+**遗留**：跳主屏瞬间主屏仍会闪现全屏应用一瞬 —— 根治要靠 LSPosed 模块
+（setLaunchDisplayId 注入）或受信虚拟屏（uid=1000），巡检是模块失效时的兜底。
+
+---
+
 ## 批次 AA — 网易云车机版强制横屏（反编译坐实两条病根）+ 画布键条（返回/桌面）+ 重挂载
 
 **目标**：用户报「网易云车机版 3.1.0 竖版 / 没有底部导航 / 返回桌面后点不回去」，

@@ -189,6 +189,7 @@ public final class PipBoard extends LinearLayout {
         applyFocusVisuals(false);
         ui.postDelayed(this::redeployIfPossible, 300);
         ui.postDelayed(this::selfHeal, 600);
+        startRepin();   // 批次 AF：跳主屏后最多 2.5s 自动搬回
     }
 
     /**
@@ -1068,6 +1069,47 @@ public final class PipBoard extends LinearLayout {
             String out = RootOps.ensureOnDisplay(act, pkg, d);
             if (out != null && !out.isEmpty()) Log.i(TAG, "点后自愈 槽 " + slotNo + ": " + out);
         }, "pip-tap-heal" + which).start();
+    }
+
+    /* ---------------- 批次 AF：常驻巡检搬回 ---------------- */
+
+    /**
+     * 2.5s 一拍的巡检：singleTask 目标（网易云）在画布内跳页（歌词/封面页）时，
+     * 整个任务被系统拉回默认屏 —— tap 自愈只补两次（600/1600ms）可能都扑空，
+     * 「跳走」就永久化成「画布黑屏 + 主屏全屏应用」。常驻巡检把它变成
+     * 「最多 2.5s 自动搬回」，应用与播放状态都不中断（move-task 不杀进程）。
+     *
+     * 只搬不拉（ensureOnDisplay 红线不变）：应用真退出走既有缺席重拉路径
+     * （relaunchIfAbsent），这里绝不重拉，防虚拟屏里叠出第二个实例。
+     */
+    private static final long REPIN_MS = 2500;
+    private final Runnable repinRun = new Runnable() {
+        @Override public void run() {
+            new Thread(() -> {
+                for (int i = 1; i <= 2; i++) {
+                    MirrorSlot s = slotOf(i);
+                    if (s == null || s.displayId() <= 0 || !s.ready()) continue;
+                    String pkg = pkgOf(i);
+                    if (pkg == null || pkg.isEmpty()) continue;
+                    try {
+                        String out = RootOps.ensureOnDisplay(act, pkg, s.displayId());
+                        if (out != null && out.contains("已搬回")) {
+                            Log.i(TAG, "巡检搬回 槽 " + i + ": " + out);
+                            ui.post(PipBoard.this::redeployIfPossible);
+                        }
+                    } catch (Throwable t) {
+                        Log.w(TAG, "巡检 槽 " + i + " 异常: " + t);
+                    }
+                }
+            }, "pip-repin").start();
+            ui.postDelayed(this, REPIN_MS);
+        }
+    };
+
+    /** onResume 启动（幂等）；onDestroy / cancelPending 的 removeCallbacksAndMessages 会摘掉。 */
+    public void startRepin() {
+        ui.removeCallbacks(repinRun);
+        ui.postDelayed(repinRun, REPIN_MS);
     }
 
     private boolean notEmpty(String s) { return s != null && !s.isEmpty(); }

@@ -461,7 +461,39 @@ public final class RootOps {
             }
             return "自愈：栈结构可解析但所有搬运通道都失败";
         }
-        return "am stack list 不可用且守护进程搬屏失败，跳过自愈";
+        // 【批次 AF】am stack list 解析不出 + 守护进程搬屏失败 ≠ 无路可走：
+        // dumpsys activity activities 是完全独立的信息源（Display #N 段头归口、
+        // TaskScan 解析，与 am stack list 是两套输出格式）。真机出现过
+        // 「am stack list 空段、dumpsys 一切正常」的 ROM —— 此前到这一步就静默
+        // 放弃，用户看到的就是「跳主屏后画中画永远黑屏」。
+        // 只搬不拉（m12 红线不变）：dumpsys 里也找不到任务就如实返回，绝不重拉。
+        return ensureViaDumpsys(ctx, pkg, displayId, anchorPkg);
+    }
+
+    private static final java.util.regex.Pattern DISPLAY_HDR =
+            java.util.regex.Pattern.compile("Display\\s+#(\\d+)");
+
+    /**
+     * 第④搬运通道（批次 AF）：dumpsys 定位 + move-task。
+     * 与解析路径同一条护栏：同名任务在其他虚拟屏上是别的槽的实例，绝不动。
+     */
+    private static String ensureViaDumpsys(Context ctx, String pkg, int displayId, String anchorPkg) {
+        String dump = Caps.exec("dumpsys activity activities");
+        if (dump == null || dump.isEmpty()) return "am stack list 与 dumpsys 都无回显，跳过自愈";
+        if (TaskScan.findTaskId(dump, pkg, displayId) >= 0) {
+            return "目标已在虚拟屏（dumpsys d=" + displayId + "）";
+        }
+        java.util.regex.Matcher m = DISPLAY_HDR.matcher(dump);
+        while (m.find()) {
+            int d;
+            try { d = Integer.parseInt(m.group(1)); } catch (NumberFormatException e) { continue; }
+            if (d == 0 || d == displayId) continue;
+            if (TaskScan.findTaskId(dump, pkg, d) >= 0) {
+                return "目标任务在其他虚拟屏 d=" + d + "，不动";
+            }
+        }
+        String r = moveTaskToDisplay(ctx, pkg, displayId, anchorPkg);
+        return r.contains("找不到") ? ABSENT + r : r;
     }
 
     /* ---------------- 诊断 ---------------- */
