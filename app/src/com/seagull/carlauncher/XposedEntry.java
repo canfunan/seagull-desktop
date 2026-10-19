@@ -557,7 +557,8 @@ public class XposedEntry implements IXposedHookLoadPackage {
                             return;   // 跟随模式 / 目标本就是竖屏：别动应用自己的选择
                         }
                         c.orientation = android.content.res.Configuration.ORIENTATION_LANDSCAPE;
-                        log("D 改写 applyOverrideConfiguration: 竖屏 → 横屏");
+                        log("D 改写 applyOverrideConfiguration: 竖屏 → 横屏 ("
+                                + param.thisObject.getClass().getName() + ")");
                     }
                 });
         log("D hookPortraitConfigOverride OK");

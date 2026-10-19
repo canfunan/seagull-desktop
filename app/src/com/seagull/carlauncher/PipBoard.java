@@ -947,9 +947,10 @@ public final class PipBoard extends LinearLayout {
                 });
             }
         }, "pip-deploy" + which).start();
-        // 【批次 AI】部署 6 秒后铺满巡检：布局抖动（2s/4.5s）之后应用若仍未铺满
-        //（dumpsys 窗口帧 < 屏尺寸 92%），冷启动修复 —— 兼容位 deploy 时已写好，
-        // 新进程必然按屏尺寸布局。解析失败绝不动进程（宁可漏修不可误杀）。
+        // 【批次 AI/AJ】部署 8 秒后铺满巡检：两轮抖动（2s/4.5s 起，各持续 ~2.2s）
+        // 都结束后才判定。窗口帧 < 屏尺寸 92% → 冷启动修复（模块 D 段已装时，
+        // 新进程 attachBaseContext 会被改写成横屏，新进程必然铺满）。
+        // 解析失败绝不动进程（宁可漏修不可误杀）。
         ui.postDelayed(() -> new Thread(() -> {
             try {
                 MirrorSlot s2 = slotOf(which);
@@ -959,7 +960,7 @@ public final class PipBoard extends LinearLayout {
             } catch (Throwable t) {
                 Log.w(TAG, "铺满巡检异常: " + t);
             }
-        }, "pip-fill" + which).start(), 6000);
+        }, "pip-fill" + which).start(), 8000);
     }
 
     /**

@@ -425,26 +425,49 @@ public final class MirrorSlot implements CanvasSource {
     private volatile int vdDpi;
 
     /**
-     * VD 尺寸 ±1px 再弹回：强制系统对这块屏发一轮 config change，画布里的应用按
-     * 当前 VD 尺寸重新布局。修「应用不满画布 + 触摸全偏」—— 应用被 move-task 搬进
-     * 新屏（部署路①）后窗口停在搬入前尺寸；surface 挂载的 resize 若与旧尺寸相同是
-     * no-op，应用收不到任何重排时机，就一直卡在画布一角，触摸按满屏比例换算自然全偏。
-     * 不杀进程、不丢导航/播放状态。450ms 后回弹；期间屏被重建（displayId 变了）放弃。
+     * VD 抖动：强制画布里的应用重排/重建。批次 AJ 升级为两拍：
+     *
+     * 第 1 拍（尺寸 ±1px）：可缩放应用直接按新尺寸重排，铺满旧布局停摆类问题。
+     *
+     * 第 2 拍（密度 ±8 再回）：修网易云「不铺满」的根 —— 反编译坐实（批次 AJ）：
+     * 网易云 iot 版 base/b.attachBaseContext 用 **Application 的 defaultDisplay
+     * （永远是 display 0，手机主屏=竖屏）** 的宽高比自判朝向，ratio≤1.3 就
+     * applyOverrideConfiguration 烙死 PORTRAIT，且 onConfigurationChanged 永不重算。
+     * 模块 D 段（XposedEntry.hookPortraitConfigOverride）能把这个烙印改写成横屏，
+     * 但只对「attachBaseContext 时」生效 —— 搬任务路部署的是在手机上早已初始化的
+     * 旧 activity，hook 没有机会跑。而它的 configChanges 不含 DENSITY：**密度一变，
+     * activity 必重建**（重跑 attachBaseContext → D 段生效 → 横屏渲染），进程不死、
+     * 音乐不断。密度 ±8 肉眼无感，两拍在 1s 内完成。
      */
     public void nudgeLayout() {
         final int d = displayId;
         final int w = vdW, h = vdH, dpi = vdDpi;
         if (vd == null || d <= 0 || w <= 0 || h <= 0 || dpi <= 0) return;
+        android.os.Handler hd = new android.os.Handler(android.os.Looper.getMainLooper());
         try {
             vd.resize(w, Math.max(64, h - 1), dpi);
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            hd.postDelayed(() -> {
                 if (vd == null || displayId != d) return;
                 try { vd.resize(w, h, dpi); } catch (Throwable ignore) {}
-            }, 450);
-            Log.i(TAG, "[" + name + "] 布局抖动 " + w + "x" + Math.max(64, h - 1)
+            }, 400);
+            Log.i(TAG, "[" + name + "] 布局抖动(尺寸) " + w + "x" + Math.max(64, h - 1)
                     + " → " + w + "x" + h);
         } catch (Throwable t) {
-            Log.w(TAG, "[" + name + "] 布局抖动失败: " + t);
+            Log.w(TAG, "[" + name + "] 布局抖动(尺寸)失败: " + t);
+        }
+        try {
+            hd.postDelayed(() -> {
+                if (vd == null || displayId != d) return;
+                try { vd.resize(w, h, dpi + 8); } catch (Throwable ignore) {}
+            }, 1200);
+            hd.postDelayed(() -> {
+                if (vd == null || displayId != d) return;
+                try { vd.resize(w, h, dpi); } catch (Throwable ignore) {}
+            }, 2200);
+            Log.i(TAG, "[" + name + "] 密度抖动 dpi " + dpi + "→" + (dpi + 8) + "→" + dpi
+                    + "（触发 activity 重建，让 D 段重新判定朝向）");
+        } catch (Throwable t) {
+            Log.w(TAG, "[" + name + "] 密度抖动失败: " + t);
         }
     }
 

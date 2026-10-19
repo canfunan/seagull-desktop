@@ -12,6 +12,63 @@
 
 ---
 
+## 批次 AJ — 反编译网易云 iot 版：铺满问题的终极根因（PORTRAIT 烙印）+ 密度抖动强制重建
+
+用户要求反编译网易云看为什么不能铺满。反编译对象：`com.netease.cloudmusic.iot`
+（用户上传的"网易云.apk"，证实画中画2 绑的是 IoT 版）。工具：pyaxmlparser（manifest）
++ apktool 2.9.3（smali/resources）。
+
+### 反编译证据链
+
+1. **manifest**：`targetSdk=29`、`resizeableActivity=true`、`android.max_aspect=2.4`、
+   所有 activity `screenOrientation=SENSOR`、`configChanges=0x620`
+   （SCREEN_SIZE|UI_MODE|KEYBOARD_HIDDEN，**不含 DENSITY=0x1000** —— 这个伏笔决定
+   修复手段）、主题链 `vg→l→x→lk→…→Theme.Material.Light.NoActionBar`，无
+   windowIsFloating/windowFixedWidth（排除浮动窗口假说），`windowBackground` 是
+   深色 drawable（黑边=窗口背景裸露）。
+2. **base/b.attachBaseContext（所有 iot 界面的基类）** —— 根因：
+
+   ```java
+   DisplayMetrics dm = v1.b(null);      // activity=null！
+   // v1.a(null) → Application.getSystemService(WINDOW_SERVICE).getDefaultDisplay()
+   //              = 进程默认屏 display 0（手机主屏，竖屏 1080x2400，ratio≈0.45）
+   float ratio = dm.widthPixels / (float) dm.heightPixels;
+   if (ratio <= 1.3f) {                  // 竖屏主屏必然命中
+       Configuration c = new Configuration();
+       c.orientation = ORIENTATION_PORTRAIT;
+       applyOverrideConfiguration(c);    // 烙死，onConfigurationChanged 永不重算
+   }
+   ```
+
+   三个致命点：读的是 **display 0**（不是 activity 所在屏）；判定**只在 attach 时
+   跑一次**；PORTRAIT override 是应用进程内部的，**compat/尺寸抖动都改不掉**。
+   移到横屏画布后 UI 仍按竖屏配置渲染 → 四周黑边 + 触摸按满窗口映射全偏。
+
+3. **为什么既有 D 段没生效**：`hookPortraitConfigOverride`（批次 AA）hook 点正确
+   （ContextThemeWrapper.applyOverrideConfiguration，PORTRAIT→LANDSCAPE），iot 包也
+   在 TARGETS 里 —— 但它只在 **attachBaseContext 时**触发；搬任务路部署的是在
+   手机上早已初始化完的旧 activity 实例，attach 早就跑过了，hook 永远没机会。
+   冷启动修复（批次 AI）能重建进程，但杀进程（断音乐/导航）。
+
+### 修复：密度抖动 = 不杀进程的 activity 重建
+
+网易云 `configChanges` 不含 DENSITY → **密度一变 activity 必重建**（重跑
+attachBaseContext → D 段把 PORTRAIT 改写为 LANDSCAPE → 横屏渲染铺满），进程不死、
+音乐不断。`nudgeLayout` 升级为两拍：尺寸 ±1px（可缩放应用重排）+ 密度 ±8 再回
+（触发重建，±8 肉眼无感，1s 内完成）。铺满巡检从 6s 推迟到 8s（避开抖动窗口，
+防止重建中途误判未铺满而误杀进程）。
+
+### 验证口径（真机）
+
+- 部署画中画 8 秒内应铺满；`logcat -s SeagullLsp` 应出现
+  `D 改写 applyOverrideConfiguration: 竖屏 → 横屏 (com.netease.cloudmusic.base.b…)`
+  —— 这行就是 hook 生效的直接证据；
+- 若一直不出现该行 → 模块没注入网易云进程（查 LSPosed 作用域）；
+- 铺满巡检日志（`logcat -s SeagullCar`："铺满巡检 槽 n: …"）与「画中画体检」报告
+  仍可作为兜底证据。
+
+---
+
 ## 批次 AI — 8E96 无效后的深度排查：守护进程静默误注主屏（实锤）+ 铺满探测自修复 + 画中画体检
 
 用户反馈批次 AH 仍无效：网易云不铺满、两应用触摸全偏。深度排查结论：
