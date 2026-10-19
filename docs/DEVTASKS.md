@@ -57,10 +57,10 @@
 - [x] 自检：ConfigCheck（导出→导入 round-trip 30+ 键+2 拒绝用例）、CrashSigCheck（签名/窗口/阈值 12+ 用例）
 
 ## 批次 P OBD2 车辆数据（2026-10-19 拍板，spec: .monkeycode/specs/obd2-vehicle-data）
-- [ ] P1 ObdEngine——SPP 连接（SPP_UUID，bonded 过滤）+AT 初始化（ATZ/ATE0/ATL0/ATS0/ATH0/ATSP0/0100 逐条等 '>'）+单命令轮询（010D/010C/0105/0142/012F，0142 失效补 ATRV）+断线 5s 重连+连续 10 轮全失效判离线；ObdParser 纯静态（SAE J1979 公式+错误 token）
-- [ ] P2 设置分区 obd——开关/适配器选择（bonded 列表存 obdMac）/间隔 1s2s5s/电压阈值 11.5-12-12.5；BLUETOOTH_CONNECT 运行时权限（REQ_OBD=0x5A15）；Manifest 权限（CONNECT + 旧蓝牙 maxSdk30）
-- [ ] P3 块接入——行车块 OBD 车速优先（OBD 角标）+转速/水温行（失效 --，离线收起回落 GPS）；监控块电压行；亏电提醒（低于阈值 60s 本地通知，会话一次，恢复复位）
-- [ ] 自检：ObdCheck（parse 12+ 用例：各 PID 正常值/多 ECU 行/SEARCHING 过渡/NO DATA/?/空串/012F 满格/0142 13.48V/ATRV；isError 全 token）
+- [x] P1 ObdEngine——SPP 连接（SPP_UUID，bonded 过滤）+AT 初始化（ATZ/ATE0/ATL0/ATS0/ATH0/ATSP0/0100 逐条等 '>'）+单命令轮询（010D/010C/0105/0142/012F，0142 失效补 ATRV）+断线 5s 重连+连续 10 轮全失效判离线；ObdParser 纯静态（SAE J1979 公式+错误 token）。HomeActivity onCreate start/onDestroy stop
+- [x] P2 设置分区 obd——开关/适配器选择（bonded 列表存 obdMac）/间隔 1/2/3/5s/电压阈值 11.5-12-12.5；BLUETOOTH_CONNECT 运行时权限（复用 REQ 9001，结果处理就是 render，语义一致）；Manifest 三权限此前已在
+- [x] P3 块接入——行车块 OBD 车速优先（OBD 角标）+转速/水温行（失效 --，离线收起回落 GPS）；监控块电压行；亏电提醒（低于阈值 60s 本地通知，会话一次，恢复复位）。精刷走 1s 定位事件流，30s tick 兜底（无定位权限分支只有 tick 驱动）
+- [x] 自检：ObdCheck（parse 12+ 用例：各 PID 正常值/多 ECU 行/SEARCHING 过渡/NO DATA/?/空串/012F 满格/0142 13.48V/ATRV；isError 全 token）——24 项全绿；11 套自检全绿
 
 ## 终局
 - [x] 功能清单对齐（本文件逐项核对 + 真机验收项标注）——G-N 共 21 项全部勾选并核对落位说明与复盘行齐备（J-N 复盘行本次补录）；自检 8 项全绿（QuickbarCheck 垫片修复，见下）

@@ -84,6 +84,7 @@ public final class WallpaperPage extends FrameLayout {
     /** H 批次行车块：车速 / 海拔航向 / 行程三行，可拖动缩放，摆位存 model.wallGps*。 */
     private final LinearLayout gpsBox;
     private final TextView gpsBig, gpsMid, gpsTrip;
+    private final TextView gpsObd;
     private boolean gpsAttached;
 
     /** I3 倒计时块：距目标日 N 天；配置（名称/日期）经点按菜单。 */
@@ -97,6 +98,7 @@ public final class WallpaperPage extends FrameLayout {
     private final LinearLayout gBox;
     private final TextView musL0, musL1, musL2, musL3;
     private final TextView monL1, monL2, monL3;
+    private final TextView monL4;
     private final TextView gBig, gSub;
 
     /** I4 指南针兜底：GPS 航向失联时用加速度计+磁力计方位角补显。 */
@@ -175,9 +177,12 @@ public final class WallpaperPage extends FrameLayout {
         gpsBig = tv(c, 26, R.color.text, true);
         gpsMid = tv(c, 13, R.color.text_dim, false);
         gpsTrip = tv(c, 13, R.color.text_dim, false);
+        gpsObd = tv(c, 13, R.color.text_dim, false);   // P3：OBD 转速/水温，离线收起
         gpsBox.addView(gpsBig);
         gpsBox.addView(gpsMid, topMargin(c, 6));
         gpsBox.addView(gpsTrip, topMargin(c, 3));
+        gpsObd.setVisibility(GONE);
+        gpsBox.addView(gpsObd, topMargin(c, 3));
         gpsBox.setVisibility(GONE);
         addView(gpsBox, new LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT));
         gpsBox.setOnTouchListener(new Drag(gpsBox,
@@ -227,9 +232,12 @@ public final class WallpaperPage extends FrameLayout {
         monL1 = tv(c, 13, R.color.text_dim, false);
         monL2 = tv(c, 13, R.color.text_dim, false);
         monL3 = tv(c, 13, R.color.text_dim, false);
+        monL4 = tv(c, 13, R.color.text_dim, false);   // P3：OBD 电压，离线收起
         monBox.addView(monL1);
         monBox.addView(monL2, topMargin(c, 3));
         monBox.addView(monL3, topMargin(c, 3));
+        monL4.setVisibility(GONE);
+        monBox.addView(monL4, topMargin(c, 3));
         monBox.setVisibility(GONE);
         addView(monBox, new LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT));
         monBox.setOnTouchListener(new Drag(monBox,
@@ -548,11 +556,14 @@ public final class WallpaperPage extends FrameLayout {
     /** 1s 定位事件原位 setText（审计 M4 纪律：事件驱动单行刷新，不整树重建）。 */
     private void updateGpsRows(Location loc) {
         if (gpsBox == null || gpsBox.getVisibility() != VISIBLE) return;
+        refreshObdRows();
         if (!LocationHelper.hasPermission(getContext())) return;
         if (loc == null || !LocationHelper.fresh()) {
-            gpsBig.setText("-- km/h");
-            gpsMid.setText("海拔 -- · 航向 --");
-        } else {
+            if (!obdBigOverridden()) {
+                gpsBig.setText("-- km/h");
+                gpsMid.setText("海拔 -- · 航向 --");
+            }
+        } else if (!obdBigOverridden()) {
             float kmh = Math.max(0f, loc.getSpeed() * 3.6f);
             gpsBig.setText(String.format(java.util.Locale.US, "%.0f km/h", kmh));
             float brg = loc.getBearing();
@@ -565,6 +576,56 @@ public final class WallpaperPage extends FrameLayout {
                 : String.format(java.util.Locale.US, "%d分钟", sec / 60);
         gpsTrip.setText(String.format(java.util.Locale.US, "行程 %.1f km · %s",
                 LocationHelper.tripKm(), dur));
+    }
+
+    /** OBD 车速有效时覆盖 gpsBig；无效回落 GPS 估算。 */
+    private boolean obdBigOverridden() {
+        ObdEngine.State s = ObdEngine.STATE;
+        if (!s.speedFromObd || Float.isNaN(s.speedKmh)) return false;
+        gpsBig.setText(String.format(java.util.Locale.US, "%.0f km/h OBD", s.speedKmh));
+        return true;
+    }
+
+    /** OBD 转速/水温行：在线有值显示，离线/失效收起（行车块回落纯 GPS 三行）。 */
+    private void refreshObdRows() {
+        if (gpsObd == null) return;
+        ObdEngine.State s = ObdEngine.STATE;
+        if (s.online && (!Float.isNaN(s.rpm) || !Float.isNaN(s.coolantC))) {
+            gpsObd.setVisibility(VISIBLE);
+            gpsObd.setText(String.format(java.util.Locale.US, "%s  %s",
+                    Float.isNaN(s.rpm) ? "转速 --"
+                            : String.format(java.util.Locale.US, "%.0f rpm", s.rpm),
+                    Float.isNaN(s.coolantC) ? "水温 --"
+                            : String.format(java.util.Locale.US, "水温 %.0f°C", s.coolantC)));
+        } else {
+            gpsObd.setVisibility(GONE);
+        }
+        // 无定位权限分支也吃 OBD 数据：块缩着时只更新 gpsBig/obd 行
+        if (!LocationHelper.hasPermission(getContext()) && s.online) {
+            if (s.speedFromObd && !Float.isNaN(s.speedKmh)) {
+                gpsBig.setText(String.format(java.util.Locale.US, "%.0f km/h OBD", s.speedKmh));
+            }
+            refreshObdRowsVisibility();
+        }
+    }
+
+    private void refreshObdRowsVisibility() {
+        if (gpsObd == null) return;
+        ObdEngine.State s = ObdEngine.STATE;
+        gpsObd.setVisibility(s.online && (!Float.isNaN(s.rpm) || !Float.isNaN(s.coolantC))
+                ? VISIBLE : GONE);
+    }
+
+    /** P3 监控块电压行：OBD 在线且电压有效才出现，否则收起不留空行。 */
+    private void refreshMonVolt() {
+        if (monL4 == null) return;
+        ObdEngine.State s = ObdEngine.STATE;
+        if (s.online && !Float.isNaN(s.voltageV)) {
+            monL4.setVisibility(VISIBLE);
+            monL4.setText(String.format(java.util.Locale.US, "电瓶 %.1f V", s.voltageV));
+        } else {
+            monL4.setVisibility(GONE);
+        }
     }
 
     /** 航向角转八方位（负角取模；NaN = 无航向）。 */
@@ -727,6 +788,7 @@ public final class WallpaperPage extends FrameLayout {
         monL1.setTextSize(13 * s);
         monL2.setTextSize(13 * s);
         monL3.setTextSize(13 * s);
+        monL4.setTextSize(13 * s);
         monBox.post(() -> placeBlock(monBox, model.wallMonX, model.wallMonY));
     }
 
@@ -1558,6 +1620,9 @@ public final class WallpaperPage extends FrameLayout {
         if (cdBox != null && cdBox.getVisibility() == VISIBLE) updateCdRows();
         // I5 监控：30s 一个采样周期，后台线程
         if (monBox != null && monBox.getVisibility() == VISIBLE) refreshMonRows();
+        // P3 OBD：转速/水温行 + 电压行 30s 兜底刷（1s 精刷走定位事件流）
+        if (gpsBox != null && gpsBox.getVisibility() == VISIBLE) refreshObdRows();
+        if (monBox != null && monBox.getVisibility() == VISIBLE) refreshMonVolt();
         // M5 音乐块：可见时跟队列/播放态；开着但还没扫过库就先扫一次
         if (musBox != null && musBox.getVisibility() == VISIBLE) { ensureMusicScanned(); refreshMusBlock(); }
 

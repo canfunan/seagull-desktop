@@ -315,6 +315,12 @@ public final class LauncherModel {
     public float wallGpsScale = 1f;
     public boolean wallGpsEnabled = true;
 
+    /** 批次 P OBD2：车辆数据。obdVoltLow 单位 V（电瓶静置正常 12.4+，12.0 以下偏亏）。 */
+    public boolean obdEnabled = false;
+    public String obdMac = "";
+    public int obdIntervalMs = 2000;
+    public float obdVoltLow = 12.0f;
+
     /** I3 倒计时块：目标日配置（yyyy-MM-dd）+ 摆位。未配置时块显示设置提示。 */
     public String cdLabel = "";
     public String cdTarget = "";
@@ -1099,6 +1105,10 @@ public final class LauncherModel {
             wgp.put("x", wallGpsX); wgp.put("y", wallGpsY); wgp.put("s", wallGpsScale);
             wgp.put("on", wallGpsEnabled);
             o.put("wallGps", wgp);
+            o.put("obdEnabled", obdEnabled);
+            o.put("obdMac", obdMac);
+            o.put("obdIntervalMs", obdIntervalMs);
+            o.put("obdVoltLow", obdVoltLow);
             JSONObject wcd = new JSONObject();
             wcd.put("label", cdLabel); wcd.put("target", cdTarget);
             wcd.put("x", wallCdX); wcd.put("y", wallCdY); wcd.put("s", wallCdScale);
@@ -1370,6 +1380,10 @@ public final class LauncherModel {
                 wallGpsScale = (float) wgo.optDouble("s", 1.0);
                 wallGpsEnabled = wgo.optBoolean("on", true);
             }
+            obdEnabled = o.optBoolean("obdEnabled", false);
+            obdMac = o.optString("obdMac", "");
+            obdIntervalMs = o.optInt("obdIntervalMs", 2000);
+            obdVoltLow = (float) o.optDouble("obdVoltLow", 12.0);
             JSONObject wco2 = o.optJSONObject("wallCd");
             if (wco2 != null) {
                 cdLabel = wco2.optString("label", "");

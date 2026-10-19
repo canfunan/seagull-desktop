@@ -82,6 +82,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         setContentView(buildUi());
         refreshMini();
         ui.postDelayed(tick, 30_000L);
+        ObdEngine.start(this);   // P1：引擎按配置自动启停，进程内线程
         // 审计 M6：装卸/更新应用即时失效 loadApps 缓存（TTL 20s 是兜底）
         android.content.IntentFilter pf = new android.content.IntentFilter();
         pf.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -212,6 +213,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     @Override protected void onDestroy() {
         ui.removeCallbacksAndMessages(null);
+        ObdEngine.stop();                   // P1：桌面走了一定停轮询
         if (negPage != null) negPage.setActive(false);   // 2s root 轮询别带进坟墓
         if (pip != null) pip.onDestroy();   // 只断 Surface，VD 留给 MirrorHost 常驻
         if (navCard != null) navCard.detach();   // 摘导航订阅（AmapNavClient 单例存活）

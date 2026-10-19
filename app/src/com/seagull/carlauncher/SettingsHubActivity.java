@@ -49,6 +49,7 @@ public class SettingsHubActivity extends BaseActivity {
             new Sec("garden", "菜园", "叶子 大时钟 歌词 压暗 摆法 遮罩"),
             new Sec("ball", "小白点", "悬浮球 悬浮键 野菜键 大小 位置 悬浮窗权限"),
             new Sec("blocks", "桌面组件块", "行车块 车速 海拔 航向 行程 倒数 倒计时 监控 内存 CPU 存储 音乐 本地音乐 G值 加速度 壁纸页 块"),
+            new Sec("obd", "车辆数据", "车辆数据 OBD 行车电脑 转速 水温 电压 电瓶 亏电 油量 适配器 ELM327 蓝牙"),
             new Sec("theme", "主题与壁纸", "主题色 颜色 日夜模式 深色 浅色 壁纸 遮罩 毛玻璃 字号 主题包 圆角 玻璃 描边 动态壁纸 视频壁纸 天气联动 壁纸库"),
             new Sec("neg", "负一屏", "负一屏 天气卡 限行 尾号 城市 快捷开关 日志导出 常用目的地 回家 公司 一键导航"),
             new Sec("screen", "屏幕", "外边距 缝 方向 横屏 竖屏 保持亮屏 顶部信息栏 校时"),
@@ -180,6 +181,7 @@ public class SettingsHubActivity extends BaseActivity {
                 return "外观";
             case "weather": case "lyrics":
                 return "天气与歌词";
+            case "obd":
             case "window": case "touch": case "tasks": case "bootanim":
                 return "高级功能";
             default:
@@ -207,6 +209,9 @@ public class SettingsHubActivity extends BaseActivity {
             case "touch": return "防误滑 " + m.touchThreshold + "px · 长按 " + (m.longPressMs / 1000f) + "s";
             case "tasks": return m.tasks.size() + " / " + LauncherModel.TASK_MAX + " 条";
             case "bootanim": return "本地素材管理";
+            case "obd": return m.obdEnabled
+                    ? (ObdEngine.STATE.online ? "在线 · " + m.obdMac : ObdEngine.STATE.status)
+                    : "未启用";
             case "system": return "开机自启 " + (m.autoHome ? "开" : "关");
             case "market": return "root 面板 · 自检 · 强停";
             case "about": return "版本 " + versionName();

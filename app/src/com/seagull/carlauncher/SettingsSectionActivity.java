@@ -2,6 +2,8 @@ package com.seagull.carlauncher;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
@@ -112,6 +114,7 @@ public class SettingsSectionActivity extends BaseActivity {
         switch (id) {
             case "dock": return "Dock 栏";
             case "blocks": return "桌面组件块";
+            case "obd": return "车辆数据";
             case "quickbar": return "快捷栏";
             case "garden": return "菜园";
             case "ball": return "小白点";
@@ -136,6 +139,7 @@ public class SettingsSectionActivity extends BaseActivity {
         switch (section) {
             case "dock": dockBody(); break;
             case "blocks": blocksBody(); break;
+            case "obd": obdBody(); break;
             case "quickbar": quickbarBody(); break;
             case "garden": gardenBody(); break;
             case "ball": ballBody(); break;
@@ -269,6 +273,110 @@ public class SettingsSectionActivity extends BaseActivity {
         note("行车块没定位权限时会缩成「点按开启定位」，权限给了自动展开。"
                 + "监控块/CPU 采样走 root，拿不到就显示 --。音乐块点按进本地音乐，"
                 + "长按弹自己的菜单。");
+    }
+
+    private void obdBody() {
+        sectionLabel("OBD 连接");
+        toggleRow("车辆数据（OBD2）", model.obdEnabled, () -> {
+            model.obdEnabled = !model.obdEnabled;
+            model.save();
+            if (model.obdEnabled) ensureBtPerm();
+            render();
+        });
+        String macLabel = model.obdMac.isEmpty()
+                ? "未选（先到系统蓝牙配对 ELM327）" : model.obdMac;
+        actionRow("适配器", macLabel, v -> pickAdapter());
+        choiceRow("刷新间隔", model.obdIntervalMs + " ms", () -> {
+            String[] names = {"1000 ms", "2000 ms", "3000 ms", "5000 ms"};
+            int cur = -1;
+            int[] vals = {1000, 2000, 3000, 5000};
+            for (int i = 0; i < vals.length; i++) if (vals[i] == model.obdIntervalMs) cur = i;
+            if (cur < 0) cur = 1;
+            choiceDialog("刷新间隔", names, cur, i -> {
+                model.obdIntervalMs = vals[i];
+                model.save(); render();
+            });
+        });
+
+        sectionLabel("亏电提醒");
+        choiceRow("电压阈值", String.format(Locale.US, "%.1f V", model.obdVoltLow), () -> {
+            String[] names = {"11.5 V", "12.0 V", "12.5 V"};
+            float[] vals = {11.5f, 12.0f, 12.5f};
+            int cur = 1;
+            for (int i = 0; i < vals.length; i++)
+                if (vals[i] == model.obdVoltLow) cur = i;
+            choiceDialog("电压阈值", names, cur, i -> {
+                model.obdVoltLow = vals[i];
+                model.save(); render();
+            });
+        });
+
+        sectionLabel("实时状态");
+        ObdEngine.State s = ObdEngine.STATE;
+        note(String.format(Locale.US,
+                "%s\n转速 %s  水温 %s\n电压 %.1f V  油量 %s",
+                s.status,
+                Float.isNaN(s.rpm) ? "--" : String.format(Locale.US, "%.0f rpm", s.rpm),
+                Float.isNaN(s.coolantC) ? "--" : String.format(Locale.US, "%.0f°C", s.coolantC),
+                Float.isNaN(s.voltageV) ? 0f : s.voltageV,
+                Float.isNaN(s.fuelPct) ? "--" : String.format(Locale.US, "%.0f%%", s.fuelPct)));
+
+        sectionLabel("说明");
+        note("需要 ELM327 蓝牙头子：先到系统蓝牙配对，再回这里选适配器。"
+                + "打开开关后引擎自动连（断线每 5s 重试）。行车块会优先显示 OBD 车速，"
+                + "监控块加一行电压。断电熄火后数据停更属于正常。");
+    }
+
+    private void pickAdapter() {
+        if (!ensureBtPerm()) return;
+        try {
+            BluetoothAdapter ad = BluetoothAdapter.getDefaultAdapter();
+            if (ad == null || !ad.isEnabled()) {
+                toast("先打开系统蓝牙");
+                return;
+            }
+            java.util.Set<BluetoothDevice> bonded = ad.getBondedDevices();
+            if (bonded == null || bonded.isEmpty()) {
+                toast("还没有已配对设备，先到系统蓝牙配对 ELM327");
+                return;
+            }
+            java.util.List<BluetoothDevice> list = new java.util.ArrayList<>(bonded);
+            String[] names = new String[list.size()];
+            for (int i = 0; i < list.size(); i++) {
+                String n = list.get(i).getName();
+                names[i] = (n == null || n.isEmpty() ? "未命名" : n)
+                        + "\n" + list.get(i).getAddress();
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle("选 OBD 适配器")
+                    .setItems(names, (DialogInterface d, int which) -> {
+                        d.dismiss();
+                        model.obdMac = list.get(which).getAddress();
+                        model.save();
+                        toast("已选 " + model.obdMac);
+                        render();
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+        } catch (SecurityException e) {
+            toast("缺蓝牙权限");
+        } catch (Throwable t) {
+            toast("读不到蓝牙列表");
+        }
+    }
+
+    /** 蓝牙连接权限（Android 12+ 运行时申请）；true=已有。 */
+    private boolean ensureBtPerm() {
+        if (android.os.Build.VERSION.SDK_INT < 31) return true;
+        if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED) return true;
+        try {
+            requestPermissions(new String[]{
+                    android.Manifest.permission.BLUETOOTH_CONNECT}, 9001);
+        } catch (Throwable t) {
+            toast("这台机器不给蓝牙权限，OBD 连不上");
+        }
+        return false;
     }
 
     private void quickbarBody() {        note("放进组件条：长按组件条（或桌面空白处）→「+ 快捷栏」。"
