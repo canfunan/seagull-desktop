@@ -37,7 +37,8 @@ import java.util.List;
 public final class NegScreenView extends FrameLayout {
 
     private final LauncherModel model;
-    private final LinearLayout switchBody, destBody;
+    private final LinearLayout colA, colB;
+    private final LinearLayout weatherBody, restrictBody, switchBody, destBody, logBody;
     private final TextView weatherText, restrictText, logLabel;
     private final TextView chipWifi, chipBt, chipAp, chipHp;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -60,15 +61,15 @@ public final class NegScreenView extends FrameLayout {
         cols.setOrientation(LinearLayout.HORIZONTAL);
         addView(cols, new LayoutParams(-1, -1));
 
-        LinearLayout colA = new LinearLayout(c);
+        colA = new LinearLayout(c);
         colA.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout colB = new LinearLayout(c);
+        colB = new LinearLayout(c);
         colB.setOrientation(LinearLayout.VERTICAL);
         cols.addView(colA, col());
         cols.addView(colB, col());
 
         /* ---- J2 天气卡 ---- */
-        LinearLayout weatherBody = card(colA, "天气");
+        weatherBody = card("天气");
         weatherText = body(c);
         weatherText.setTextSize(15);
         weatherBody.addView(weatherText);
@@ -78,13 +79,13 @@ public final class NegScreenView extends FrameLayout {
         });
 
         /* ---- J2 限行卡 ---- */
-        LinearLayout restrictBody = card(colA, "限行");
+        restrictBody = card("限行");
         restrictText = body(c);
         restrictText.setTextSize(15);
         restrictBody.addView(restrictText);
 
         /* ---- J3 快捷开关 ---- */
-        switchBody = card(colB, "快捷开关");
+        switchBody = card("快捷开关");
         LinearLayout row1 = new LinearLayout(c);
         row1.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout row2 = new LinearLayout(c);
@@ -97,19 +98,128 @@ public final class NegScreenView extends FrameLayout {
         switchBody.addView(row2);
 
         /* ---- J5 目的地卡 ---- */
-        destBody = card(colB, "目的地");
+        destBody = card("目的地");
         refreshDests();
 
         /* ---- J4 日志导出卡 ---- */
-        LinearLayout logBody = card(colB, "日志");
+        logBody = card("日志");
         logLabel = body(c);
         logLabel.setText("导出运行日志到 /sdcard/Seagull/");
         logBody.addView(logLabel);
         logBody.setOnClickListener(v -> exportLog());
 
+        // Q 批次：卡片长按 = 移动/隐藏/管理；空白长按 = 组件管理
+        cardMenu("weather", weatherBody);
+        cardMenu("restrict", restrictBody);
+        cardMenu("switches", switchBody);
+        cardMenu("dest", destBody);
+        cardMenu("log", logBody);
+        setOnLongClickListener(v -> { manageDialog(); return true; });
+
+        relayout();
         refreshWeather();
         refreshRestrict();
         refreshSwitchState();
+    }
+
+    /* ------------------------- Q 批次：卡片序/显隐 ------------------------- */
+
+    /** 按模型序重排：偶位左列奇位右列，隐藏卡脱离不挂回。视图复用只动挂载。 */
+    private void relayout() {
+        List<String> order = NegCards.normalize(model.negOrder);
+        model.negOrder.clear();
+        model.negOrder.addAll(order);
+        List<String> hidden = NegCards.filterHidden(model.negHidden);
+        LinearLayout[] cols = {colA, colB};
+        for (LinearLayout body : new LinearLayout[]{
+                weatherBody, restrictBody, switchBody, destBody, logBody}) {
+            if (body.getParent() instanceof LinearLayout) {
+                ((LinearLayout) body.getParent()).removeView(body);
+            }
+        }
+        List<String> visible = new java.util.ArrayList<>();
+        for (String key : order) {
+            if (!hidden.contains(key)) visible.add(key);
+        }
+        int colIdx = 0;
+        for (String key : visible) {
+            LinearLayout target = cols[NegCards.colOf(colIdx, visible.size())];
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+            lp.topMargin = dp(8);
+            lp.leftMargin = dp(6);
+            lp.rightMargin = dp(6);
+            target.addView(bodyOf(key), lp);
+            colIdx++;
+        }
+    }
+
+    private LinearLayout bodyOf(String key) {
+        switch (key) {
+            case "weather": return weatherBody;
+            case "switches": return switchBody;
+            case "restrict": return restrictBody;
+            case "dest": return destBody;
+            default: return logBody;
+        }
+    }
+
+    /** 卡片长按菜单：上移/下移/隐藏/组件管理（R1.1）。 */
+    private void cardMenu(final String key, LinearLayout cardBox) {
+        cardBox.setOnLongClickListener(v -> {
+            List<String> order = NegCards.normalize(model.negOrder);
+            new AlertDialog.Builder(getContext())
+                    .setTitle(NegCards.labelOf(key))
+                    .setItems(new String[]{
+                            "上移", "下移", "隐藏", "组件管理"}, (d, w) -> {
+                        d.dismiss();
+                        List<String> moved;
+                        if (w == 0) {
+                            moved = NegCards.move(order, key, -1);
+                        } else if (w == 1) {
+                            moved = NegCards.move(order, key, 1);
+                        } else if (w == 2) {
+                            moved = order;
+                            if (!model.negHidden.contains(key)) model.negHidden.add(key);
+                        } else {
+                            manageDialog();
+                            return;
+                        }
+                        model.negOrder.clear();
+                        model.negOrder.addAll(moved);
+                        model.negHidden.clear();
+                        model.negHidden.addAll(NegCards.filterHidden(model.negHidden));
+                        model.save();
+                        relayout();
+                    })
+                    .show();
+            return true;
+        });
+    }
+
+    /** 组件管理：五卡显隐清单，点行切换（R2.2）。 */
+    private void manageDialog() {
+        List<String> order = NegCards.normalize(model.negOrder);
+        List<String> hidden = NegCards.filterHidden(model.negHidden);
+        String[] items = new String[order.size()];
+        for (int i = 0; i < order.size(); i++) {
+            String k = order.get(i);
+            items[i] = NegCards.labelOf(k) + (hidden.contains(k) ? "（已隐藏）" : "（已显示）");
+        }
+        new AlertDialog.Builder(getContext())
+                .setTitle("组件管理（点行切换显隐）")
+                .setItems(items, (d, w) -> {
+                    d.dismiss();
+                    String k = order.get(w);
+                    if (model.negHidden.contains(k)) {
+                        model.negHidden.remove(k);
+                    } else {
+                        model.negHidden.add(k);
+                    }
+                    model.save();
+                    relayout();
+                })
+                .setNegativeButton("完成", null)
+                .show();
     }
 
     private static LinearLayout.LayoutParams col() {
@@ -117,16 +227,12 @@ public final class NegScreenView extends FrameLayout {
         return lp;
     }
 
-    private LinearLayout card(LinearLayout parent, String title) {
+    /** 建一张卡（不挂载；挂载走 relayout）。 */
+    private LinearLayout card(String title) {
         LinearLayout box = new LinearLayout(getContext());
         box.setOrientation(LinearLayout.VERTICAL);
         box.setBackground(Skin.round(Skin.c(R.color.panel), 14f));
         box.setPadding(dp(14), dp(10), dp(14), dp(12));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.topMargin = dp(8);
-        lp.leftMargin = dp(6);
-        lp.rightMargin = dp(6);
-        parent.addView(box, lp);
 
         TextView t = new TextView(getContext());
         t.setText(title);

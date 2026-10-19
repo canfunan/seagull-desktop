@@ -2635,3 +2635,10 @@ Manifest/杂项：
 - P3 块接入 — 行车块：OBD 车速有效覆盖 gpsBig（"xx km/h OBD" 角标可分辨数据源），失效回落 GPS 估算（obdBigOverridden 布尔门）；新增转速/水温行（gpsObd 13sp dim），离线/失效收起不留空行；无定位权限分支也吃 OBD 车速（缩着的块照样显示真车速）。监控块加电压行（monL4，电瓶 x.x V，同样离线收起）。亏电提醒：低于阈值持续 60s 本地通知一次（channel seagull_obd，静音），恢复自动复位（R4.2）。刷新节奏：1s 精刷走定位事件流（有定位权限时），30s tick 兜底（无权限分支只有 tick 驱动——发现点：updateGpsRows 无权限时不被调用，兜底必须在 tick 里加显式行）。
 - 自检 ObdCheck 24 项 — 五 PID 公式（含 13.48V/50.2% 精确向量）+无空格/多 ECU/回显/SEARCHING 过渡/错误 token/空串/null/缺字节/非法 hex/ATRV 带 V 裸数垃圾。修一处测试自身 bug：NaN 走 Math.abs 比较恒 false，断言工具缺 isNan 分支。11 套自检全绿。
 - 待真机：ELM327 头子配对连接、熄火重连、OBD 车速 vs GPS 真值对比、电压/亏电提醒（验收表 17 项）。模拟器/桌面验不了蓝牙串口，代码只过了公式与协议解析层。
+
+## 批次 Q 组件管理（负一屏卡片 + 壁纸页块）
+- Q1 NegCards 纯逻辑 — DEFAULTS 序 weather/switches/restrict/dest/log；normalize（去未知 key/缺失追加序尾/去重保序，saved 空表回落默认）；move 相邻交换越界原样；filterHidden 清洗。LauncherModel 加 negOrder/negHidden（List<String>，save 存 JSONArray/load optJSONArray 逐项收）+ wallClockEnabled。
+- Q2 负一屏 — 五卡视图构造一次、relayout 只动挂载关系（reparent，chip 颜色/天气文本零丢失）；卡片长按菜单 上移/下移/隐藏/组件管理；根视图空白长按 = 组件管理清单（点行切显隐，支持全隐藏，空白入口永远可找回）。默认序分列与 J1 原版逐卡一致。
+- Q3 壁纸页 — 背景长按从「直接添加小组件」升级为入口菜单（添加小组件=原行为 / 组件管理）；组件管理六块清单含时钟块（新 wallClockEnabled 门，applyClock 统一控制，农历行随钟走）；时钟菜单追加 组件管理/隐藏时钟块 两项，原找回项保留。块全隐藏后空白长按仍可用（监听在页面根上）。
+- 自检 NegCardsCheck 20 项 — 修一个设计错误：纯奇偶位分列会把日志卡（flat 第 5 位、偶数）分进左列，与原版右列 3 卡布局冲突；改成交替发牌+末位余数进右列（colOf 挂 total 参数），并加用例锁死默认分列。教训：分列规则必须拿真实布局当测试向量，不能拍脑袋写完再"验证"。12 套自检全绿。
+- 交互偏离记录：负一屏移动用「长按→菜单→上移/下移」而非真拖拽（对齐全应用 AlertDialog 菜单习惯，跨列拖拽复杂度高收益低）；壁纸页六块真拖拽本就有（Drag 管线），本次只补时钟块隐藏与统一管理入口。

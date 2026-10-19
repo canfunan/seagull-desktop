@@ -325,7 +325,7 @@ public final class WallpaperPage extends FrameLayout {
 
         // 点空白处取消组件选中（长按空白仍是添加小组件）
         setOnClickListener(v -> deselectWidget());
-        setOnLongClickListener(v -> { showAddWidget(); return true; });
+        setOnLongClickListener(v -> { showEditMenu(); return true; });
         applyClock();
         applyGps();
         applyCd();
@@ -340,7 +340,60 @@ public final class WallpaperPage extends FrameLayout {
 
     /** 时钟块默认：水平居中（x=中点比例），顶部 13%（y=顶边比例）。 */
     private void applyClock() {
+        clockBox.setVisibility(model.wallClockEnabled ? VISIBLE : GONE);   // Q：组件管理可藏
         applyClockScale(model.wallClockScale <= 0 ? 1f : model.wallClockScale);
+    }
+
+    /** Q 批次：壁纸页空白长按 = 编辑入口菜单（添加小组件 / 组件管理）。 */
+    private void showEditMenu() {
+        new AlertDialog.Builder(getContext())
+                .setTitle("编辑桌面")
+                .setItems(new String[]{"添加小组件…", "组件管理…"}, (d, w) -> {
+                    d.dismiss();
+                    if (w == 0) showAddWidget();
+                    else manageBlocksDialog();
+                })
+                .show();
+    }
+
+    /** Q 批次：六块显隐清单（含时钟块），点行切换（R3.2）。 */
+    private void manageBlocksDialog() {
+        String[] keys = {"clock", "gps", "cd", "mon", "mus", "g"};
+        String[] labels = {"时钟块", "行车块", "倒数块", "监控块", "音乐块", "G值表块"};
+        boolean[] on = {model.wallClockEnabled, model.wallGpsEnabled, model.wallCdEnabled,
+                model.wallMonEnabled, model.wallMusEnabled, model.wallGEnabled};
+        String[] items = new String[keys.length];
+        for (int i = 0; i < keys.length; i++) {
+            items[i] = labels[i] + (on[i] ? "（已显示）" : "（已隐藏）");
+        }
+        new AlertDialog.Builder(getContext())
+                .setTitle("组件管理（点行切换显隐）")
+                .setItems(items, (d, w) -> {
+                    d.dismiss();
+                    if (keys[w].equals("clock")) {
+                        model.wallClockEnabled = !model.wallClockEnabled;
+                        model.save();
+                        applyClock();
+                        return;
+                    }
+                    switch (keys[w]) {
+                        case "gps": model.wallGpsEnabled = !model.wallGpsEnabled; break;
+                        case "cd": model.wallCdEnabled = !model.wallCdEnabled; break;
+                        case "mon": model.wallMonEnabled = !model.wallMonEnabled; break;
+                        case "mus": model.wallMusEnabled = !model.wallMusEnabled;
+                            ensureMusicScanned(); break;
+                        case "g": model.wallGEnabled = !model.wallGEnabled; break;
+                        default: break;
+                    }
+                    model.save();
+                    refreshGpsBlock();
+                    refreshCdBlock();
+                    refreshMonBlock();
+                    refreshMusBlock();
+                    refreshGBlock();
+                })
+                .setNegativeButton("完成", null)
+                .show();
     }
 
     /** 应用倍率并摆位。摆位必须等重测后做：直接用旧 measuredWidth 会把放大后的
@@ -411,17 +464,28 @@ public final class WallpaperPage extends FrameLayout {
         if (!model.wallMusEnabled) show.add("显示音乐块");
         if (!model.wallGEnabled) show.add("显示G值块");
         String[] sizes = {"小", "标准", "大", "特大"};
-        String[] opts = show.isEmpty() ? sizes
-                : java.util.Arrays.copyOf(sizes, sizes.length + show.size());
+        String[] more = {"组件管理…", "隐藏时钟块"};
+        String[] opts = new String[sizes.length + show.size() + more.length];
+        for (int i = 0; i < sizes.length; i++) opts[i] = sizes[i];
         for (int i = 0; i < show.size(); i++) opts[sizes.length + i] = show.get(i);
+        for (int i = 0; i < more.length; i++) {
+            opts[sizes.length + show.size() + i] = more[i];
+        }
         new AlertDialog.Builder(getContext())
                 .setTitle("时间日期大小（按住拖动可移位置）")
                 .setItems(opts, (d, w) -> {
+                    String cmd = opts[w];
+                    if (cmd.equals("组件管理…")) { manageBlocksDialog(); return; }
+                    if (cmd.equals("隐藏时钟块")) {
+                        model.wallClockEnabled = false;
+                        model.save();
+                        applyClock();
+                        return;
+                    }
                     if (w < sizes.length) {
                         model.wallClockScale = w == 0 ? 0.7f : w == 1 ? 1f : w == 2 ? 1.3f : 1.6f;
                         applyClock();
                     } else {
-                        String cmd = opts[w];
                         if (cmd.equals("显示行车块")) model.wallGpsEnabled = true;
                         else if (cmd.equals("显示倒数块")) model.wallCdEnabled = true;
                         else if (cmd.equals("显示监控块")) model.wallMonEnabled = true;

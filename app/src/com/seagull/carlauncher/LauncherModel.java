@@ -399,6 +399,10 @@ public final class LauncherModel {
     }
     /** 壁纸页小组件记录（批次 CI）：[{"id":appWidgetId,"x":0~1,"y":0~1}] */
     public String wallWidgetsJson = "[]";
+    /** Q 批次：负一屏卡片序/显隐（key 见 NegCards.DEFAULTS；空表=默认序全显）。 */
+    public final List<String> negOrder = new ArrayList<>();
+    public final List<String> negHidden = new ArrayList<>();
+    public boolean wallClockEnabled = true;   // Q 批次：时钟块显隐（组件管理可切换）
     public final List<Wall> wallLib = new ArrayList<>();
     public int fontScale = 100;                // 全局字号 50~150
 
@@ -1131,6 +1135,9 @@ public final class LauncherModel {
             o.put("restrictTails", restrictTails);
             o.put("negDests", negDestsJson);
             o.put("wallWidgets", wallWidgetsJson);
+            o.put("negOrder", new JSONArray(negOrder));
+            o.put("negHidden", new JSONArray(negHidden));
+            o.put("wallClockEnabled", wallClockEnabled);
             /* 屏幕 */
             o.put("marginH", marginH);
             o.put("marginV", marginV);
@@ -1419,6 +1426,23 @@ public final class LauncherModel {
             restrictTails = o.optString("restrictTails", "");
             negDestsJson = o.optString("negDests", "[]");
             wallWidgetsJson = o.optString("wallWidgets", "[]");
+            negOrder.clear();
+            JSONArray nOrd = o.optJSONArray("negOrder");
+            if (nOrd != null) {
+                for (int i = 0; i < nOrd.length(); i++) {
+                    String k = nOrd.optString(i, "");
+                    if (!k.isEmpty()) negOrder.add(k);
+                }
+            }
+            negHidden.clear();
+            JSONArray nHid = o.optJSONArray("negHidden");
+            if (nHid != null) {
+                for (int i = 0; i < nHid.length(); i++) {
+                    String k = nHid.optString(i, "");
+                    if (!k.isEmpty()) negHidden.add(k);
+                }
+            }
+            wallClockEnabled = o.optBoolean("wallClockEnabled", true);
             fontScale = o.optInt("fontScale", 100);
             JSONArray wa = o.optJSONArray("wallLib");
             if (wa != null) {
