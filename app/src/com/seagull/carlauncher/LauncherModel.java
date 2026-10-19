@@ -196,6 +196,27 @@ public final class LauncherModel {
     public final List<String> pinned = new ArrayList<>();     // 主屏固定顺序（key）
     public final List<Folder> folders = new ArrayList<>();
     public final List<String> dock = new ArrayList<>();       // Dock 固定顺序（key）
+
+    /**
+     * Dock 生效位次：用户没自定义过（dock 为空）时回默认推荐，与 DockBar 画的一致。
+     * 长按替换/拿下来这类「按位次改」的操作必须基于生效位次，否则空列表 indexOf=-1 静默失败。
+     */
+    public List<String> dockKeys() {
+        if (!dock.isEmpty()) return dock;
+        String[] prefer = {"com.android.dialer", "com.android.mms", "com.android.chrome",
+                "com.android.camera", "com.android.settings"};
+        List<String> out = new ArrayList<>();
+        for (String p : prefer) {
+            for (App a : allApps) {
+                if (a.pkg.equals(p)) { out.add(a.key()); break; }
+            }
+        }
+        if (out.isEmpty()) {
+            for (int i = 0; i < Math.min(6, allApps.size()); i++) out.add(allApps.get(i).key());
+        }
+        return out;
+    }
+
     public Mode mode = Mode.GRID;
     public boolean showLabels = true;
     /** 组件条槽位：0=时钟 1=日期 2=电量 3=内存 4=天气 */
@@ -661,6 +682,15 @@ public final class LauncherModel {
 
     public void toggleDock(String key) {
         if (key == null) return;
+        if (dock.isEmpty()) {
+            // 从没自定义过 Dock 时，生效的是默认位次 —— 「拿下来」要从默认集合里减，
+            // 直接 add 会变成反向操作（想移除结果塞进去了）
+            List<String> eff = new ArrayList<>(dockKeys());
+            eff.remove(key);
+            dock.addAll(eff);
+            save();
+            return;
+        }
         if (dock.contains(key)) dock.remove(key);
         else if (dock.size() < DOCK_MAX) dock.add(key);
         save();

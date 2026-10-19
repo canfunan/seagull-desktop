@@ -442,9 +442,12 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                     })
                     .show();
         }
-        /** 长按 Dock 图标「替换应用」：原地换人，顺序位次不变（批次 CI）。 */
+        /** 长按 Dock 图标「替换应用」：原地换人，顺序位次不变（批次 CI）。
+         *  位次按「生效列表」（没自定义过时是默认推荐），否则空 dock 里 indexOf=-1
+         *  会静默失败 —— 用户反馈过替换点了没反应。 */
         private void replaceDockApp(final LauncherModel.App a) {
-            final int i = model.dock.indexOf(a.key());
+            final List<String> keys = new ArrayList<>(model.dockKeys());
+            final int i = keys.indexOf(a.key());
             if (i < 0) return;
             final List<HomeActivity.AppEntry> apps = loadApps(HomeActivity.this);
             if (apps.isEmpty()) { toast("没有可用应用"); return; }
@@ -454,6 +457,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                     .setTitle("替换成哪个应用？")
                     .setItems(names, (d, w) -> {
                         String key = apps.get(w).pkg;
+                        if (model.dock.isEmpty()) model.dock.addAll(keys);
                         if (key.equals(a.key()) || model.dock.contains(key)) {
                             toast("它已经在 Dock 里了");
                             return;

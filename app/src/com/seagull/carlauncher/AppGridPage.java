@@ -3,6 +3,7 @@ package com.seagull.carlauncher;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Color;
 import android.net.Uri;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -55,7 +56,8 @@ public final class AppGridPage extends LinearLayout {
         this.ctx = c;
         this.host = host;
         setOrientation(VERTICAL);
-        setBackgroundColor(Skin.c(R.color.ground));
+        // 透明：壁纸由 HomeActivity 铺在 root（批次 CI 反馈：应用列表也要透出壁纸）
+        setBackgroundColor(Color.TRANSPARENT);
 
         /* ---------------- 轻量工具条 ---------------- */
         LinearLayout bar = new LinearLayout(c);

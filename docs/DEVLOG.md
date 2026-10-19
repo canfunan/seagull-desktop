@@ -56,6 +56,28 @@
 - 长按 Dock 图标菜单插入「替换应用…」：原地换人（model.dock 同 index 删旧插新），
   顺序位次不变；已在 Dock 里的目标拒绝；换完 `dock.bind(model)` 刷新。
 
+### 真机反馈修复轮
+
+四条反馈对应的根因与修法：
+
+1. **长按「替换应用」没反应** —— 用户没自定义过 Dock 时 `model.dock` 是空列表，
+   `indexOf(a.key())` 拿 -1 就静默 return，选择器根本不弹。新增
+   `LauncherModel.dockKeys()`（生效位次 = dock 非空用 dock，否则回默认推荐，
+   与 DockBar 绘制同一套），replaceDockApp 按 `dockKeys()` 定位；首次替换先把
+   生效列表整份落进 `model.dock` 再原位换人。顺带修 `toggleDock` 的同类坑：
+   空 dock 时「从 Dock 拿下来」原实现会反向 add（想移除结果塞进去）。
+2. **右滑应用列表不透壁纸** —— AppGridPage 构造里自己铺了 `ground` 底色
+   （批次 CI 的透明化漏了它），改 TRANSPARENT；应用名已有胶囊底，可读性不受影响。
+3. **时钟只显示前半段** —— `applyClock` 改完字号立刻用**旧的** measuredWidth
+   做 clamp，放大后右缘溢出被页面裁掉。摆位改 `clockBox.post(::placeClockBox)`
+   等重测完再做；`tick()`（时间文本变宽窄）与 `onSizeChanged` 同口径。
+4. **时钟/组件缩放移动不便** —— 交互重做：
+   - 组件**单击选中**：出描边框 + 右下角缩放把手，把手拖动自由改宽高（80dp 起步、
+     页宽-16dp 封顶），松手把倍率 `s` 落进 `widgetPos`（{x,y,s} 三元，JSON 多存
+     "s"）；**选中后拖动免长按**（armed 模式：按下即进拖动）；菜单加「重置大小」。
+   - 时钟**双指捏合**连续缩放（0.5–2.4 倍，Drag 里 ScaleGesture 语义手写：
+     两指间距比值累计），松手落 `wallClockScale`；字号菜单四档保留做兜底。
+
 ### 复盘
 
 - 空槽 SurfaceView 藏掉（上一轮批次 CH 追加）是壁纸透出的前提：SurfaceView 的打洞

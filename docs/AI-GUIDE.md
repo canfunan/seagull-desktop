@@ -39,13 +39,13 @@ app/
   selfcheck/                   纯 JVM 自检（QuickbarCheck / LrcCheck / PrivCodecCheck / DumpParseCheck / TrustedFlagsCheck / StackListCheck）
   src/com/seagull/carlauncher/
     BaseActivity.java          公共基类：fontScale + Skin + 方向 + model
-    LauncherModel.java         全量配置单一事实源（最大的文件，改它要小心）
+    LauncherModel.java         全量配置单一事实源（最大的文件，改它要小心）；Dock 生效位次统一走 dockKeys()（dock 空时回默认推荐——替换/拿下来/绘制共用，别再直接摸 dock 列表算 index）
     HomeActivity.java          桌面宿主：顶栏 + 内容层（PipBoard 画中画首屏 ⇄ DesktopView 网格）+ 底栏（DockBar，批次 CH 车机玻璃风格）；动态壁纸层挂 root 最底层（onPause 停播）
     DesktopView.java           桌面网格 + 组件条 + Dock + 拖拽压合 + 长按菜单
     Skin.java / Theme.java     运行时配色 / 内置 14 套主题
     Wallpaper.java             壁纸导入 + 亮度抽样（含视频壁纸导入，批次 CI）
     WallpaperVideoView.java    动态壁纸层：TextureView+MediaPlayer 循环静音，退后台 release（批次 CI）
-    WallpaperPage.java         壁纸页：时钟块可拖动/调字号（wallClock*）+ AppWidgetHost 小组件（wallWidgetsJson，批次 CI）
+    WallpaperPage.java         壁纸页：时钟块可拖动/调字号/双指缩放（wallClock*）+ AppWidgetHost 小组件（wallWidgetsJson 含缩放 s，单击选中+把手缩放，批次 CI + 修复轮）
     GardenActivity.java        菜园（三种摆法）
     IslandView.java            顶部胶囊
     BallService.java           小白点悬浮球

@@ -209,7 +209,7 @@ public class DockBar extends LinearLayout {
         model = m;
         apps.removeAllViews();
         if (m == null) return;
-        List<String> keys = m.dock.isEmpty() ? defaultDockKeys(m) : m.dock;
+        List<String> keys = m.dockKeys();
         int n = Math.min(keys.size(), Math.max(1, Math.min(m.dockCount, MAX_ICONS)));
         int added = 0;
         Context c = getContext();
@@ -310,23 +310,7 @@ public class DockBar extends LinearLayout {
 
     /* ---------------- 数据 ---------------- */
 
-    /** 默认 Dock：电话/信息/浏览器/相机，找不到取前几个（同 DesktopView 口径）。 */
-    private static List<String> defaultDockKeys(LauncherModel m) {
-        String[] prefer = {"com.android.dialer", "com.android.mms", "com.android.chrome",
-                "com.android.camera", "com.android.settings"};
-        List<String> out = new ArrayList<>();
-        for (String p : prefer) {
-            for (LauncherModel.App a : m.allApps) {
-                if (a.pkg.equals(p)) { out.add(a.key()); break; }
-            }
-        }
-        if (out.isEmpty()) {
-            for (int i = 0; i < Math.min(MAX_ICONS, m.allApps.size()); i++) {
-                out.add(m.allApps.get(i).key());
-            }
-        }
-        return out;
-    }
+    /* 默认 Dock 位次收敛到 LauncherModel.dockKeys()（替换/拿下来与绘制共用同一套）。 */
 
     private Drawable mediaAppIcon(String pkg) {
         Drawable d = MEDIA_ICONS.get(pkg);
