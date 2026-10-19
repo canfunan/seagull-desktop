@@ -615,6 +615,12 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         toast("已应用场景：" + name);
     }
 
+    /** H 批次：行车块定位授权回执 → 壁纸页重仲裁可见性并订阅更新。 */
+    @Override public void onRequestPermissionsResult(int req, String[] perms, int[] results) {
+        super.onRequestPermissionsResult(req, perms, results);
+        if (req == LocationHelper.REQ_PERM && poster != null) poster.refreshGpsBlock();
+    }
+
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
 
     /* ------------------------- 系统画中画（L2） ------------------------- */

@@ -10,6 +10,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.location.Location;
 import android.util.TypedValue;
 import android.view.GestureDetector;
 import android.view.Gravity;
@@ -67,6 +68,11 @@ public final class WallpaperPage extends FrameLayout {
 
     /** 双指缩放起始倍率快照。 */
     private float zoomBase = 1f;
+
+    /** H 批次行车块：车速 / 海拔航向 / 行程三行，可拖动缩放，摆位存 model.wallGps*。 */
+    private final LinearLayout gpsBox;
+    private final TextView gpsBig, gpsMid, gpsTrip;
+    private boolean gpsAttached;
 
     /** 已挂小组件的位置表：id → {x 中点比例, y 顶边比例, s 缩放倍率}。 */
     private final Map<Integer, float[]> widgetPos = new HashMap<>();
@@ -128,10 +134,37 @@ public final class WallpaperPage extends FrameLayout {
                 },
                 () -> model.save()));
 
+        // H 批次行车块（车速/海拔航向/行程）：与时钟同套拖动/捏合摆位
+        gpsBox = new LinearLayout(c);
+        gpsBox.setOrientation(LinearLayout.VERTICAL);
+        gpsBox.setGravity(Gravity.CENTER_HORIZONTAL);
+        gpsBig = tv(c, 26, R.color.text, true);
+        gpsMid = tv(c, 13, R.color.text_dim, false);
+        gpsTrip = tv(c, 13, R.color.text_dim, false);
+        gpsBox.addView(gpsBig);
+        gpsBox.addView(gpsMid, topMargin(c, 6));
+        gpsBox.addView(gpsTrip, topMargin(c, 3));
+        gpsBox.setVisibility(GONE);
+        addView(gpsBox, new LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT));
+        gpsBox.setOnTouchListener(new Drag(gpsBox,
+                (dx, dy) -> nudgeGps(dx, dy),
+                this::onGpsTap,
+                this::onGpsTap,
+                this::saveGpsPos,
+                null,
+                () -> zoomBase = model.wallGpsScale <= 0 ? 1f : model.wallGpsScale,
+                f -> {
+                    float s = clampf(zoomBase * f, 0.5f, 2.4f);
+                    applyGpsScale(s);
+                    model.wallGpsScale = s;
+                },
+                () -> model.save()));
+
         // 点空白处取消组件选中（长按空白仍是添加小组件）
         setOnClickListener(v -> deselectWidget());
         setOnLongClickListener(v -> { showAddWidget(); return true; });
         applyClock();
+        applyGps();
         loadWidgets();
         tick();
     }
@@ -204,18 +237,169 @@ public final class WallpaperPage extends FrameLayout {
     private void showClockMenu() {
         new AlertDialog.Builder(getContext())
                 .setTitle("时间日期大小（按住拖动可移位置）")
-                .setItems(new String[]{"小", "标准", "大", "特大"}, (d, w) -> {
-                    model.wallClockScale = w == 0 ? 0.7f : w == 1 ? 1f : w == 2 ? 1.3f : 1.6f;
-                    applyClock();
+                .setItems(model.wallGpsEnabled
+                        ? new String[]{"小", "标准", "大", "特大"}
+                        : new String[]{"小", "标准", "大", "特大", "显示行车块"}, (d, w) -> {
+                    if (w <= 3) {
+                        model.wallClockScale = w == 0 ? 0.7f : w == 1 ? 1f : w == 2 ? 1.3f : 1.6f;
+                        applyClock();
+                    } else {
+                        model.wallGpsEnabled = true;
+                        refreshGpsBlock();
+                    }
                     model.save();
                 })
                 .show();
+    }
+
+    /* ------------------------- 行车块（H 批次 GPS 管线） ------------------------- */
+
+    /** 行车块默认：左下（x=16%，y=74%），与时钟（顶部居中）错开。 */
+    private void applyGps() {
+        applyGpsScale(model.wallGpsScale <= 0 ? 1f : model.wallGpsScale);
+    }
+
+    private void applyGpsScale(float s) {
+        gpsBig.setTextSize(26 * s);
+        gpsMid.setTextSize(13 * s);
+        gpsTrip.setTextSize(13 * s);
+        LinearLayout.LayoutParams lp;
+        lp = (LinearLayout.LayoutParams) gpsMid.getLayoutParams(); lp.topMargin = dp(6 * s); gpsMid.setLayoutParams(lp);
+        lp = (LinearLayout.LayoutParams) gpsTrip.getLayoutParams(); lp.topMargin = dp(3 * s); gpsTrip.setLayoutParams(lp);
+        gpsBox.post(this::placeGpsBox);
+    }
+
+    private void placeGpsBox() {
+        int w = getWidth(), h = getHeight();
+        if (w <= 0 || h <= 0) return;
+        LayoutParams lp = (LayoutParams) gpsBox.getLayoutParams();
+        int bw = Math.max(0, gpsBox.getMeasuredWidth());
+        int bh = Math.max(0, gpsBox.getMeasuredHeight());
+        int left = Math.round(w * model.wallGpsX - bw / 2f);
+        int nl = clamp(left, dp(8), Math.max(dp(8), w - bw - dp(8)));
+        int nt = clamp(Math.round(h * model.wallGpsY), dp(8),
+                Math.max(dp(8), h - bh - dp(8)));
+        if (lp.leftMargin != nl || lp.topMargin != nt) {
+            lp.leftMargin = nl;
+            lp.topMargin = nt;
+            gpsBox.setLayoutParams(lp);
+        }
+    }
+
+    private void nudgeGps(float dx, float dy) {
+        LayoutParams lp = (LayoutParams) gpsBox.getLayoutParams();
+        int w = getWidth(), h = getHeight();
+        int bw = gpsBox.getMeasuredWidth();
+        lp.leftMargin = clamp(lp.leftMargin + Math.round(dx), dp(8), Math.max(dp(8), w - bw - dp(8)));
+        lp.topMargin = clamp(lp.topMargin + Math.round(dy), dp(8),
+                Math.max(dp(8), h - gpsBox.getMeasuredHeight() - dp(8)));
+        gpsBox.setLayoutParams(lp);
+    }
+
+    private void saveGpsPos() {
+        int w = getWidth(), h = getHeight();
+        if (w <= 0 || h <= 0) return;
+        LayoutParams lp = (LayoutParams) gpsBox.getLayoutParams();
+        model.wallGpsX = (lp.leftMargin + gpsBox.getMeasuredWidth() / 2f) / w;
+        model.wallGpsY = (float) lp.topMargin / h;
+        model.save();
+    }
+
+    /** 无权限时点按 = 申请权限；有权限时点按 = 大小/清零/隐藏菜单。 */
+    private void onGpsTap() {
+        if (!model.wallGpsEnabled) return;
+        if (!LocationHelper.hasPermission(getContext())) {
+            if (getContext() instanceof Activity) LocationHelper.request((Activity) getContext());
+            return;
+        }
+        showGpsMenu();
+    }
+
+    private void showGpsMenu() {
+        new AlertDialog.Builder(getContext())
+                .setTitle("行车信息（按住拖动可移位置）")
+                .setItems(new String[]{"小", "标准", "大", "特大", "清零本次行程", "隐藏行车块"},
+                        (d, w) -> {
+                            if (w <= 3) {
+                                model.wallGpsScale = w == 0 ? 0.7f : w == 1 ? 1f : w == 2 ? 1.3f : 1.6f;
+                                applyGpsScale(model.wallGpsScale);
+                            } else if (w == 4) {
+                                LocationHelper.resetTrip();
+                                updateGpsRows(LocationHelper.last());
+                            } else {
+                                model.wallGpsEnabled = false;
+                                refreshGpsBlock();
+                            }
+                            model.save();
+                        })
+                .show();
+    }
+
+    /**
+     * 可见性仲裁（每次 attach / 权限回执 / 开关切换走这里）：
+     *  关 = 整块 GONE 并退订；无权限 = 只留「点按开启定位」提示行；
+     *  有权限 = VISIBLE 并订阅 1s 更新（首个定位事件前显示 "--"）。
+     */
+    public void refreshGpsBlock() {
+        if (!model.wallGpsEnabled) {
+            if (gpsAttached) { LocationHelper.release(gpsListener); gpsAttached = false; }
+            gpsBox.setVisibility(GONE);
+            return;
+        }
+        if (LocationHelper.hasPermission(getContext())) {
+            gpsBox.setVisibility(VISIBLE);
+            gpsMid.setVisibility(VISIBLE);
+            gpsTrip.setVisibility(VISIBLE);
+            if (!gpsAttached) {
+                LocationHelper.acquire(getContext(), gpsListener);
+                gpsAttached = true;
+            }
+            updateGpsRows(LocationHelper.last());
+        } else {
+            if (gpsAttached) { LocationHelper.release(gpsListener); gpsAttached = false; }
+            gpsBox.setVisibility(VISIBLE);
+            gpsBig.setText("点按开启定位");
+            gpsMid.setVisibility(GONE);
+            gpsTrip.setVisibility(GONE);
+        }
+    }
+
+    private final LocationHelper.Listener gpsListener = this::updateGpsRows;
+
+    /** 1s 定位事件原位 setText（审计 M4 纪律：事件驱动单行刷新，不整树重建）。 */
+    private void updateGpsRows(Location loc) {
+        if (gpsBox == null || gpsBox.getVisibility() != VISIBLE) return;
+        if (!LocationHelper.hasPermission(getContext())) return;
+        if (loc == null || !LocationHelper.fresh()) {
+            gpsBig.setText("-- km/h");
+            gpsMid.setText("海拔 -- · 航向 --");
+        } else {
+            float kmh = Math.max(0f, loc.getSpeed() * 3.6f);
+            gpsBig.setText(String.format(java.util.Locale.US, "%.0f km/h", kmh));
+            float brg = loc.getBearing();
+            gpsMid.setText(String.format(java.util.Locale.US, "海拔 %.0f m · 航向 %s",
+                    loc.getAltitude(), bearingLabel(brg)));
+        }
+        long sec = LocationHelper.tripSeconds();
+        String dur = sec >= 3600
+                ? String.format(java.util.Locale.US, "%d小时%02d分钟", sec / 3600, (sec % 3600) / 60)
+                : String.format(java.util.Locale.US, "%d分钟", sec / 60);
+        gpsTrip.setText(String.format(java.util.Locale.US, "行程 %.1f km · %s",
+                LocationHelper.tripKm(), dur));
+    }
+
+    /** 航向角转八方位（负角取模；NaN = 无航向）。 */
+    private static String bearingLabel(float deg) {
+        if (Float.isNaN(deg)) return "--";
+        String[] dirs = {"北", "东北", "东", "东南", "南", "西南", "西", "西北"};
+        return dirs[Math.round(deg / 45f) & 7];
     }
 
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
         super.onSizeChanged(w, h, ow, oh);
         if (w <= 0 || h <= 0) return;
         clockBox.post(this::placeClockBox);
+        gpsBox.post(this::placeGpsBox);
         for (Integer wid : new ArrayList<>(widgetPos.keySet())) refitWidget(wid);
     }
 
@@ -461,11 +645,13 @@ public final class WallpaperPage extends FrameLayout {
 
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        try { host().startListening(); } catch (Throwable ignore) {}
+        try { host().startListening(); } catch (Throwable ignore) { }
+        refreshGpsBlock();
     }
 
     @Override protected void onDetachedFromWindow() {
-        try { if (host != null) host.stopListening(); } catch (Throwable ignore) {}
+        if (gpsAttached) { LocationHelper.release(gpsListener); gpsAttached = false; }
+        try { if (host != null) host.stopListening(); } catch (Throwable ignore) { }
         super.onDetachedFromWindow();
     }
 
@@ -717,6 +903,9 @@ public final class WallpaperPage extends FrameLayout {
         if (date != null) date.setTextColor(Skin.c(R.color.text_dim));
         if (media != null) media.setTextColor(Skin.c(R.color.text));
         if (lyric != null) lyric.setTextColor(Skin.c(R.color.text_dim));
+        if (gpsBig != null) gpsBig.setTextColor(Skin.c(R.color.text));
+        if (gpsMid != null) gpsMid.setTextColor(Skin.c(R.color.text_dim));
+        if (gpsTrip != null) gpsTrip.setTextColor(Skin.c(R.color.text_dim));
     }
 
     private static TextView tv(Context c, float size, int colorRes, boolean bold) {

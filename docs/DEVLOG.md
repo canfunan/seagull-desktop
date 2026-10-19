@@ -2360,3 +2360,27 @@ appPicker）让本功能零新增 UI 范式；主要坑是编辑工具多行 old
 
 **批次 G 小结**：开机链两功能均走「复用既有机制 + 最小新增」，G1 零新
 状态机（窗口判定+重试链），G2 零新 UI 范式（key 约定+幂等部署）。
+
+## 批次 H GPS 管线（H1-H4）
+
+**H1 LocationHelper**（新文件）— 车速/海拔航向/行程共用的单例定位管线：
+acquire/release 配对 fanout，最后一个退订者 removeUpdates；GPS_PROVIDER 在位
+优先、否则回落 NETWORK；requestLocationUpdates 1s/0m 节流；回调切主线程；
+10s 无新 fix = 失联（UI 显示 --）。权限：ACCESS_FINE/COARSE_LOCATION
+（manifest 新增）+ 点按行车块运行时申请，回执经
+HomeActivity.onRequestPermissionsResult 转发。
+
+**H2/H3/H4 行车块**（WallpaperPage）— 调研期发现原定落点 makeWidget 所在的
+DesktopView 已是上代桌面死代码（零实例化），按 BACKLOG「与时钟/歌词同套摆位
+缩放」的原始意图改落壁纸页：一个可拖动/双指缩放的行车块，三行分别为
+车速（大字 km/h）、海拔+八方位航向、行程（点火时长+里程，speed>1.5m/s
+计入位移，重启归零）。可见性仲裁：关（model.wallGpsEnabled，隐藏后经时钟
+块菜单「显示行车块」恢复）/ 无权限（缩成「点按开启定位」）/ 有权限
+（订阅 1s 更新，事件驱动原位 setText）。摆位/缩放存 model.wallGpsX/Y/Scale，
+JSON 存档与 wallClock 同构。
+
+**复盘**：本批次的真正工作是「找到活的落点」——BACKLOG 写的是 makeWidget
+加一类，但那个组件条已死；硬塞死代码等于交付不可见功能。改落壁纸页后
+Drag/Zoom/存档三套机制全部复用，新增代码只有可见性仲裁与三行格式化。
+真机待验：车机 GPS 天线在位（dumpsys location）、隧道丢星显示 --、
+授权弹窗与回执刷新、驻车归零。javac --release 11 绿。

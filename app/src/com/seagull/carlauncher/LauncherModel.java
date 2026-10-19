@@ -297,6 +297,12 @@ public final class LauncherModel {
     public float wallClockX = 0.5f;
     public float wallClockY = 0.13f;
     public float wallClockScale = 1f;
+
+    /** H 批次行车块（车速/海拔航向/行程）：位置比例 + 缩放 + 开关。默认左下。 */
+    public float wallGpsX = 0.16f;
+    public float wallGpsY = 0.74f;
+    public float wallGpsScale = 1f;
+    public boolean wallGpsEnabled = true;
     /** 壁纸页小组件记录（批次 CI）：[{"id":appWidgetId,"x":0~1,"y":0~1}] */
     public String wallWidgetsJson = "[]";
     public final List<Wall> wallLib = new ArrayList<>();
@@ -983,6 +989,10 @@ public final class LauncherModel {
             JSONObject wck = new JSONObject();
             wck.put("x", wallClockX); wck.put("y", wallClockY); wck.put("s", wallClockScale);
             o.put("wallClock", wck);
+            JSONObject wgp = new JSONObject();
+            wgp.put("x", wallGpsX); wgp.put("y", wallGpsY); wgp.put("s", wallGpsScale);
+            wgp.put("on", wallGpsEnabled);
+            o.put("wallGps", wgp);
             o.put("wallWidgets", wallWidgetsJson);
             /* 屏幕 */
             o.put("marginH", marginH);
@@ -1206,6 +1216,13 @@ public final class LauncherModel {
                 wallClockX = (float) wco.optDouble("x", 0.5);
                 wallClockY = (float) wco.optDouble("y", 0.13);
                 wallClockScale = (float) wco.optDouble("s", 1.0);
+            }
+            JSONObject wgo = o.optJSONObject("wallGps");
+            if (wgo != null) {
+                wallGpsX = (float) wgo.optDouble("x", 0.16);
+                wallGpsY = (float) wgo.optDouble("y", 0.74);
+                wallGpsScale = (float) wgo.optDouble("s", 1.0);
+                wallGpsEnabled = wgo.optBoolean("on", true);
             }
             wallWidgetsJson = o.optString("wallWidgets", "[]");
             fontScale = o.optInt("fontScale", 100);

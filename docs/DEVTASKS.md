@@ -7,10 +7,12 @@
 - [x] G2 场景一键：scenes 配置（slotA/slotB/weight/wallpaper）+ QuickBar 场景卡入口 + 一键布屏（deploy 幂等复用）
 
 ## 批次 H GPS 管线
-- [ ] H1 LocationHelper：权限申请、GPS_PROVIDER 1s 节流、死亡解绑
-- [ ] H2 车速组件（km/h，丢星 --）
-- [ ] H3 海拔/航向组件（共用 H1）
-- [ ] H4 本次行程组件（点火时长+里程，speed>1.5m/s 计入）
+- [x] H1 LocationHelper：权限申请、GPS_PROVIDER 1s 节流、死亡解绑
+- [x] H2 车速组件（km/h，丢星 --）
+- [x] H3 海拔/航向组件（共用 H1）
+- [x] H4 本次行程组件（点火时长+里程，speed>1.5m/s 计入）
+
+> H 批次落位说明：DesktopView 组件条是上代桌面遗留（当前无实例化，仅 LayoutModeActivity 引用 WIDGET_NAMES 常量），车速/海拔/行程三块按 BACKLOG「与时钟/歌词同套摆位缩放」的意图落到壁纸页时钟块同款机制上——一个可拖/可缩放的行车块，三行分别是 H2/H3/H4；开关默认开，无权限时整块缩成「点按开启定位」，隐藏后经时钟块菜单恢复。
 
 ## 批次 I 信息组件
 - [ ] I1 LunarCalendar 单文件查表（1900-2100）+ selfcheck 抽查 30 日期
@@ -53,3 +55,5 @@
 （每个功能完成后在此追加一行：功能 — 复盘结论）
 - G1 开机自启恢复 — 用 SystemClock.elapsedRealtime<90s 窗口判定替代 BOOT 广播标记，规避 receiver 与 home 启动竞态；slot1 复用现有 deployIfBound+selfHeal 重试链零新增机制；slot2 仅开机窗口放行（批次 CG 手动门槛保持）；新增 autoRestore 开关（默认开）与 QUICKBOOT_POWERON action。javac 绿。
 - G2 场景一键 — 调研期发现 QuickBar 已有 @fn: 前缀分发模式，场景沿用同构 key 约定 @scene:<名字>（名字而非索引，重排序安全）；编辑工具多行锚块匹配吞码两处（QuickBar cell/桌面菜单），改小锚点后恢复。场景存档全局共享（scenes 数组），重命名/删除时同步清洗所有布局快捷栏的引用 key（quickbarByMode 是 private，新增 allQuickbars() 访问器）；PipBoard.applyScene 走 savePkg+s2Entered+deployIfBound 复用幂等部署链，空槽场景 slot2 重新上闸（批次 CG 语义）；删除场景即清格，悬空 key 兜底 toast「场景不存在」。javac 绿。
+- H1 LocationHelper — 单例 fanout（acquire/release 配对，最后一个退订即 removeUpdates，对齐歌词 sink 纪律）；GPS 在位用 GPS、否则回落 NETWORK；1s/0m 节流；回调统一切主线程；10s 内无新 fix 视为失联（隧道显示 --）。javac 绿。
+- H2/H3/H4 行车块 — 调研期发现 makeWidget 所在的 DesktopView 已是死代码（当前零实例化），三块 UI 按原意（与时钟同套摆位缩放）落到壁纸页时钟块同款 Drag/Zoom 机制：一个块三行（车速/海拔航向/行程），摆位缩放存 model.wallGps*；无权限=缩成「点按开启定位」（点按申请权限，回执经 HomeActivity.onRequestPermissionsResult 转发 refreshGpsBlock）；隐藏后经时钟菜单恢复；1s 定位事件原位 setText（审计 M4 纪律）；行程=进程级点火时长+speed>1.5m/s 位移累计，重启归零（BACKLOG #14）。合并为单块而非三个独立组件：壁纸页摆位机制按块计，三块独立可拖反而拥挤，J1 负一屏如需拆分再拆。javac 绿。
