@@ -88,7 +88,10 @@ public final class MirrorSlot implements CanvasSource {
             synchronized (this) {
                 if (touch == null) {
                     LauncherModel m = new LauncherModel(ctx, false);
-                    touch = new TouchForward(m.touchThreshold, m.longPressMs, m.touchFollow);
+                    // 批次 CD：touchFollow 弃用 —— 命令通道跟手（一串 su 分段 swipe）被坐实
+                    // 为「只能点不能滑」的根因，命令通道一律抬起后一条完整 swipe；
+                    // 守护进程中继天生真跟手，不受此参数影响。
+                    touch = new TouchForward(m.touchThreshold, m.longPressMs);
                 }
             }
         }
@@ -339,7 +342,9 @@ public final class MirrorSlot implements CanvasSource {
      * 失败拆屏返回 false。
      */
     private boolean finishDeploy(String pkg, String sig, Surface surface) {
-        RootOps.relaxCompat(pkg);
+        // 批次 CD：首写兼容位会顺带 force-stop 一次（老进程吃不到 FORCE_RESIZE_APP，
+        // letterbox 黑边修不掉 → 边角点不到）。之后有标记，绝不再杀。
+        RootOps.relaxCompat(ctx, pkg);
 
         boolean moved;
         try {

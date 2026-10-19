@@ -156,6 +156,15 @@ public class XposedEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("H3 失败: " + t);
         }
+        // H4（批次 CD）：配置变化吸收。画布尺寸/密度随进出单应用、Dock 收展一直变，
+        // 每次都是一次 configuration change；应用没声明 configChanges 时 Activity
+        // 被销毁重建，页内状态全丢（网易云歌词页 → 回桌面再进来变首页）。补上
+        // 尺寸/方向/密度各位后系统改走 onConfigurationChanged，窗口照常重排、状态保住。
+        try {
+            hookConfigChangesAbsorb();
+        } catch (Throwable t) {
+            log("H4 失败: " + t);
+        }
         // C0 总闸（批次 AG）：Instrumentation.execStartActivity 是所有 Activity 启动
         // 的必经终点，一条 hook 覆盖全部入口。对所有 TARGETS 生效 —— 这是「应用在
         // 画布内点击后必须留在画布」的根治 hook，对齐高德的固定效果全靠它。
@@ -405,6 +414,65 @@ public class XposedEntry implements IXposedHookLoadPackage {
             log("H1 onMultiWindowModeChanged failed: " + t);
         }
         log("H1 hookMultiWindowPretence OK (谎报 isInMultiWindowMode=false)");
+    }
+
+    /**
+     * H4（批次 CD）：配置变化吸收 —— 把「画布尺寸/密度/方向变化」从
+     * Activity 销毁重建降级为 onConfigurationChanged 回调。
+     *
+     * 问题链：进出单应用、收展 Dock、拖分隔把手都会 resize 画布 → VD 跟着 resize
+     * → 对应用这是一次 configuration change（screenSize/density 都在默认变化集里）
+     * → 应用没在 manifest 声明 configChanges 时 Activity 被销毁重建 → 页内状态
+     * 全部归零。用户看到的就是「网易云点进歌词页 → 桌面键回桌面 → 再进来变回首页」。
+     * 车联助手没这个问题：它的 PIP 窗口尺寸恒定，应用一辈子不经历 size change；
+     * 我们画布必须 resize，等价解法就是在 ActivityInfo.configChanges 里补位。
+     *
+     * 实现点：ActivityThread.performLaunchActivity 的 ActivityClientRecord.info
+     * 是本进程实际使用的 ActivityInfo 副本，launch 前补上吸收位即可（manifest
+     * 里的声明会与系统计算的 diff 合并，这里直接把位拉满最稳）。
+     *
+     * 位值（android.content.pm.ActivityInfo，DENSITY 为隐藏常量但值稳定）：
+     * KEYBOARD 0x10 | KEYBOARD_HIDDEN 0x20 | ORIENTATION 0x80 | SCREEN_LAYOUT 0x100
+     * | UI_MODE 0x200 | SCREEN_SIZE 0x400 | SMALLEST_SCREEN_SIZE 0x800 | DENSITY 0x1000
+     * | FONT_SCALE 0x40000000。
+     * 不吸收 LOCALE/触屏/导航：系统语言变化仍走重建，符合直觉。
+     */
+    private static final int ABSORB_CONFIG = 0x10 | 0x20 | 0x80 | 0x100 | 0x200
+            | 0x400 | 0x800 | 0x1000 | 0x40000000;
+
+    private void hookConfigChangesAbsorb() {
+        final Class<?> atr;
+        final Class<?> record;
+        try {
+            atr = Class.forName("android.app.ActivityThread", false, XposedEntry.class.getClassLoader());
+            record = Class.forName("android.app.ActivityThread$ActivityClientRecord", false,
+                    XposedEntry.class.getClassLoader());
+        } catch (Throwable t) {
+            log("H4 ActivityThread 拿不到: " + t);
+            return;
+        }
+        final java.lang.reflect.Field info;
+        try {
+            info = record.getDeclaredField("info");   // ActivityClientRecord.info（ActivityInfo）
+            info.setAccessible(true);
+        } catch (Throwable t) {
+            log("H4 ActivityClientRecord.info 拿不到: " + t);
+            return;
+        }
+        XposedHelpers.findAndHookMethod(atr, "performLaunchActivity", record,
+                android.content.Intent.class, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Object r = param.args != null && param.args.length > 0 ? param.args[0] : null;
+                        if (r == null) return;
+                        ActivityInfo ai = (ActivityInfo) info.get(r);
+                        if (ai == null) return;
+                        if ((ai.configChanges & ABSORB_CONFIG) != ABSORB_CONFIG) {
+                            ai.configChanges |= ABSORB_CONFIG;
+                        }
+                    }
+                });
+        log("H4 hookConfigChangesAbsorb OK (吸收 size/orientation/density 重配置)");
     }
 
     /**

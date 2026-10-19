@@ -12,6 +12,67 @@
 
 ---
 
+## 批次 CD — 用户三连报：只能点不能滑 / 边角点不到 / 歌词页回桌面变首页
+
+三个现象，三个独立根因，全都不是批次 CC 的簿记问题 —— CC 修的是"换算口径"，
+这三条分别是"命令通道性能"、"进程兼容位"、"Activity 重建"。
+
+### ① 只能触摸、不能滑动 —— 命令通道「跟手」被坐实为死路
+
+`TouchForward.stroke` 旧跟手模式把一条滑动拆成一串 `input swipe` 段（每 ≥2px 一段）。
+每段的执行链是 `Caps.exec` → **fork 一个 su 进程**（Magisk 200~600ms）→ `input` 进程
+再走完手势时长 → `run()` 里还串行排队（单 looper + f.get 阻塞）。手指 60Hz 划 1 秒 =
+几十条命令压在队列里，应用收到的是一堆互不相干的微型拖动，中间隔着数百毫秒 ——
+滚不动、更甩不起来。点击（一条命令）反而正常，于是「只能点、不能滑」。
+
+**修**：命令通道对齐车联助手 —— **抬起后发一条完整 swipe**（真时长，50~2000ms），
+短手势仍 tap；MOVE 只做 moved 判定不再发包。真跟手只有守护进程中继能提供（它本来就
+是逐事件原样转发，不受影响）。半路从中继退回命令通道的手势按「无 DOWN」重建状态
+（旧代码 lastX=0 会导致一条从 (0,0) 出发的鬼畜 swipe）。「跟手」开关删掉
+（`model.touchFollow` 字段留档兼容，无行为）。
+
+### ② 网易云边角点不到 —— 老进程从没吃到 FORCE_RESIZE_APP
+
+批次 BB 注释宣称「写完 override 对运行中的任务也会即时重算」—— 真机证伪。
+`am compat enable` 写的是**之后新起的进程**读的兼容配置；网易云带着主屏上的老进程
+被 move-task 进画布时，FORCE_RESIZE_APP 常常没吃到它头上，letterbox 黑边一直在，
+边角的点击全落在黑边上（中心点得到、边角点不到 = letterbox 的指纹）。
+
+**修**：`relaxCompat(ctx, pkg)` 首次对某包写兼容位后 **force-stop 一次**，让随后的
+冷启动（exists 检查自然变 false）吃进新配置；prefs 标记 `compat_written_<pkg>`
+保证只杀这一次 —— 之后搬屏依旧保运行状态，播放/歌词不再被打断。
+（首杀只发生在装新包后的第一次部署，代价是那一次部署会重启目标应用。）
+
+### ③ 歌词页回桌面再进来变首页 —— 每次画布 resize 都在销毁重建 Activity
+
+「桌面」键本身很干净（showSplit + Dock 回来，不杀不迁）。但 showSplit/expendSlot
+会改画布尺寸 → VD resize → 对应用这是一次 **configuration change**
+（screenSize/density 都在默认变化集里）→ 应用没声明 configChanges 时 Activity
+被销毁重建 → 页内状态归零 → 歌词页变首页。进出单应用、收展 Dock、拖占比
+全都触发一遍。车联助手没这问题纯粹因为它窗口尺寸恒定，应用一辈子不经历 size change。
+
+**修**：模块新增 **H4 hookConfigChangesAbsorb** —— hook
+`ActivityThread.performLaunchActivity`，launch 前把
+ActivityClientRecord.info.configChanges 补上
+KEYBOARD|KEYBOARD_HIDDEN|ORIENTATION|SCREEN_LAYOUT|UI_MODE|SCREEN_SIZE|
+SMALLEST_SCREEN_SIZE|DENSITY|FONT_SCALE 各位 → 系统不再销毁重建，改走
+onConfigurationChanged（窗口照常重排，页内状态保住）。不吸收 LOCALE：
+语言变化仍走重建。验口：`logcat -s SeagullLsp` 应出现
+`H4 hookConfigChangesAbsorb OK`。
+
+### 验证
+
+- javac（JDK17 --release 11，R.java 取自 v1.0.a0fe02f 反编译）全量过。
+- 真机口径：
+  1. 滑动：画布内上下滑列表应能滚动、能甩（首帧不跟手属预期 —— 命令通道本就
+     不跟手，守护进程在位时才逐事件跟手）；
+  2. 边角：装新包后第一次部署网易云会重启它一次（兼容位进新进程），之后画布
+     应铺满、四角按钮可点；
+  3. 歌词页：进歌词 → 桌面键 → 再进来应还在歌词页（需 LSPosed 模块加载，
+     日志见 H4 OK）。
+
+---
+
 ## 批次 CC — 反编译车联助手新版（base.apk）：触摸为什么"准"，两条不变量我们反着做了
 
 ### 目标

@@ -15,10 +15,14 @@ import java.util.List;
  * 双通道，按当前会话有没有 root 守护进程自动选：
  *   · 守护进程在位（PrivClient 可用）：原始事件中继 —— MotionEvent 连坐标带时间戳
  *     原样送到目标屏，多指手势天然成立，跟手零命令开销；
- *   · 不在位：root `input` 命令。滑动一条一条发（跟手 12.5），长按发一条
- *     「原地不动」的 swipe。一次只发一条（串行），手势不会交叉。
+ *   · 不在位：root `input` 命令，**抬起后发一条完整 swipe**（批次 CD，车联助手同款）。
+ *     旧「跟手」把一条滑动拆成一串 input swipe 段：每段都要 fork 一个 su 进程
+ *     （200~600ms）再等 input 走完手势时长，还串行排队 —— 手指划完了队列里还压着
+ *     几十条，应用收到的是一堆互不相干的微型拖动，表现正是「只能点、不能滑」。
+ *     真跟手只有守护进程中继能做到；命令通道永远一条手势一条命令。
  *
- * 通道选择钉在每次手势的 DOWN 上，一次手势中途不换通道（换了事件流就断了）。
+ * 通道选择钉在每次手势的 DOWN 上，一次手势中途不换通道（换了事件流就断了）；
+ * 中途失败退回命令通道时按「无 DOWN」重建状态，别拿 (0,0) 当起点算。
  *
  * 坐标（批次 AE·根治「点击错位」）：**逐轴比例映射** —— 注入坐标 = 画布内坐标
  * × (VD 尺寸 / 画布尺寸)。SurfaceView 默认把 VD 画面拉伸铺满自己，所以
@@ -39,7 +43,6 @@ public final class TouchForward {
     private static final ArrayDeque<String> LOG = new ArrayDeque<>();
     private final float threshold;      // 防误滑阈值（px，画布内坐标）
     private final long longPressMs;
-    private final boolean follow;       // 跟手：滑动手势边走边发
 
     private int displayId = -1;
     /** 画布→VD 的逐轴比例（vdW/画布W、vdH/画布H）。1:1 时恒 1。 */
@@ -51,11 +54,12 @@ public final class TouchForward {
     private boolean moved;
     /** 当前手势走不走守护进程中继（每次 DOWN 时定，手势中途不换通道）。 */
     private boolean gestureOnDaemon;
+    /** 命令通道是否见过本手势的 DOWN（守护进程半路退回来的手势没有，见 stroke）。 */
+    private boolean commandDown;
 
-    public TouchForward(float threshold, long longPressMs, boolean follow) {
+    public TouchForward(float threshold, long longPressMs) {
         this.threshold = Math.max(0, threshold);
         this.longPressMs = longPressMs > 0 ? longPressMs : 500L;
-        this.follow = follow;
         thread.start();
         h = new Handler(thread.getLooper());
     }
@@ -111,37 +115,46 @@ public final class TouchForward {
         Log.w(TAG, what);
     }
 
-    /* ---------------- input 命令通道：手势解释 ---------------- */
+    /* ---------------- input 命令通道：一条手势一条命令 ---------------- */
 
+    /**
+     * 批次 CD：命令通道不再「跟手」。滑动在 UP 上一次发完整轨迹（真时长，
+     * 应用能收到连续事件流，能滚能甩）；短手势仍是 tap。半路从守护进程退回来的
+     * 手势没见过 DOWN（downX/lastX 还是初始值），MOVE 到达时以当前点重建状态。
+     */
     private void stroke(android.view.MotionEvent e, int a) {
         if (a == android.view.MotionEvent.ACTION_DOWN) {
             downX = lastX = e.getX();
             downY = lastY = e.getY();
             downAt = lastAt = e.getEventTime();
             moved = false;
+            commandDown = true;
         } else if (a == android.view.MotionEvent.ACTION_MOVE) {
-            if (!follow) return;                       // 不跟手：等抬起一次性发
-            float dx = e.getX() - lastX, dy = e.getY() - lastY;
-            if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;   // 抖一下不发，省命令
-            long dt = Math.max(16, e.getEventTime() - lastAt);
-            swipe(lastX, lastY, e.getX(), e.getY(), Math.min(dt, 120));
-            lastX = e.getX(); lastY = e.getY(); lastAt = e.getEventTime();
+            if (!commandDown) {
+                // 守护进程中继半路失败退回来的：DOWN 没走过命令通道，
+                // 以当前点当 DOWN 重建，别拿 (0,0) 当起点把滑动算成从左上角开始
+                downX = lastX = e.getX();
+                downY = lastY = e.getY();
+                downAt = lastAt = e.getEventTime();
+                moved = false;
+                commandDown = true;
+                return;
+            }
             if (Math.abs(e.getX() - downX) >= threshold || Math.abs(e.getY() - downY) >= threshold) {
                 moved = true;
             }
         } else if (a == android.view.MotionEvent.ACTION_UP) {
-            if (!follow) {
-                boolean isMove = Math.abs(e.getX() - downX) >= threshold
-                        || Math.abs(e.getY() - downY) >= threshold;
-                if (isMove) {
-                    long dur = clamp(e.getEventTime() - downAt, 50, 2000);
-                    swipe(downX, downY, e.getX(), e.getY(), dur);
-                } else {
-                    tap(e.getX(), e.getY());
-                }
+            if (!commandDown) {
+                // UP 才退回来的（DOWN/MOVE 都在中继里失败过）：就地补一次点击兜底
+                commandDown = true;
+                tap(e.getX(), e.getY());
+            } else if (moved) {
+                long dur = clamp(e.getEventTime() - downAt, 50, 2000);
+                swipe(downX, downY, e.getX(), e.getY(), dur);
+            } else {
+                tap(e.getX(), e.getY());
             }
-            // 跟手模式下滑动已在 MOVE 里发完；没滑动的补一次点击
-            if (follow && !moved) tap(e.getX(), e.getY());
+            commandDown = false;
         }
         // CANCEL 什么都不发（12.1：取消就丢掉，参考实现在这里漏过）
     }

@@ -745,7 +745,10 @@ public class SettingsSectionActivity extends BaseActivity {
         });
         toggleRow("无障碍通道（公开版主通道）", model.useAccessibility, () -> { model.useAccessibility = !model.useAccessibility; });
         toggleRow("root 注入通道", model.useRootInput, () -> { model.useRootInput = !model.useRootInput; });
-        toggleRow("跟手（滑动边走边发）", model.touchFollow, () -> { model.touchFollow = !model.touchFollow; });
+        // 批次 CD：删掉「跟手」开关 —— 命令通道跟手（一串 su 分段 swipe，每段 fork 一个
+        // 进程还串行排队）被坐实为「只能点不能滑」的根因，已改为抬起后一条完整 swipe；
+        // 守护进程中继天生真跟手。开关两头都管不到新行为，留着只会误导。
+        // （model.touchFollow 字段保留：旧存档里还有这个键，读写不删。）
         sectionLabel("12.2 触摸方式");
         choiceRow("注入方式", model.useRootInput ? "root input 命令" : "无障碍通道", () -> {
             String[] names = {"root input 命令", "无障碍通道"};

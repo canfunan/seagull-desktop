@@ -117,7 +117,9 @@ public final class RootOps {
         // 一直在（用户截图：窗口只有 ~82% 宽，左右各 ~9% 黑边，对称居中 = 标准
         // size-compat letterbox 形态）。写完 override 对运行中的任务也会即时重算
         // （ActivityRecord onOverrideChanged → 重排），搬屏前写同样有效。
-        relaxCompat(pkg);
+        // 【批次 CD】首写兼容位时内部会 force-stop 一次（老进程吃不到 compat 配置，
+        // 黑边修不掉）—— 此后 exists 变 false 走冷启动，正好把新配置吃进去。
+        relaxCompat(ctx, pkg);
         String stackOut = Caps.exec("am stack list");
         boolean exists = stackOut != null && StackScan.findTaskAnywhere(stackOut, pkg) != null;
         if (exists) {
@@ -168,8 +170,17 @@ public final class RootOps {
      *    跟着虚拟屏方向转，否则竖屏应用塞横屏画布左右留黑边。
      * 命令缺省（老 ROM 没有 am compat）时只记日志，不影响部署。
      * 仅后台线程调用。
+     *
+     * 【批次 CD】首写后强杀一次。am compat enable 写的是「之后新起的进程」读的
+     * 兼容配置；对已在跑的老进程，各 ROM 行为不一（有的即时重算、有的完全不生效）。
+     * 网易云带着主屏旧进程搬进画布时，FORCE_RESIZE_APP 常常根本没吃到它头上，
+     * letterbox 黑边一直在 —— 边角区域点击全落在黑边上，表现「边角点不到」。
+     * 所以第一次对某包写兼容位时，写完显式 force-stop 一次，让随后必然发生的
+     * 冷启动吃进新配置；用 prefs 标记保证**只杀这一次**（之后搬屏保运行状态，
+     * 播放/歌词不再被打断）。
      */
-    public static void relaxCompat(String pkg) {
+    public static void relaxCompat(Context ctx, String pkg) {
+        if (pkg == null || pkg.isEmpty()) return;
         for (String change : new String[] {"FORCE_RESIZE_APP", "NEVER_FIX_ORIENTATION"}) {
             String out = Caps.exec("am compat enable " + change + " " + pkg);
             boolean ok = out != null && !out.toLowerCase().contains("error")
@@ -177,6 +188,25 @@ public final class RootOps {
                     && !out.toLowerCase().contains("unknown");
             Log.i(TAG, "am compat enable " + change + " " + pkg + " ok=" + ok
                     + " " + (out == null ? "无回显" : out.trim()));
+        }
+        boolean firstWrite = false;
+        if (ctx != null) {
+            try {
+                android.content.SharedPreferences sp = ctx.getSharedPreferences(
+                        HomeActivity.PREFS, Context.MODE_PRIVATE);
+                String key = "compat_written_" + pkg;
+                if (!sp.getBoolean(key, false)) {
+                    sp.edit().putBoolean(key, true).apply();
+                    firstWrite = true;
+                }
+            } catch (Throwable t) {
+                Log.w(TAG, "relaxCompat 标记失败（不影响部署）: " + t);
+            }
+        }
+        if (firstWrite) {
+            String out = Caps.exec("am force-stop " + pkg);
+            Log.i(TAG, "relaxCompat 首写 " + pkg + " → force-stop 一次让兼容位进新进程"
+                    + " " + (out == null ? "" : out.trim()));
         }
     }
 

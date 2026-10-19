@@ -337,7 +337,9 @@ public final class LauncherModel {
     public int longPressMs = 500;        // 长按判定（300/500）
     public boolean useAccessibility = true;   // 公开版主通道
     public boolean useRootInput = true;       // root 通道
-    public boolean touchFollow = true;        // 12.5 跟手：滑动手势边走边发
+    /** 批次 CD 弃用：命令通道跟手被坐实为「只能点不能滑」根因（su 分段排队），已删 UI。
+     *  字段留着只为旧存档兼容，不再参与任何行为。 */
+    public boolean touchFollow = true;
 
     /* ==================== 状态：自动化任务 ==================== */
 
