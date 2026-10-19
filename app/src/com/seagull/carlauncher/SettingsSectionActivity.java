@@ -124,6 +124,7 @@ public class SettingsSectionActivity extends BaseActivity {
             case "tasks": return "自动化任务";
             case "bootanim": return "开机动画";
             case "system": return "系统";
+            case "neg": return "负一屏";
             case "market": return "车机工具";
             case "about": return "关于";
             default: return "布局";
@@ -146,6 +147,7 @@ public class SettingsSectionActivity extends BaseActivity {
             case "tasks": tasksBody(); break;
             case "bootanim": bootanimBody(); break;
             case "system": systemBody(); break;
+            case "neg": negBody(); break;
             case "market": marketBody(); break;
             case "about": aboutBody(); break;
             default: layoutBody(); break;
@@ -1089,6 +1091,92 @@ public class SettingsSectionActivity extends BaseActivity {
         actionRow("画中画修复", "把画布里的应用冷启动到虚拟屏（铺满的最后手段）",
                 v -> runPipCheck(true));
         note("立即校时与系统自动时间需要平台签名，公开版不可达，对应入口不显示。");
+    }
+
+    /* ==================== J 批次：负一屏 ==================== */
+
+    /** 负一屏：限行规则 + 导航目的地管理（负一屏卡片读取同一份 LauncherModel）。 */
+    private void negBody() {
+        sectionLabel("限行");
+        toggleRow("显示限行卡", model.restrictEnabled, () -> {
+            model.restrictEnabled = !model.restrictEnabled;
+            model.save();
+        });
+        inputDialog("限行城市", model.restrictCity, s -> {
+            model.restrictCity = s;
+            model.save();
+        });
+        inputDialog("尾号轮换（十个数字，逗号按周一..周五分组）", model.restrictTails, s -> {
+            if (s.isEmpty() || s.replace(",", "").length() != 10) {
+                toast("需要 10 个数字，逗号分组");
+                return;
+            }
+            model.restrictTails = s;
+            model.save();
+        });
+        note("格式如 1,6,2,7,3,8,4,9,5,0（周一限 1/6 … 周五限 5/0），周末不限行。");
+
+        sectionLabel("导航目的地");
+        java.util.List<LauncherModel.NegDest> ds = model.dests();
+        for (final LauncherModel.NegDest d : ds) {
+            actionRow(d.name, "经纬度 " + d.lat + ", " + d.lng,
+                    v -> destMenu(d));
+        }
+        if (ds.size() < 4) {
+            actionRow("＋ 添加目的地", "最多 4 条，点卡片直接拉起导航",
+                    v -> addDest());
+        }
+        note("坐标用高德 GCJ-02：在 map.amap.com 拾取器里选中地点，复制经纬度粘贴即可。");
+    }
+
+    private void destMenu(final LauncherModel.NegDest d) {
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(d.name)
+                .setItems(new CharSequence[]{"改名称", "改坐标", "删除"}, (dg, which) -> {
+                    if (which == 0) {
+                        inputDialog("改名称", d.name, s -> {
+                            d.name = s;
+                            model.setDests(model.dests());
+                        });
+                    } else if (which == 1) {
+                        editCoord(d);
+                    } else {
+                        model.removeDest(d);
+                        render();
+                    }
+                })
+                .show();
+    }
+
+    private void editCoord(final LauncherModel.NegDest d) {
+        inputDialog("纬度（lat，如 39.9042）", String.valueOf(d.lat), s -> {
+            try {
+                final double la = Double.parseDouble(s.trim());
+                if (la < -90 || la > 90) { toast("纬度范围 -90..90"); return; }
+                inputDialog("经度（lng，如 116.4074）", String.valueOf(d.lng), s2 -> {
+                    try {
+                        final double lo = Double.parseDouble(s2.trim());
+                        if (lo < -180 || lo > 180) { toast("经度范围 -180..180"); return; }
+                        d.lat = la;
+                        d.lng = lo;
+                        model.setDests(model.dests());
+                    } catch (NumberFormatException e) {
+                        toast("经度格式不对");
+                    }
+                });
+            } catch (NumberFormatException e) {
+                toast("纬度格式不对");
+            }
+        });
+    }
+
+    private void addDest() {
+        inputDialog("目的地名称", "", s -> {
+            if (s.isEmpty()) { toast("名称不能为空"); return; }
+            final LauncherModel.NegDest d = new LauncherModel.NegDest();
+            d.name = s;
+            editCoord(d);
+        });
     }
 
     private void marketBody() {

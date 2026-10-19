@@ -2415,3 +2415,40 @@ placeBlock/saveBlockPos 一套机制，时钟块菜单升级为块总开关（�
 这里找回）。lunar 表生成→全量验证→固化自检的流水线可复用到后续任何
 「查表+验证」类数据。真机待验：车机磁力计有无、农历行字号观感、
 倒数块菜单操作路径。javac --release 11 绿 + LunarCheck 绿。
+
+## 批次 J 负一屏（J1-J5）
+
+**J1 容器** — NegScreenView（FrameLayout 双列卡）作为桌面第 0 页挂入 PagerView
+（PAGE_NEG，原壁纸/主界面/应用页顺移，默认页 PAGE_MAIN 不变）；翻页驱动
+setActive(on)：2s 开关状态轮询只在负一屏可见时跑，离开页即 removeCallbacks，
+杜绝在其他页白烧 root exec（延续审计 M4 纪律）。
+
+**J2 天气卡+限行卡** — 天气卡点按 Weather.refresh，正文 summary+三天预报+
+updatedLabel（时间源 model.weatherUpdatedAt，草稿期误写 weatherAt 已纠）；
+限行卡解析 restrictTails "1,6,2,7,3,8,4,9,5,0"（周一..周五各限两个尾号），
+周末显示今日不限行；设置页新增「负一屏」分区（开关+城市+尾号 10 位校验）。
+
+**J3 快捷开关** — WiFi/蓝牙/飞行四 chip（热点 chip 直开系统热点页），
+状态 2s 轮询 isWifiOn/isBluetoothOn/isAirplaneOn 后原位改色（M4），
+toggle 走 SysOps.set* 并 toast R 结果（草稿期把 R.out 误记为 R.msg 已纠）。
+RESEARCH A5 结论落地：热点 service call 交易号随 ROM 漂移，弃探号改直开
+TetherSettings（intent 主名 + com.android.settings.TetherSettings 双保险）。
+
+**J4 日志导出** — RootLog 全文 + logcat -d -t 500 -s Seagull*，头部带
+versionName（构建注入 git 短哈希，报障即版本）；三级回落：/sdcard/Seagull
+File API → root cp → getExternalFilesDir；导出后台线程，回执 uiPost 后台
+线程纪律。
+
+**J5 目的地卡** — 数据统一 LauncherModel.NegDest/dests()/setDests()/removeDest()
+（设置页增删改、负一屏长按删，同源 JSON negDests 最多 4 条）；拉起级联
+amapuri dev=0（GCJ02 直传）→ baidumap coord_type=gcj02，resolver 探测 +
+Manifest <queries> 声明；草稿期 NegScreenView 自带 Dest 解析与模型重复，
+收编进 LauncherModel（DRY）。
+
+**复盘**：① 页序重排只动 PAGE_ 常量与 addView 顺序，PagerView 任意页数
+基建零改动（当初按 index layout 的设计此时兑现）；② 轮询生命周期挂宿主
+翻页而非页面自身可见性，是「车机省电」与「root exec 节制」的交叉点；
+③ 本批次草稿三处 API 记忆偏差（R.out、weatherUpdatedAt、inputDialog 3 参）
+全靠 javac 兜住——先写码后对签名的流程风险被类型检查完全覆盖，但下次
+应在写码前先 grep 签名再动手，减少一轮返工。真机待验：热点页拉起、
+导航深链级联、/sdcard 直写在目标 ROM 是否放行。javac --release 11 绿。

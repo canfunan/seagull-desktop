@@ -24,11 +24,12 @@
 > I 批次落位说明：农历行并入时钟块日期行下方（I2）；倒计时/监控为壁纸页独立块（I3/I5，与时钟块菜单同一开关位找回）；I4 指南针做成行车块的航向兜底源（GPS 失联才补显），独立罗盘盘面在车机场景价值低。
 
 ## 批次 J 负一屏
-- [ ] J1 负一屏容器（桌面左滑页，复用滑动基建）
-- [ ] J2 天气卡+限行卡（本地城市规则）
-- [ ] J3 快捷开关（cmd/svc WiFi 蓝牙 + 热点 service call 探号降级设置页）
-- [ ] J4 日志导出卡（RootLog → /sdcard/Seagull/ 带 commit 号）
-- [ ] J5 常用目的地卡（amapuri://route/plan + baidumap://map/direction，GCJ02，<queries>）
+> J 批次落位说明：负一屏为桌面第 0 页（PAGE_NEG，原壁纸/主界面/应用三页顺移，首屏仍主界面）；目的地数据统一走 LauncherModel.NegDest/dests()/setDests()/removeDest()（设置页与负一屏同源）。
+- [x] J1 负一屏容器（桌面左滑页，复用滑动基建） — NegScreenView（FrameLayout 双列卡）挂 pager 第 0 页；onPageChanged 驱动 setActive(on)，2s 开关轮询只在负一屏可见时跑（防其他页白烧 root exec，审计 M4 纪律）
+- [x] J2 天气卡+限行卡（本地城市规则） — 天气卡点按 Weather.refresh，正文 summary+预报+updatedLabel（model.weatherUpdatedAt）；限行卡 restrictTails "1,6,2,7,3,8,4,9,5,0" 按 周一..周五 两个一组，周末=今日不限行，城市可空；设置页「负一屏」分区配置（toggle+城市+尾号校验 10 位）
+- [x] J3 快捷开关（cmd/svc WiFi 蓝牙 + 热点 service call 探号降级设置页） — WiFi/蓝牙/飞行 chip 2s 轮询 isWifiOn/isBluetoothOn/isAirplaneOn 原位改色（M4），toggle 走 SysOps.set*+R.toString() toast；热点按 RESEARCH A5 结论直开系统热点页（service call 交易号随 ROM 漂移，弃探号），amapuri/baidumap 同理弃深链探测
+- [x] J4 日志导出卡（RootLog → /sdcard/Seagull/ 带 commit 号） — doExport 拼 RootLog 全文+logcat -d -t 500 -s Seagull*，头部 versionName（含 git 短哈希）；三级回落 /sdcard/Seagull File API → root cp → getExternalFilesDir，导出在后台线程、回执 uiPost
+- [x] J5 常用目的地卡（amapuri://route/plan + baidumap://map/direction，GCJ02，<queries>） — 最多 4 条（设置页增删改，负一屏长按删）；拉起 amapuri dev=0（GCJ02 直传）→ baidumap coord_type=gcj02 级联，resolver 探测+<queries> 声明，都没装 toast 提示
 
 ## 批次 K 壁纸联动
 - [ ] K1 天气动态壁纸联动（weather/night 目录约定 + 手动锁定优先 + 失败回落）

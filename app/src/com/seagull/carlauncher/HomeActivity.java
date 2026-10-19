@@ -48,9 +48,10 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     public static final String PREFS = "seagull";
 
-    private static final int PAGE_POSTER = 0;
-    private static final int PAGE_MAIN = 1;
-    private static final int PAGE_APPS = 2;
+    private static final int PAGE_NEG = 0;
+    private static final int PAGE_POSTER = 1;
+    private static final int PAGE_MAIN = 2;
+    private static final int PAGE_APPS = 3;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -59,6 +60,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     private WallpaperPage poster;
     private WallpaperVideoView videoLayer;   // 批次 CI：动态壁纸层（root 最底层）
     private AppGridPage appsPage;
+    private NegScreenView negPage;
     private PipBoard pip;
     private IslandView island;
     private NavCard navCard;
@@ -237,12 +239,15 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         FrameLayout root = new FrameLayout(this);
         applyWallpaper(root);
 
-        // 三页横向分页（复刻参考的 CustomViewPager：左滑壁纸 / 中主界面 / 右全部应用）
+        // 四页横向分页（复刻参考的 CustomViewPager）：左滑负一屏/壁纸 / 主界面 / 右全部应用
+        // 批次 J：最左加负一屏（聚合卡），首屏仍是主界面
         pager = new PagerView(this);
+        negPage = new NegScreenView(this, model);
         poster = new WallpaperPage(this, model);
         FrameLayout mainPage = buildMainPage();
         appsPage = new AppGridPage(this, this);
         appsPage.setApps(loadApps(this));
+        pager.addView(negPage);
         pager.addView(poster);
         pager.addView(mainPage);
         pager.addView(appsPage);
@@ -533,6 +538,8 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             enableSwipe(true);
             setDockCollapsed(false);
         }
+        // 批次 J：负一屏可见时才跑开关状态轮询（2s tick 在 setActive 里控）
+        if (negPage != null) negPage.setActive(index == PAGE_NEG);
     }
 
     /* ---------------- 批次 BB：导航栏收起 / 唤出 ---------------- */

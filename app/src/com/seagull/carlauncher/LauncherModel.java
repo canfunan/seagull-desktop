@@ -317,6 +317,58 @@ public final class LauncherModel {
     public float wallMonY = 0.13f;
     public float wallMonScale = 1f;
     public boolean wallMonEnabled = false;
+
+    /** J2 限行卡：城市名 + 周一..周五尾号（"1,6,2,7,3,8,4,9,5,0"）。 */
+    public boolean restrictEnabled = false;
+    public String restrictCity = "";
+    public String restrictTails = "";
+
+    /** J5 目的地卡：[{"n":名称,"lat":..,"lng":..}]，最多 4 条。 */
+    public String negDestsJson = "[]";
+
+    /** 导航目的地（高德 GCJ-02 坐标），负一屏与设置页共用。 */
+    public static class NegDest {
+        public String name = "";
+        public double lat, lng;
+    }
+
+    public java.util.List<NegDest> dests() {
+        java.util.List<NegDest> out = new ArrayList<>();
+        try {
+            org.json.JSONArray a = new org.json.JSONArray(negDestsJson);
+            for (int i = 0; i < a.length() && i < 4; i++) {
+                org.json.JSONObject o = a.getJSONObject(i);
+                NegDest d = new NegDest();
+                d.name = o.optString("n", "");
+                d.lat = o.optDouble("lat", 0);
+                d.lng = o.optDouble("lng", 0);
+                out.add(d);
+            }
+        } catch (Throwable ignore) { }
+        return out;
+    }
+
+    public void setDests(java.util.List<NegDest> list) {
+        org.json.JSONArray a = new org.json.JSONArray();
+        try {
+            for (NegDest d : list) {
+                if (a.length() >= 4) break;
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("n", d.name == null ? "" : d.name);
+                o.put("lat", d.lat);
+                o.put("lng", d.lng);
+                a.put(o);
+            }
+        } catch (Throwable ignore) { }
+        negDestsJson = a.toString();
+        save();
+    }
+
+    public void removeDest(NegDest d) {
+        java.util.List<NegDest> list = dests();
+        list.removeIf(x -> x.name.equals(d.name) && x.lat == d.lat && x.lng == d.lng);
+        setDests(list);
+    }
     /** 壁纸页小组件记录（批次 CI）：[{"id":appWidgetId,"x":0~1,"y":0~1}] */
     public String wallWidgetsJson = "[]";
     public final List<Wall> wallLib = new ArrayList<>();
@@ -1016,6 +1068,10 @@ public final class LauncherModel {
             wmo.put("x", wallMonX); wmo.put("y", wallMonY); wmo.put("s", wallMonScale);
             wmo.put("on", wallMonEnabled);
             o.put("wallMon", wmo);
+            o.put("restrictOn", restrictEnabled);
+            o.put("restrictCity", restrictCity);
+            o.put("restrictTails", restrictTails);
+            o.put("negDests", negDestsJson);
             o.put("wallWidgets", wallWidgetsJson);
             /* 屏幕 */
             o.put("marginH", marginH);
@@ -1263,6 +1319,10 @@ public final class LauncherModel {
                 wallMonScale = (float) wmo2.optDouble("s", 1.0);
                 wallMonEnabled = wmo2.optBoolean("on", false);
             }
+            restrictEnabled = o.optBoolean("restrictOn", false);
+            restrictCity = o.optString("restrictCity", "");
+            restrictTails = o.optString("restrictTails", "");
+            negDestsJson = o.optString("negDests", "[]");
             wallWidgetsJson = o.optString("wallWidgets", "[]");
             fontScale = o.optInt("fontScale", 100);
             JSONArray wa = o.optJSONArray("wallLib");
