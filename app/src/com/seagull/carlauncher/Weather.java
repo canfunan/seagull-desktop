@@ -48,6 +48,10 @@ public final class Weather {
     /** 9.8 每 20 分钟更新。 */
     public static final long INTERVAL = 20 * 60_000L;
 
+    /** K1 天气联动：取数成功（或失败清态）后在主线程回调，宿主借它对齐联动壁纸。 */
+    public interface OnUpdated { void onUpdated(); }
+    public static volatile OnUpdated onUpdated;
+
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final ExecutorService POOL = Executors.newSingleThreadExecutor();
     private static boolean armed = false;
@@ -114,6 +118,7 @@ public final class Weather {
                         synchronized (m.ioLock()) {
                             m.weatherSummary = code(cur.optInt("weather_code")) + " "
                                     + Math.round(cur.optDouble("temperature_2m")) + "°";
+                            m.weatherCode = cur.optInt("weather_code", -1);   // K1 联动用
                             StringBuilder sb = new StringBuilder();
                             for (int i = 1; i < Math.min(4, dcode.length()); i++) {
                                 if (i > 1) sb.append("　");
@@ -139,6 +144,10 @@ public final class Weather {
                     }
                 }
                 if (done != null) MAIN.post(done);
+                MAIN.post(() -> {
+                    OnUpdated l = onUpdated;
+                    if (l != null) l.onUpdated();
+                });
             }
         });
     }

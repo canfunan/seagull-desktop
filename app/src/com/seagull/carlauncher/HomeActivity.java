@@ -161,6 +161,8 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }
         Weather.arm(this);          // 20 分钟一次；数据过期时立刻取
+        // K1 天气联动：取数回来（含 20 分钟自动档）就对齐联动壁纸
+        Weather.onUpdated = this::syncWallVideo;
         Lyrics.start(this);         // 一秒一跳，组件条/菜园的歌词都从它出
         Lyrics.removeSink(islandSink);
         Lyrics.addSink(islandSink); // sink 恒为同一实例：CopyOnWrite 集合会永久持死
@@ -195,6 +197,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (pip != null) pip.onDestroy();   // 只断 Surface，VD 留给 MirrorHost 常驻
         if (navCard != null) navCard.detach();   // 摘导航订阅（AmapNavClient 单例存活）
         Lyrics.removeSink(islandSink);      // sink 保活纪律：Activity 走了一定摘掉
+        Weather.onUpdated = null;           // K1：静态钩子别持死旧桌面
         super.onDestroy();
     }
 
@@ -390,9 +393,31 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     /**
      * 动态壁纸层同步（批次 CI）：onResume 幂等对齐 —— 开了就挂上（root 最底层，
      * 遮罩之下）、换源就 setPath、关了就摘层。皮肤重建路径由 applyWallpaper 负责。
+     * 批次 K1：联动开着时优先播天气包视频（后台解析，解析中不动现有层），
+     * 包里没匹配再回落手动设置的动态壁纸。
      */
     private void syncWallVideo() {
         String want = model.wallVideo == null ? "" : model.wallVideo;
+        if (model.wallWeatherLink) {
+            final String key = model.weatherCode + "|" + model.dayNight + "|"
+                    + model.wallWeatherDir + "|" + want;
+            if (!key.equals(wallWxKey)) {
+                wallWxKey = key;
+                wallWxDone = false;
+                WeatherWall.resolve(getApplicationContext(), model, hit -> {
+                    wallWxPath = hit;
+                    wallWxDone = true;
+                    syncWallVideo();       // 回主线程后重新对齐
+                });
+            }
+            if (!wallWxDone) return;       // 解析中：保持现状，别闪
+            if (wallWxPath != null) { alignVideoLayer(wallWxPath); return; }
+        }
+        alignVideoLayer(want);
+    }
+
+    /** videoLayer 幂等对齐（批次 CI 原逻辑抽平）：空源摘层，非空挂层/换源。 */
+    private void alignVideoLayer(String want) {
         if (want.isEmpty()) {
             if (videoLayer != null) {
                 FrameLayout p = (FrameLayout) videoLayer.getParent();
@@ -410,6 +435,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             videoLayer.setPath(want);
         }
     }
+
+    /** K1 联动解析缓存：key=code|dayNight|dir|manual，path=null 表示包里没货。 */
+    private String wallWxKey = null;
+    private String wallWxPath = null;
+    private boolean wallWxDone = true;
 
     /* ------------------------- 底部导航栏 ------------------------- */
 

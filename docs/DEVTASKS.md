@@ -32,7 +32,7 @@
 - [x] J5 常用目的地卡（amapuri://route/plan + baidumap://map/direction，GCJ02，<queries>） — 最多 4 条（设置页增删改，负一屏长按删）；拉起 amapuri dev=0（GCJ02 直传）→ baidumap coord_type=gcj02 级联，resolver 探测+<queries> 声明，都没装 toast 提示
 
 ## 批次 K 壁纸联动
-- [ ] K1 天气动态壁纸联动（weather/night 目录约定 + 手动锁定优先 + 失败回落）
+- [x] K1 天气动态壁纸联动（weather/night 目录约定 + 手动锁定优先 + 失败回落） — WeatherWall（WMO 码→sunny/cloudy/fog/rain/snow 分类，夜间主题优先 night/，SAF 目录树列举放后台线程）；weatherCode 随取数落档（-1=未取）；设置页开关+目录树选择（持久化读授权）；WallpaperVideoView 支持 content:// 源；Weather.onUpdated 静态钩子（onDestroy 摘除）驱动 20 分钟自动对齐；没匹配回落手动动态壁纸
 
 ## 批次 L 导航卡片
 - [ ] L1 导航通知解析骨架（高德/百度包 ongoing 通知 → 正则模板常量 → IslandView 横幅；格式真机探明后填模板，失败静默隐藏）

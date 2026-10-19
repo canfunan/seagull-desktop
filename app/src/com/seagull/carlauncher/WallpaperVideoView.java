@@ -5,6 +5,7 @@ import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.view.Gravity;
 import android.view.Surface;
 import android.view.TextureView;
@@ -71,7 +72,12 @@ public final class WallpaperVideoView extends FrameLayout
         new Thread(() -> {
             try {
                 MediaPlayer p = new MediaPlayer();
-                p.setDataSource(path);
+                if (path.startsWith("content:")) {
+                    // K1 天气联动：壁纸包走 SAF，播放源是 content Uri
+                    p.setDataSource(getContext(), Uri.parse(path));
+                } else {
+                    p.setDataSource(path);
+                }
                 p.setSurface(new Surface(st));
                 p.setLooping(true);
                 p.setVolume(0f, 0f);           // 恒静音：壁纸不抢车机声音

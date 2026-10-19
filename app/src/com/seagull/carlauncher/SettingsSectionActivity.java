@@ -490,6 +490,18 @@ public class SettingsSectionActivity extends BaseActivity {
             model.wallVideo = "";
             model.save(); render();
         });
+
+        sectionLabel("天气联动（K1）");
+        toggleRow("随天气换动态壁纸", model.wallWeatherLink, () -> {
+            model.wallWeatherLink = !model.wallWeatherLink;
+            model.save(); render();
+        });
+        actionRow("壁纸包目录", model.wallWeatherDir.isEmpty() ? "未选择" : "已选择",
+                v -> pickWxWallDir());
+        note("包根目录下建子目录放视频：sunny 晴 / cloudy 多云阴 / fog 雾 / "
+                + "rain 雨 / snow 雪 / night 夜间。夜间主题优先 night，"
+                + "没匹配到回落上面手动设置的动态壁纸；天气 20 分钟自动对齐。");
+
         sectionLabel("壁纸库（" + model.wallLib.size() + " / " + LauncherModel.WALL_LIB_MAX + "）");
         if (model.wallLib.isEmpty()) {
             note("还没有壁纸。点「白天壁纸」从相册选一张。");
@@ -504,6 +516,19 @@ public class SettingsSectionActivity extends BaseActivity {
 
     private static final int REQ_WALL = 0x5A11;
     private static final int REQ_WALLVIDEO = 0x5A12;
+    private static final int REQ_WXWALLDIR = 0x5A13;
+
+    /** K1 壁纸包根目录：SAF 目录树，免存储权限，授予持久化即可长期读。 */
+    private void pickWxWallDir() {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            startActivityForResult(i, REQ_WXWALLDIR);
+        } catch (Throwable t) {
+            toast("这台设备没有文件选择器");
+        }
+    }
 
     private void pickWallVideo() {
         try {
@@ -526,6 +551,21 @@ public class SettingsSectionActivity extends BaseActivity {
 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_WXWALLDIR) {
+            if (res != RESULT_OK || data == null || data.getData() == null) return;
+            Uri tree = data.getData();
+            try {
+                // 持久化读授权：重启后仍能读壁纸包
+                getContentResolver().takePersistableUriPermission(tree,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Throwable t) {
+                toast("目录授权未持久化，重启后可能要重选");
+            }
+            model.wallWeatherDir = tree.toString();
+            model.save();
+            render();
+            return;
+        }
         if (req == REQ_WALLVIDEO) {
             if (data == null || data.getData() == null) return;
             final Uri u = data.getData();

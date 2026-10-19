@@ -2452,3 +2452,28 @@ Manifest <queries> 声明；草稿期 NegScreenView 自带 Dest 解析与模型�
 全靠 javac 兜住——先写码后对签名的流程风险被类型检查完全覆盖，但下次
 应在写码前先 grep 签名再动手，减少一轮返工。真机待验：热点页拉起、
 导航深链级联、/sdcard 直写在目标 ROM 是否放行。javac --release 11 绿。
+
+## 批次 K 壁纸联动（K1）
+
+**K1 天气联动** — 联动属于 opt-in：设置页「主题与壁纸」加开关+壁纸包目录
+（ACTION_OPEN_DOCUMENT_TREE，takePersistableUriPermission 持久化读授权，
+免存储权限）。目录约定（调研业界粒度：晴/多云/阴/雨/雪/雾+昼夜变体）：
+包根目录下 sunny/cloudy/fog/rain/snow/night 六个子目录，各放一段循环视频
+（mp4/webm/3gp/mkv 取第一个）。映射：WMO 0-1 晴、2-3 多云阴、45/48 雾、
+51-67+80-82+95+ 雨、71-77+85/86 雪；夜间主题（dayNight=DARK）优先 night/，
+没匹配回落手动动态壁纸（RESEARCH B6：匹配失败回落当前壁纸）。
+
+实现要点：① weatherCode 随 Weather.refresh 落档（-1=未取，换城市/恢复出厂
+清 -1）；② WallpaperVideoView 增加 content:// 源支持（SAF Uri 走
+setDataSource(context, uri) 两行改动）；③ SAF 子目录列举跨 Binder，
+WeatherWall.resolve 放后台线程、结果回主线程；④ HomeActivity.syncWallVideo
+升级为「联动键缓存」：key=code|dayNight|dir|manual，键不变直接复用上次解析
+结果，解析中不动现有层（防闪）；⑤ Weather.onUpdated 静态钩子把「取数完成」
+事件递给宿主（NegScreen 手动刷新/设置页刷新/20 分钟自动档全走这一条），
+onDestroy 摘除防静态持死。
+
+**复盘**：动态壁纸基建（批次 CI 的 videoLayer/setPath）这次只加了两块砖
+——Uri 源与联动键缓存——零基建改动，验证了当初「换源就 setPath」的幂等
+设计。SAF 目录树方案取代「每类视频 SAF 单选导入」：用户选一次目录、
+改包内容即时生效。真机待验：目录授权持久化在目标 ROM 的兼容性、
+夜间优先的实际观感、解析失败的静默回落。javac --release 11 绿。

@@ -293,6 +293,8 @@ public final class LauncherModel {
     public String wallNight = "";              // 夜间壁纸路径
     public int wallDim = 0;                    // 背景遮罩 0~100
     public String wallVideo = "";              // 动态壁纸视频路径（批次 CI，空 = 静态图）
+    public boolean wallWeatherLink = false;    // K1 天气联动：随天气/昼夜自动换动态壁纸
+    public String wallWeatherDir = "";         // K1 壁纸包根目录（SAF tree Uri，子目录约定见 WeatherWall）
     /** 壁纸页时钟块：位置比例（0~1，左上角）与字号倍率（批次 CI 可编辑）。 */
     public float wallClockX = 0.5f;
     public float wallClockY = 0.13f;
@@ -418,6 +420,7 @@ public final class LauncherModel {
     public CitySource citySource = CitySource.MANUAL;
     public String weatherCity = "";
     public long weatherUpdatedAt = 0L;
+    public int weatherCode = -1;            // K1 联动用：当前 WMO 天气码，-1 = 还没取到
     public boolean weatherAuto = true;      // 9.8 每 20 分钟自动更新
     public String weatherSummary = "";      // 「晴 26°」
     public String weatherForecast = "";     // 「明天 多云 20~28°」
@@ -830,6 +833,7 @@ public final class LauncherModel {
         weatherSummary = "";
         weatherForecast = "";
         weatherError = "";
+        weatherCode = -1;
         save();
     }
 
@@ -1052,6 +1056,9 @@ public final class LauncherModel {
             }
             o.put("wallLib", wa);
             o.put("wallVideo", wallVideo);
+            o.put("wallWeatherLink", wallWeatherLink);
+            o.put("wallWeatherDir", wallWeatherDir);
+            o.put("weatherCode", weatherCode);
             JSONObject wck = new JSONObject();
             wck.put("x", wallClockX); wck.put("y", wallClockY); wck.put("s", wallClockScale);
             o.put("wallClock", wck);
@@ -1290,6 +1297,9 @@ public final class LauncherModel {
             wallNight = o.optString("wallNight", "");
             wallDim = o.optInt("wallDim", 0);
             wallVideo = o.optString("wallVideo", "");
+            wallWeatherLink = o.optBoolean("wallWeatherLink", false);
+            wallWeatherDir = o.optString("wallWeatherDir", "");
+            weatherCode = o.optInt("weatherCode", -1);
             JSONObject wco = o.optJSONObject("wallClock");
             if (wco != null) {
                 wallClockX = (float) wco.optDouble("x", 0.5);
@@ -1586,6 +1596,7 @@ public final class LauncherModel {
         citySource = CitySource.MANUAL;
         weatherCity = "";
         weatherUpdatedAt = 0L;
+        weatherCode = -1;
         weatherAuto = true;
         weatherSummary = "";
         weatherForecast = "";
