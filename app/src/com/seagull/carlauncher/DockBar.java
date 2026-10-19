@@ -215,17 +215,21 @@ public class DockBar extends LinearLayout {
         Context c = getContext();
         for (String k : keys) {
             if (added >= n) break;
+            // find 匹配不上时按包名兜底：历史存档里存过裸包名 key（替换应用的
+            // 旧 bug），照常渲染；下次落档走全 key 自愈
             LauncherModel.App a = m.find(k);
+            if (a == null) a = m.findByPkg(k);
             if (a == null) continue;
+            final LauncherModel.App fa = a;
             Drawable d = m.icon(a);
             if (d == null) continue;
             ImageView iv = new ImageView(c);
             iv.setImageDrawable(d);
             iv.setContentDescription(a.label);
             roundClip(iv, 20);
-            iv.setOnClickListener(v -> { if (listener != null) listener.onApp(a); });
+            iv.setOnClickListener(v -> { if (listener != null) listener.onApp(fa); });
             iv.setOnLongClickListener(v -> {
-                if (listener != null) listener.onAppLongPress(a);
+                if (listener != null) listener.onAppLongPress(fa);
                 return true;
             });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(c, 40), dp(c, 40));

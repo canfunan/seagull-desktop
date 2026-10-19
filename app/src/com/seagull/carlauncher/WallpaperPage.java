@@ -1242,12 +1242,17 @@ public final class WallpaperPage extends FrameLayout {
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         try { host().startListening(); } catch (Throwable ignore) { }
+        syncBlocks();
+        if (model.wallGpsEnabled && LocationHelper.hasPermission(getContext())) startSensors();
+    }
+
+    /** 设置页/菜单改动后的显隐总同步（幂等）：五块各刷一遍可见性。 */
+    public void syncBlocks() {
         refreshGpsBlock();
         refreshCdBlock();
         refreshMonBlock();
         refreshMusBlock();
         refreshGBlock();
-        if (model.wallGpsEnabled && LocationHelper.hasPermission(getContext())) startSensors();
     }
 
     @Override protected void onDetachedFromWindow() {

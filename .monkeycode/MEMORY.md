@@ -169,3 +169,12 @@ Entries discovered by the Agent during task execution should follow this format:
   - selfcheck 跑法（8 项，QuickbarCheck 修后可用）：先 javac 全量（含 R.java 与 app/selfcheck/*.java，排除 app/selfcheck/shim/）到 /tmp/opencode/sc-all，再 `java -cp "/tmp/opencode/shim:/tmp/opencode/sc-all:app/libs/android.jar" com.seagull.carlauncher.<CheckName>` 逐个跑
   - /tmp/opencode/shim 是 app/selfcheck/shim/android/util/LruCache.java 编译产物：桩 android.jar 的 LruCache 一碰就抛 Stub!，LauncherModel 类初始化静态 ICONS 会炸纯 JVM 自检——垫片目录必须放在 classpath 最前覆盖桩实现（该垫片已入库，重编即可）
   - 纯 JVM 可跑的自检清单：DumpParseCheck(14)/LrcCheck(15)/PrivCodecCheck(39)/QuickbarCheck(7)/StackListCheck(30)/TransformCheck(54)/TrustedFlagsCheck(10)/LunarCheck(30)；LunarCheck 单独跑法见 devlog（只需 LunarCalendar+LunarCheck 两个源文件）
+
+[Project Knowledge Summary]
+- Date: 2026-10-19
+- Context: Discovered by Agent while fixing user-reported Dock replace bug and settings discoverability
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - LauncherModel.App.key() 是「包名/Activity类名」全格式（loadApps 给每个入口都填 cls），任何往 dock/folders/widgets 存 key 的代码必须存 key() 全格式，裸包名会让 find() 恒 null（DockBar.bind 会整格跳过=图标消失）；读取侧统一用 find() 失败再 findByPkg() 兜底
+  - LauncherModel 构造器自带 load()（withApps=false 也加载存档，只是跳过 loadApps），save() 是全量落档无合并——"new 一个 model 改字段再 save" 是安全模式，但 JSONObject.put(key, null) 语义是删键，想"不动某字段"就别赋值
+  - 设置入口面是三层：SettingsSectionActivity 的 case 分支、titleOf、SettingsHubActivity.SECTIONS 行（缺行=功能黑洞）；新增设置分区必须三处同步 + hub 搜索关键词

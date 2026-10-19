@@ -111,6 +111,7 @@ public class SettingsSectionActivity extends BaseActivity {
     private static String titleOf(String id) {
         switch (id) {
             case "dock": return "Dock 栏";
+            case "blocks": return "桌面组件块";
             case "quickbar": return "快捷栏";
             case "garden": return "菜园";
             case "ball": return "小白点";
@@ -134,6 +135,7 @@ public class SettingsSectionActivity extends BaseActivity {
     private void buildBody() {
         switch (section) {
             case "dock": dockBody(); break;
+            case "blocks": blocksBody(); break;
             case "quickbar": quickbarBody(); break;
             case "garden": gardenBody(); break;
             case "ball": ballBody(); break;
@@ -180,6 +182,8 @@ public class SettingsSectionActivity extends BaseActivity {
         sliderRow("间距", 0, 24, model.dockGap, " dp", v -> { model.dockGap = v; });
         sliderRow("透明度", 0, 100, model.dockAlpha, " %", v -> { model.dockAlpha = v; });
         note("往右拉，Dock 越透明，背后的壁纸露得越多。");
+        note("替换某个槽的应用：回桌面长按 Dock 上那个图标 →「替换应用…」，"
+                + "这里点槽位是移除，长按桌面图标也能「从 Dock 拿下来」。");
 
         sectionLabel("行为");
         toggleRow("自动收起", model.dockAutoHide, () -> { model.dockAutoHide = !model.dockAutoHide; });
@@ -194,6 +198,7 @@ public class SettingsSectionActivity extends BaseActivity {
             for (int i = 0; i < model.dock.size(); i++) {
                 final String key = model.dock.get(i);
                 LauncherModel.App a = model.find(key);
+                if (a == null) a = model.findByPkg(key);   // 兼容历史裸包名 key
                 String label = a != null ? a.label : key;
                 actionRow("槽位 " + (i + 1) + "：" + label, "点击移除", v -> {
                     model.toggleDock(key);
@@ -207,13 +212,15 @@ public class SettingsSectionActivity extends BaseActivity {
         List<String> dockKeys = new ArrayList<>(model.dock);
         if (dockKeys.isEmpty()) dockKeys.addAll(defaultDockKeys(model));
         for (int i = 0; i < dockKeys.size(); i++) {
-            final LauncherModel.App a = model.find(dockKeys.get(i));
+            LauncherModel.App a = model.find(dockKeys.get(i));
+            if (a == null) a = model.findByPkg(dockKeys.get(i));   // 兼容历史裸包名 key
             if (a == null) continue;
+            final LauncherModel.App fa = a;
             int w = model.windowOf(a.pkg);
-            choiceRow(a.label, w == 0 ? "全屏" : (w == 1 ? "1 号窗口" : "2 号窗口"), () -> {
+            choiceRow(fa.label, w == 0 ? "全屏" : (w == 1 ? "1 号窗口" : "2 号窗口"), () -> {
                 String[] names = {"全屏", "1 号窗口", "2 号窗口"};
-                choiceDialog(a.label, names, w, k -> {
-                    model.setDockWindow(a.pkg, k);
+                choiceDialog(fa.label, names, w, k -> {
+                    model.setDockWindow(fa.pkg, k);
                     render();
                 });
             });
@@ -232,8 +239,39 @@ public class SettingsSectionActivity extends BaseActivity {
         return out;
     }
 
-    private void quickbarBody() {
-        note("放进组件条：长按组件条（或桌面空白处）→「+ 快捷栏」。"
+    /** 壁纸页五块 + G 值块的总开关（拖动/缩放在壁纸页长按菜单，这里管显隐）。 */
+    private void blocksBody() {
+        sectionLabel("信息块显隐");
+        toggleRow("行车块（车速/海拔航向/行程）", model.wallGpsEnabled, () -> {
+            model.wallGpsEnabled = !model.wallGpsEnabled;
+            model.save(); render();
+        });
+        toggleRow("倒数日块", model.wallCdEnabled, () -> {
+            model.wallCdEnabled = !model.wallCdEnabled;
+            model.save(); render();
+        });
+        toggleRow("系统监控块", model.wallMonEnabled, () -> {
+            model.wallMonEnabled = !model.wallMonEnabled;
+            model.save(); render();
+        });
+        toggleRow("本地音乐块", model.wallMusEnabled, () -> {
+            model.wallMusEnabled = !model.wallMusEnabled;
+            model.save(); render();
+        });
+        toggleRow("G值表块", model.wallGEnabled, () -> {
+            model.wallGEnabled = !model.wallGEnabled;
+            model.save(); render();
+        });
+        note("开着但桌面上没看到的：回壁纸页（时钟页）点时钟进菜单按名字找回，"
+                + "或长按块拖位置。倒计时块要配目标日，点块直接进配置。");
+
+        sectionLabel("说明");
+        note("行车块没定位权限时会缩成「点按开启定位」，权限给了自动展开。"
+                + "监控块/CPU 采样走 root，拿不到就显示 --。音乐块点按进本地音乐，"
+                + "长按弹自己的菜单。");
+    }
+
+    private void quickbarBody() {        note("放进组件条：长按组件条（或桌面空白处）→「+ 快捷栏」。"
                 + "每个桌面布局各有一份快捷栏：在「布局与组件」切布局后回来改这里，改的是那一份。");
         actionRow("当前布局", model.mode.label, v ->
                 startActivity(new Intent(this, LayoutModeActivity.class)));

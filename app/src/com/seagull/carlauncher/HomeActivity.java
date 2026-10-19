@@ -149,7 +149,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             if (pip != null) pip.onResume();
             if (appsPage != null) appsPage.setApps(loadApps(this));
             if (dock != null) dock.applySkin();
-            if (poster != null) { poster.applySkin(); poster.tick(); }
+            if (poster != null) { poster.applySkin(); poster.tick(); poster.syncBlocks(); }
             syncWallVideo();   // 批次 CI：设置页换了动态壁纸，回来即换源
         }
         if (island != null) {
@@ -527,7 +527,14 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             new AlertDialog.Builder(HomeActivity.this)
                     .setTitle("替换成哪个应用？")
                     .setItems(names, (d, w) -> {
-                        String key = apps.get(w).pkg;
+                        // 存进 dock 的必须是 App.key()（包名/Activity 类名）：
+                        // 早期版本存了裸包名，find() 匹配失败，Dock 重画时整格被跳过
+                        //（用户看到的「替换完图标消失」）——按包名解析回全 key 再落
+                        String key = null;
+                        for (LauncherModel.App ap : model.allApps) {
+                            if (ap.pkg.equals(apps.get(w).pkg)) { key = ap.key(); break; }
+                        }
+                        if (key == null) key = apps.get(w).pkg;
                         if (model.dock.isEmpty()) model.dock.addAll(keys);
                         if (key.equals(a.key()) || model.dock.contains(key)) {
                             toast("它已经在 Dock 里了");

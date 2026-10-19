@@ -2607,3 +2607,17 @@ Manifest/杂项：
 **做法**：LauncherModel 增 musicQueueJson（路径数组）/musicIdx（断点曲序）/musicPos（断点秒数）三字段（save/load/reset 齐）；MusicService 落档点=play（换队列）/step（切歌）/seek/pause/onDestroy，恢复点=MusicActivity 扫描回执后 tryRestore + resume() 冷启兜底（MiniPlayer/方向盘直接按播放也能接上）；tryRestore 按存档路径对 MusicLib 扫描结果重挂队列（路径失效的曲目跳过，全失效返回不硬撑），断点秒数走 pendingSeekMs 在 prepare 起播后一次 seekTo。
 
 **复盘**：① 写 persistPos 时顺手写了 `musicQueueJson = null` 想"不动这个字段"——JSONObject.put(key, null) 语义是**删键**，等于每次暂停都把队列清掉；LauncherModel 构造器自带 load()，重载注释（withApps=false=只读存档+只写场景）早写明了正确用法，读题不仔细；② save() 是全量落档无合并，任何"new 一个 model 改一个字段再 save"都必须走构造器加载路径——这条纪律值得进 MEMORY；③ 清单对齐要对着验收标准逐条核，不能只看功能标题。
+
+## 用户反馈修复 — Dock 替换应用消失 + 设置页功能找不到
+
+**Dock 替换应用后图标不显示（真 bug，三层修）**
+- 根因：HomeActivity.replaceDockApp 往 dock 存的是裸包名（AppEntry.pkg），而 LauncherModel.App.key() 是「包名/Activity类名」（loadApps 给每个入口都填了 cls）——DockBar.bind 里 find(裸包名) 恒 null → continue 跳过整格，且坏 key 已 save 落档，从此那格永远空白。
+- 修复：① 写入侧——replaceDockApp 按包名回 allApps 解析成全 key 再落档；② 读取侧——DockBar.bind 与设置页 dockBody find 失败时 findByPkg 兜底（旧坏档也能照常渲染）；③ 档案侧——LauncherModel.load() 里把历史裸包名 key 归一成全 key（withApps=false 实例无 allApps 自动跳过，下次带列表的 load 收敛）。
+
+**设置页找不到功能（入口缺失）**
+- 负一屏设置页（限行城市/尾号/目的地卡管理）在 SettingsHubActivity.SECTIONS 里压根没有行——J 批次造了 negBody 但忘了挂入口，功能等于黑洞。补 hub 行（桌面组）。
+- 新增「桌面组件块」分区（hub 桌面组）：行车块/倒数日块/监控块/本地音乐块/G值表块五个显隐开关集中在设置里，之前只能通过壁纸页时钟块菜单找回（用户根本不知道这条路径）。开关改动 HomeActivity.onResume 走 poster.syncBlocks() 即时生效（onAttachedToWindow 同步点收敛成 syncBlocks）。
+- 搜索关键词补齐：主题包/圆角/玻璃/描边/动态壁纸/天气联动/壁纸库（theme）、场景一键/布屏（quickbar）、本地音乐（market）、桌面手势/双指锁屏（touch）、导航横幅（island）、替换应用（dock）。
+- dockBody 加指引：替换应用的入口在桌面长按 Dock 图标。
+
+**复盘**：① 前几轮复盘的「权限面/入口面」核对漏了 SettingsHubActivity 的 SECTIONS 表——设置入口本身也是个需要「清单对齐」的面，光核对 SectionActivity 的 case 分支没用，得核对 hub 有没有行；② 替换应用这个 bug 在 M 批次前的代码里就存在（「用户反馈过替换点了没反应」的注释说明 CI 批次修过一半：修了 indexOf 找不到位次，没修 key 格式），根因是两个 key 格式（pkg vs pkg/cls）在代码里并存，写侧转格式时漏了这一处。

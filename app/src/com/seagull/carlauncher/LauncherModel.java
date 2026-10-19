@@ -545,6 +545,13 @@ public final class LauncherModel {
         return null;
     }
 
+    /** 按包名找应用（Dock 兼容自愈：历史存档里有裸包名 key，find() 匹配不上）。 */
+    public App findByPkg(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return null;
+        for (App a : allApps) if (a.pkg.equals(pkg)) return a;
+        return null;
+    }
+
     /** 按包名找应用（任务里只存了包名）。找不到就退回包名最后一段。 */
     public String appNameOf(String pkg) {
         if (pkg == null || pkg.isEmpty()) return "";
@@ -1226,6 +1233,16 @@ public final class LauncherModel {
             showLabels = o.optBoolean("labels", true);
             readInto(o.optJSONArray("pinned"), pinned);
             readInto(o.optJSONArray("dock"), dock);
+            // 自愈：历史存档里存过裸包名 dock key（替换应用旧 bug），有全量应用
+            // 列表时归一成 App.key()（包名/Activity 类名），各处 find() 才能命中；
+            // withApps=false 的实例没有 allApps，跳过（下次带列表的 load 再归一）
+            for (int i = 0; i < dock.size(); i++) {
+                App a = find(dock.get(i));
+                if (a == null) {
+                    App b = findByPkg(dock.get(i));
+                    if (b != null) dock.set(i, b.key());
+                }
+            }
             JSONArray ws = o.optJSONArray("widgets");
             // optInt 对缺省项/非数字项返回 0：脏存档里一个 null 就会把时钟
             // 悄悄塞回组件条。范围钳制之外只收 0~6（与 toggleWidget 对齐）

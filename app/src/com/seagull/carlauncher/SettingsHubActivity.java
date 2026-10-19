@@ -44,21 +44,23 @@ public class SettingsHubActivity extends BaseActivity {
 
     private static final Sec[] SECTIONS = {
             new Sec("layout", "布局", "桌面分区 组件条 显示名称 网格 模式 紧凑"),
-            new Sec("dock", "Dock 栏", "位置 数量 宽度 图标大小 间距 透明度 自动收起 固定 时间 槽位"),
-            new Sec("quickbar", "快捷栏", "快捷开关 功能按钮 组件条 小dock"),
+            new Sec("dock", "Dock 栏", "位置 数量 宽度 图标大小 间距 透明度 自动收起 固定 时间 槽位 替换应用"),
+            new Sec("quickbar", "快捷栏", "快捷开关 功能按钮 组件条 小dock 场景一键 场景 布屏"),
             new Sec("garden", "菜园", "叶子 大时钟 歌词 压暗 摆法 遮罩"),
             new Sec("ball", "小白点", "悬浮球 悬浮键 野菜键 大小 位置 悬浮窗权限"),
-            new Sec("theme", "主题与壁纸", "主题色 颜色 日夜模式 深色 浅色 壁纸 遮罩 毛玻璃 字号"),
+            new Sec("blocks", "桌面组件块", "行车块 车速 海拔 航向 行程 倒数 倒计时 监控 内存 CPU 存储 音乐 本地音乐 G值 加速度 壁纸页 块"),
+            new Sec("theme", "主题与壁纸", "主题色 颜色 日夜模式 深色 浅色 壁纸 遮罩 毛玻璃 字号 主题包 圆角 玻璃 描边 动态壁纸 视频壁纸 天气联动 壁纸库"),
+            new Sec("neg", "负一屏", "负一屏 天气卡 限行 尾号 城市 快捷开关 日志导出 常用目的地 回家 公司 一键导航"),
             new Sec("screen", "屏幕", "外边距 缝 方向 横屏 竖屏 保持亮屏 顶部信息栏 校时"),
-            new Sec("island", "野菜岛", "胶囊 顶部偏移 宽度 挖孔 圆角 岛"),
+            new Sec("island", "野菜岛", "胶囊 顶部偏移 宽度 挖孔 圆角 岛 导航横幅"),
             new Sec("weather", "天气", "城市 定位 和风 气温 未来3天"),
             new Sec("lyrics", "歌词", "lrc 行数 字号 对时 偏移 媒体卡片 蓝牙 通知"),
             new Sec("window", "窗口", "画中画 虚拟屏 性能档位 兼容模式 后台保留 显示大小 自检 镜像"),
-            new Sec("touch", "触摸", "防误滑 长按判定 跟手 无障碍 root注入"),
+            new Sec("touch", "触摸", "防误滑 长按判定 跟手 无障碍 root注入 桌面手势 双指锁屏"),
             new Sec("tasks", "自动化任务", "任务 触发条件 定时 延迟 开机"),
             new Sec("bootanim", "开机动画", "开机动画 素材 安装器 magisk 生成"),
             new Sec("system", "系统", "开机自启 默认桌面 重启桌面 恢复出厂 监控 root"),
-            new Sec("market", "车机工具", "亮度 音量 wifi 蓝牙 飞行模式 强制停止 root面板"),
+            new Sec("market", "车机工具", "亮度 音量 wifi 蓝牙 飞行模式 强制停止 root面板 本地音乐 音乐播放"),
             new Sec("about", "关于", "版本 作者 检查更新 体检报告 指纹")
     };
 
@@ -172,6 +174,7 @@ public class SettingsHubActivity extends BaseActivity {
     private static String groupOf(String id) {
         switch (id) {
             case "layout": case "dock": case "quickbar": case "garden": case "ball":
+            case "blocks": case "neg":
                 return "桌面";
             case "theme": case "screen": case "island":
                 return "外观";
