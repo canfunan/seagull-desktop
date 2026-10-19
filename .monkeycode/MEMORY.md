@@ -160,3 +160,12 @@ Entries discovered by the Agent during task execution should follow this format:
   - PAT 从 /root/.git-credentials 现取：`sed -nE 's#https://[^:]+:([^@]+)@github.com.*#\1#p' /root/.git-credentials`；api.github.com 早年 curl 报 SSL_ERROR_SYSCALL，2026-10-19 实测带 Bearer token 的短 curl（-m 30）稳定可用，gh 路径仍是兜底
   - 新仓要从零建 GitHub 仓库 + CI：`gh repo create caogenfunan123/<name> --private --source=<dir> --push`，再拷主项目 .github/workflows/build-apk.yml 改产物名；签名密钥统一靠 secret：`base64 -w0 <keystore> | gh secret set SEAGULL_KEYSTORE_B64 --repo <repo>`、密码同样 `gh secret set`，不要回显
   - 本地没有 aapt2/SDK 全量，只能做 javac 类型检查（/tmp/opencode/android-sdk/platforms/android-33.jar）；资源引用错误（如 @color/xxx 没定义、@string 名字不匹配）只能等 CI 才发现，所以写完 res 后必须逐个 grep manifest/values 交叉核对
+
+[Project Knowledge Summary]
+- Date: 2026-10-19
+- Context: Discovered by Agent while running all selfchecks during the final review phase (commit a4577f0)
+- Category: Testing Methods
+- Instructions:
+  - selfcheck 跑法（8 项，QuickbarCheck 修后可用）：先 javac 全量（含 R.java 与 app/selfcheck/*.java，排除 app/selfcheck/shim/）到 /tmp/opencode/sc-all，再 `java -cp "/tmp/opencode/shim:/tmp/opencode/sc-all:app/libs/android.jar" com.seagull.carlauncher.<CheckName>` 逐个跑
+  - /tmp/opencode/shim 是 app/selfcheck/shim/android/util/LruCache.java 编译产物：桩 android.jar 的 LruCache 一碰就抛 Stub!，LauncherModel 类初始化静态 ICONS 会炸纯 JVM 自检——垫片目录必须放在 classpath 最前覆盖桩实现（该垫片已入库，重编即可）
+  - 纯 JVM 可跑的自检清单：DumpParseCheck(14)/LrcCheck(15)/PrivCodecCheck(39)/QuickbarCheck(7)/StackListCheck(30)/TransformCheck(54)/TrustedFlagsCheck(10)/LunarCheck(30)；LunarCheck 单独跑法见 devlog（只需 LunarCalendar+LunarCheck 两个源文件）

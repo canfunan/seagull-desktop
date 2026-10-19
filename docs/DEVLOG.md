@@ -2599,3 +2599,11 @@ Manifest/杂项：
 - MusicLib rootFind 走 Caps.exec 固定 3s 超时：U 盘曲目极多时第三来源可能静默为空——放宽超时要动 Caps 全局契约（其他 exec 调用方共用），列为真机验收项（表格 #9）实测定夺
 - 新增 AlertDialog 未做统一生命周期解绑：与全项目既有弹窗同模式（换肤重建路径 WindowLeaked 风险），全局改造风险大于收益，维持现状
 - addDest 坐标步骤取消时整条丢弃：UX 瑕疵，交互流程改动留真机验收后定
+
+## 终局补丁 — BACKLOG #5 验收缺口：重启后播放列表与进度保留
+
+**缺口**：M2 队列是纯内存态，BACKLOG #5 验收项「重启后播放列表与进度保留」未覆盖——清单对齐时只核对了功能项，漏了逐条验收标准。
+
+**做法**：LauncherModel 增 musicQueueJson（路径数组）/musicIdx（断点曲序）/musicPos（断点秒数）三字段（save/load/reset 齐）；MusicService 落档点=play（换队列）/step（切歌）/seek/pause/onDestroy，恢复点=MusicActivity 扫描回执后 tryRestore + resume() 冷启兜底（MiniPlayer/方向盘直接按播放也能接上）；tryRestore 按存档路径对 MusicLib 扫描结果重挂队列（路径失效的曲目跳过，全失效返回不硬撑），断点秒数走 pendingSeekMs 在 prepare 起播后一次 seekTo。
+
+**复盘**：① 写 persistPos 时顺手写了 `musicQueueJson = null` 想"不动这个字段"——JSONObject.put(key, null) 语义是**删键**，等于每次暂停都把队列清掉；LauncherModel 构造器自带 load()，重载注释（withApps=false=只读存档+只写场景）早写明了正确用法，读题不仔细；② save() 是全量落档无合并，任何"new 一个 model 改一个字段再 save"都必须走构造器加载路径——这条纪律值得进 MEMORY；③ 清单对齐要对着验收标准逐条核，不能只看功能标题。

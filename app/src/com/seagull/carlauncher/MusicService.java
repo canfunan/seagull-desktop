@@ -59,6 +59,7 @@ public class MusicService extends Service {
     public static void play(Context c, List<MusicLib.Track> list, int at) {
         queue.clear();
         queue.addAll(list);
+        persistQueue(c.getApplicationContext(), at, 0);
         Intent i = new Intent(c, MusicService.class);
         i.setAction("play");
         i.putExtra("at", at);
@@ -90,6 +91,61 @@ public class MusicService extends Service {
     }
 
     private static volatile MediaPlayer instance;
+
+    /* ---------------- 断点落盘/恢复（BACKLOG #5：重启后播放列表与进度保留） ---------------- */
+
+    /** 换队列/切歌时把队列+曲序落档；断点秒数随 pause/销毁另存。 */
+    private static void persistQueue(Context app, int at, int posSec) {
+        try {
+            LauncherModel m = new LauncherModel(app, false);
+            org.json.JSONArray arr = new org.json.JSONArray();
+            for (MusicLib.Track t : queue) arr.put(t.path);
+            m.musicQueueJson = arr.toString();
+            m.musicIdx = at;
+            m.musicPos = posSec;
+            m.save();
+        } catch (Throwable ignore) { }
+    }
+
+    /** 断点秒数落档（暂停/切歌/销毁时调）。构造器已 load()，只动 idx/pos 两个字段。 */
+    private static void persistPos(Context app, int at) {
+        try {
+            LauncherModel m = new LauncherModel(app, false);
+            m.musicIdx = at;
+            m.musicPos = position() / 1000;
+            m.save();
+        } catch (Throwable ignore) { }
+    }
+
+    /**
+     * 服务/列表页冷启时对档：按存档路径对 MusicLib 扫描结果重挂队列。
+     * 路径已不存在的曲目跳过；一条都对不上返回 false（U 盘拔了就别硬撑）。
+     * 返回 true 时 idx 已就位、pendingSeekMs 带着断点秒数等下一次 prepare。
+     */
+    private static volatile int pendingSeekMs = -1;
+
+    public static boolean tryRestore(Context c) {
+        if (!queue.isEmpty()) return true;
+        try {
+            LauncherModel m = new LauncherModel(c.getApplicationContext(), false);
+            if (m.musicQueueJson == null || m.musicQueueJson.isEmpty() || m.musicIdx < 0) return false;
+            org.json.JSONArray arr = new org.json.JSONArray(m.musicQueueJson);
+            java.util.Map<String, MusicLib.Track> byPath = new java.util.HashMap<>();
+            for (MusicLib.Track t : MusicLib.last()) byPath.put(t.path, t);
+            queue.clear();
+            for (int i = 0; i < arr.length(); i++) {
+                MusicLib.Track t = byPath.get(arr.optString(i));
+                if (t != null) queue.add(t);
+            }
+            if (queue.isEmpty()) return false;
+            int at = Math.min(m.musicIdx, queue.size() - 1);
+            idx = Math.max(0, at);
+            pendingSeekMs = Math.max(0, m.musicPos) * 1000;
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
 
     /** 切歌/续播 prepare 串行化：快速连点 next/prev 时两条线程交错会互踩静态
      *  instance（release 掉对方刚赋值的播放器 → 双路出声/泄漏/状态污染）。 */
@@ -138,7 +194,10 @@ public class MusicService extends Service {
             case "toggle": if (playing) pause(); else resume(); break;
             case "next": step(1, true); break;
             case "prev": step(-1, true); break;
-            case "seek": seekTo(intent.getIntExtra("pos", 0)); break;
+            case "seek":
+                seekTo(intent.getIntExtra("pos", 0));
+                if (idx >= 0 && idx < queue.size()) persistPos(this, idx);
+                break;
             default: break;
         }
         return START_NOT_STICKY;
@@ -146,6 +205,7 @@ public class MusicService extends Service {
 
     @Override public void onDestroy() {
         playing = false;
+        if (idx >= 0 && idx < queue.size()) persistPos(this, idx);   // 断点落档再走
         try { if (session != null) session.release(); } catch (Throwable ignore) {}
         releaseMp();
         try { if (afr != null) am.abandonAudioFocusRequest(afr); } catch (Throwable ignore) {}
@@ -174,6 +234,7 @@ public class MusicService extends Service {
         if (at >= queue.size()) at = 0;
         if (at < 0) at = queue.size() - 1;
         idx = at;
+        persistQueue(this, at, 0);   // 断点曲序落档（新曲从头计）
         MusicLib.Track t = queue.get(idx);
         updateNotif(t.title, t.artist, true);
         final MusicLib.Track ft = t;
@@ -197,6 +258,12 @@ public class MusicService extends Service {
             });
             p.prepare();        // 本地文件头，后台线程同步 prepare
             p.start();
+            // 冷启恢复的断点秒数：起播后一次跳到位（只在恢复路径非负）
+            int seek = pendingSeekMs;
+            if (seek >= 0) {
+                pendingSeekMs = -1;
+                try { p.seekTo(seek); } catch (Throwable ignore) {}
+            }
             playing = true;
             ui.post(() -> publishState(t, p.getDuration(), true));
         } catch (Throwable e) {
@@ -213,10 +280,13 @@ public class MusicService extends Service {
     private void pause() {
         try { if (instance != null) instance.pause(); } catch (Throwable ignore) {}
         playing = false;
+        if (idx >= 0 && idx < queue.size()) persistPos(this, idx);   // 断点秒数落档
         pushPlayback();
     }
 
     private void resume() {
+        // 冷启直接按播放键（MiniPlayer/方向盘）也能接上存档：扫描结果就位才挂得上
+        if (queue.isEmpty() && !tryRestore(this)) return;
         if (idx < 0 || idx >= queue.size()) return;
         try {
             if (instance == null) {

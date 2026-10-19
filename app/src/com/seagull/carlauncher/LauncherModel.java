@@ -291,6 +291,12 @@ public final class LauncherModel {
     public int themeRadius = 100;              // N2 主题包：圆角全局系数 50~150%
     public int themeGlass = 0;                 // N2：卡片玻璃 0~80（额外透明度）
     public boolean themeOutline = false;       // N2：全局描边
+    /* M2 本地音乐：重启后播放列表与进度保留（BACKLOG #5 验收项）。
+     * musicQueue 存路径数组（恢复时对 MusicLib 扫描结果按路径重挂），musicIdx
+     * 是断点曲序，musicPos 是断点秒数。 */
+    public String musicQueueJson = "";         // JSON 数组，空 = 没存过
+    public int musicIdx = -1;
+    public int musicPos = 0;
     public DayNight dayNight = DayNight.DARK;
     public String wallDay = "";                // 白天壁纸路径
     public String wallNight = "";              // 夜间壁纸路径
@@ -1060,6 +1066,9 @@ public final class LauncherModel {
             o.put("themeRadius", themeRadius);
             o.put("themeGlass", themeGlass);
             o.put("themeOutline", themeOutline);
+            o.put("musicQueue", musicQueueJson);
+            o.put("musicIdx", musicIdx);
+            o.put("musicPos", musicPos);
             o.put("dayNight", dayNight.name());
             o.put("wallDay", wallDay);
             o.put("wallNight", wallNight);
@@ -1320,6 +1329,9 @@ public final class LauncherModel {
             themeRadius = o.optInt("themeRadius", 100);
             themeGlass = o.optInt("themeGlass", 0);
             themeOutline = o.optBoolean("themeOutline", false);
+            musicQueueJson = o.optString("musicQueue", "");
+            musicIdx = o.optInt("musicIdx", -1);
+            musicPos = o.optInt("musicPos", 0);
             dayNight = optEnum(o, "dayNight", DayNight.class, dayNight);
             wallDay = o.optString("wallDay", "");
             wallNight = o.optString("wallNight", "");
@@ -1611,6 +1623,9 @@ public final class LauncherModel {
         themeRadius = 100;
         themeGlass = 0;
         themeOutline = false;
+        musicQueueJson = "";
+        musicIdx = -1;
+        musicPos = 0;
         dayNight = DayNight.DARK;
         wallDay = "";
         wallNight = "";

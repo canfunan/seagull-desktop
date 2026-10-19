@@ -126,6 +126,10 @@ public class MusicActivity extends Activity {
             if (isFinishing() || isDestroyed()) return;
             shown = tracks;
             adapter.notifyDataSetChanged();
+            // 冷启断点恢复：扫描结果就位后按存档路径重挂队列（重启后播放列表与进度保留）
+            MusicService.tryRestore(this);
+            refreshHead();
+            adapter.notifyDataSetChanged();
             if (tracks.isEmpty()) toast("三个来源都没扫到歌（Music 目录 / U盘 / root）");
         });
     }
