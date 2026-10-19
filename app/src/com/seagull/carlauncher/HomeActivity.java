@@ -161,8 +161,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }
         Weather.arm(this);          // 20 分钟一次；数据过期时立刻取
-        // K1 天气联动：取数回来（含 20 分钟自动档）就对齐联动壁纸
         Weather.onUpdated = this::syncWallVideo;
+        // L1 导航通知横幅：岛内容随解析结果即时刷新
+        NavNotiParser.setListener(() -> {
+            if (island != null && model != null) island.bind(model);
+        });
         Lyrics.start(this);         // 一秒一跳，组件条/菜园的歌词都从它出
         Lyrics.removeSink(islandSink);
         Lyrics.addSink(islandSink); // sink 恒为同一实例：CopyOnWrite 集合会永久持死
@@ -198,6 +201,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (navCard != null) navCard.detach();   // 摘导航订阅（AmapNavClient 单例存活）
         Lyrics.removeSink(islandSink);      // sink 保活纪律：Activity 走了一定摘掉
         Weather.onUpdated = null;           // K1：静态钩子别持死旧桌面
+        NavNotiParser.setListener(null);    // L1：同上
         super.onDestroy();
     }
 

@@ -52,6 +52,13 @@ public class MediaListenerService extends NotificationListenerService {
         connected = true;
         Log.i(TAG, "通知监听已连接");
         refresh(appCtx);
+        // L1：重连后回放现有导航通知（不然服务重启后岛横幅要等下一次播报才回来）
+        try {
+            StatusBarNotification[] act = getActiveNotifications();
+            if (act != null) for (StatusBarNotification sbn : act) NavNotiParser.feed(sbn);
+        } catch (Throwable t) {
+            Log.w(TAG, "回放活跃通知失败: " + t);
+        }
     }
 
     @Override public void onListenerDisconnected() {
@@ -63,11 +70,13 @@ public class MediaListenerService extends NotificationListenerService {
     }
 
     @Override public void onNotificationPosted(StatusBarNotification sbn) {
-        // 本服务只借「通知监听器」身份拿 getActiveSessions 的调用权，
-        // 通知内容不参与任何逻辑 —— 打进 logcat 反而把用户通知正文漏给 adb/bugreport（批次 V 撤掉）。
+        // 通知正文不进 logcat（批次 V 教训）；L1 导航通知解析也只取结果、不落日志
+        NavNotiParser.feed(sbn);
     }
 
-    @Override public void onNotificationRemoved(StatusBarNotification sbn) {}
+    @Override public void onNotificationRemoved(StatusBarNotification sbn) {
+        NavNotiParser.retract(sbn);
+    }
 
     /* ---------------- MiniPlayer 数据源 ---------------- */
 

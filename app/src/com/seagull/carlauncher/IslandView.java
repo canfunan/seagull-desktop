@@ -56,6 +56,12 @@ public class IslandView extends View {
             lp.gravity = android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL;
             setLayoutParams(lp);
         }
+        // L1 导航横幅优先：通知解析出来就盖过时钟/歌词（失败静默隐藏，无此模式）
+        String[] nav = NavNotiParser.now();
+        if (nav != null) {
+            setLabel(nav[0], nav[1]);
+            return;
+        }
         if (m.islandLyric) {
             String[] w = Lyrics.window(getContext(), m, 1);
             setLabel(w.length == 0 ? "" : w[0], Lyrics.nowPlaying());

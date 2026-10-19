@@ -2477,3 +2477,26 @@ onDestroy 摘除防静态持死。
 设计。SAF 目录树方案取代「每类视频 SAF 单选导入」：用户选一次目录、
 改包内容即时生效。真机待验：目录授权持久化在目标 ROM 的兼容性、
 夜间优先的实际观感、解析失败的静默回落。javac --release 11 绿。
+
+## 批次 L 导航卡片（L1）
+
+**L1 导航通知解析骨架** — 按清单只做骨架：NavNotiParser 静态解析器
+（NAV_PKGS 高德/百度三包名 + T_TURN/T_REMAIN 两个正则模板常量），模板
+句式按语音播报同构（"N米后右转"/"前方N米右转"/"剩余 N 公里"）先行铺底，
+**真机把两类导航的 ongoing 通知实际文案探明后在常量处填改**——这是清单
+明示的延期项，骨架交付不等于模板终稿。
+
+管线三口：onNotificationPosted → feed（isOngoing 且模板命中才更新，
+否则清态=静默隐藏）、onNotificationRemoved → retract（导航通知被撤当
+导航结束）、onListenerConnected → 回放 getActiveNotifications（服务重启
+后岛横幅不用等下一次播报）。IslandView.bind 横幅优先于时钟/歌词；
+HomeActivity onResume 挂静态监听、onDestroy 摘（与 Weather.onUpdated
+同一纪律）。
+
+**复盘**：① 网上查不到两类导航通知栏的权威格式（语音播报句式倒是确认了
+距离+转向的结构），骨架+模板常量正是为此设计的落点；② 与 NavCard
+（批次 AN 车联服务）完全解耦：车联通走卡片、通知通走岛横幅，两条数据源
+互不等待；③ 正文解析结果只进内存不进 logcat，延续批次 V 的通知隐私线。
+真机待验：高德/百度 ongoing 通知实际文案（回填模板）、百度车机版包名
+（现挂 com.baidu.BaiduMap，车版可能是 com.baidu.BaiduMap.car 之类）。
+javac --release 11 绿。

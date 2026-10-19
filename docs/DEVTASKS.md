@@ -35,7 +35,7 @@
 - [x] K1 天气动态壁纸联动（weather/night 目录约定 + 手动锁定优先 + 失败回落） — WeatherWall（WMO 码→sunny/cloudy/fog/rain/snow 分类，夜间主题优先 night/，SAF 目录树列举放后台线程）；weatherCode 随取数落档（-1=未取）；设置页开关+目录树选择（持久化读授权）；WallpaperVideoView 支持 content:// 源；Weather.onUpdated 静态钩子（onDestroy 摘除）驱动 20 分钟自动对齐；没匹配回落手动动态壁纸
 
 ## 批次 L 导航卡片
-- [ ] L1 导航通知解析骨架（高德/百度包 ongoing 通知 → 正则模板常量 → IslandView 横幅；格式真机探明后填模板，失败静默隐藏）
+- [x] L1 导航通知解析骨架（高德/百度包 ongoing 通知 → 正则模板常量 → IslandView 横幅；格式真机探明后填模板，失败静默隐藏） — NavNotiParser（NAV_PKGS 三包 + T_TURN/T_REMAIN 模板常量，真机探明后填改）；MediaListenerService.onNotificationPosted/Removed/重连回放三口接入；IslandView.bind 横幅优先于时钟/歌词；HomeActivity 挂/摘静态监听；正文不进 logcat（批次 V 纪律）
 
 ## 批次 M 本地音乐
 - [ ] M1 音乐扫描：/sdcard/Music File API + U盘 StorageVolume + root /mnt/media_rw 扫描
