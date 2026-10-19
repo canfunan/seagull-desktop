@@ -34,21 +34,35 @@ public final class QuickBar {
         return key;
     }
 
-    /** 执行功能按钮。开关类需要 root 通道，失败时把原因 toast 出来。 */
+    /**
+     * 执行功能按钮。开关类需要 root 通道，失败时把原因 toast 出来。
+     *
+     * 审计 H3：每条 SysOps 调用都是 su fork（Caps.exec 3s 超时），亮度还是
+     * 两次串行 —— 全部丢后台执行，toast 回主线程。连续点击天然排队（每点
+     * 一个线程），Caps.exec 有超时 + 强杀兜底，不会堆积成死循环。
+     */
     public static void runFn(Context ctx, String key) {
-        SysOps.R r;
-        int b;
-        switch (key) {
-            case "brightness_up":     b = SysOps.getBrightness(); r = SysOps.setBrightness(b < 0 ? 128 : b + 20); break;
-            case "brightness_down":   b = SysOps.getBrightness(); r = SysOps.setBrightness(b < 0 ? 128 : b - 20); break;
-            case "volume_up":         r = SysOps.setVolume(currentVolume(ctx) + 1); break;
-            case "volume_down":       r = SysOps.setVolume(currentVolume(ctx) - 1); break;
-            case "wifi":              r = SysOps.setWifi(!SysOps.isWifiOn(ctx)); break;
-            case "bluetooth":         r = SysOps.setBluetooth(!SysOps.isBluetoothOn(ctx)); break;
-            case "airplane":          r = SysOps.setAirplane(!SysOps.isAirplaneOn(ctx)); break;
-            default: r = new SysOps.R(false, "未知功能 " + key);
-        }
-        if (!r.ok) Toast.makeText(ctx, fnLabel(key) + " 需要 root：" + r.out, Toast.LENGTH_SHORT).show();
+        final Context app = ctx.getApplicationContext();
+        final String k = key;
+        new Thread(() -> {
+            SysOps.R r;
+            int b;
+            switch (k) {
+                case "brightness_up":     b = SysOps.getBrightness(); r = SysOps.setBrightness(b < 0 ? 128 : b + 20); break;
+                case "brightness_down":   b = SysOps.getBrightness(); r = SysOps.setBrightness(b < 0 ? 128 : b - 20); break;
+                case "volume_up":         r = SysOps.setVolume(currentVolume(app) + 1); break;
+                case "volume_down":       r = SysOps.setVolume(currentVolume(app) - 1); break;
+                case "wifi":              r = SysOps.setWifi(!SysOps.isWifiOn(app)); break;
+                case "bluetooth":         r = SysOps.setBluetooth(!SysOps.isBluetoothOn(app)); break;
+                case "airplane":          r = SysOps.setAirplane(!SysOps.isAirplaneOn(app)); break;
+                default: r = new SysOps.R(false, "未知功能 " + k);
+            }
+            if (!r.ok) {
+                android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+                main.post(() -> Toast.makeText(app,
+                        fnLabel(k) + " 需要 root：" + r.out, Toast.LENGTH_SHORT).show());
+            }
+        }, "seagull-quickfn").start();
     }
 
     private static int currentVolume(Context ctx) {

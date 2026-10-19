@@ -34,6 +34,17 @@ public final class Caps {
 
     private Caps() {}
 
+    /**
+     * 审计 L7：能力缓存进程级只探一次 —— 首次 su 被用户拒绝（Magisk/KernelSU
+     * 授权弹窗点掉）后 L3 永远黑着。重置后下一次 hasRoot/level 重新落地探测；
+     * root 面板每次打开时在后台线程调一次，给用户「重试」的入口。
+     */
+    public static synchronized void resetCapabilities() {
+        sRoot = null;
+        sVirtualDisplay = null;
+        sRootWho = "未检测";
+    }
+
     /* ---------------- root ---------------- */
 
     public static synchronized boolean hasRoot() {
@@ -86,15 +97,21 @@ public final class Caps {
             });
             try {
                 String out = f.get(3, java.util.concurrent.TimeUnit.SECONDS);
-                p.waitFor();               // 输出已收干，正常回收
+                if (!p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                    // 审计 M16：输出收干但进程仍不走（su 残留）→ 杀掉回收，
+                    // 不让僵尸进程和 fd 积压
+                    p.destroyForcibly();
+                }
                 return out;
             } catch (java.util.concurrent.TimeoutException te) {
                 f.cancel(true);
+                p.destroyForcibly();   // 审计 M16：超时必须连进程一起回收
                 Log.w(TAG, "exec 超时: " + cmd);
                 return null;
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 f.cancel(true);
+                p.destroyForcibly();
                 return null;
             }
         } catch (Throwable t) {

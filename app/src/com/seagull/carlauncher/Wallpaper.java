@@ -83,11 +83,37 @@ public final class Wallpaper {
         return new LauncherModel.Wall(name, f.getAbsolutePath());
     }
 
-    /** 铺满屏幕的位图；读不到或文件没了返回 null（调用方回落纯色）。 */
+    /**
+     * 铺满屏幕的位图；读不到或文件没了返回 null（调用方回落纯色）。
+     *
+     * 审计 M1：桌面重建/页面切换反复要同一张位图，全图 decode 一次几十毫秒
+     * + 十几 MB 内存抖动。单条缓存键 = path|尺寸|mtime，壁纸没换直接复用
+     * 同一位图实例（只读共享，调用方不做 recycle）。
+     */
+    private static String cacheKey;
+    private static Bitmap cacheBmp;
+
     public static Bitmap loadForScreen(Context ctx, String path, int w, int h) {
         if (path == null || path.isEmpty()) return null;
         File f = new File(path);
         if (!f.exists()) return null;
+        String key = path + "|" + w + "x" + h + "|" + f.lastModified();
+        synchronized (Wallpaper.class) {
+            if (key.equals(cacheKey) && cacheBmp != null && !cacheBmp.isRecycled()) {
+                return cacheBmp;
+            }
+        }
+        Bitmap b = decodeForScreen(path, w, h);
+        if (b != null) {
+            synchronized (Wallpaper.class) {
+                cacheKey = key;
+                cacheBmp = b;
+            }
+        }
+        return b;
+    }
+
+    private static Bitmap decodeForScreen(String path, int w, int h) {
         try {
             BitmapFactory.Options o = new BitmapFactory.Options();
             o.inJustDecodeBounds = true;
@@ -105,9 +131,30 @@ public final class Wallpaper {
     /**
      * 壁纸亮不亮：抽样 16x16 算平均亮度。
      * 亮 → 界面文字翻黑 + 顶底栏加半透明底。
+     *
+     * 审计 M1：算色管线每次 render 都来问 —— 旧实现每次都 16x 抽样整图
+     * decodeFile。结果按 path|mtime 缓存（壁纸库文件导入后不变，mtime 兜底
+     * 覆盖极端的原地替换）。
      */
+    private static final java.util.HashMap<String, Boolean> BRIGHT_CACHE =
+            new java.util.HashMap<>();
+
     public static boolean isBright(Context ctx, String path) {
         if (path == null || path.isEmpty()) return false;
+        String key = path + "|" + new File(path).lastModified();
+        synchronized (BRIGHT_CACHE) {
+            Boolean hit = BRIGHT_CACHE.get(key);
+            if (hit != null) return hit;
+        }
+        boolean bright = computeBright(path);
+        synchronized (BRIGHT_CACHE) {
+            if (BRIGHT_CACHE.size() > 8) BRIGHT_CACHE.clear();   // 换库防涨
+            BRIGHT_CACHE.put(key, bright);
+        }
+        return bright;
+    }
+
+    private static boolean computeBright(String path) {
         try {
             BitmapFactory.Options o = new BitmapFactory.Options();
             o.inSampleSize = 16;
@@ -145,7 +192,9 @@ public final class Wallpaper {
     }
 
     private static void toast(LauncherModel m, String s) {
-        android.widget.Toast.makeText(m.context(), s,
-                android.widget.Toast.LENGTH_SHORT).show();
+        // onPicked/importVideo 都可能在后台导入线程里跑（审计 M1），toast 必须回主线程
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                android.widget.Toast.makeText(m.context(), s,
+                        android.widget.Toast.LENGTH_SHORT).show());
     }
 }

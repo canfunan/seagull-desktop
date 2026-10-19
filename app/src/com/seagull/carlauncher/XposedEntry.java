@@ -65,7 +65,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
 
     private static final String TAG = "SeagullLsp";
 
-    private static final String HOST_PACKAGE = "com.seagull.carlauncher";
+    private static final String HOST_PACKAGE = Constants.SELF_PACKAGE;
     private static final String SYSTEMUI_PACKAGE = "com.android.systemui";
     private static final String AMAP_PACKAGE = "com.autonavi.minimap";
 
@@ -1015,12 +1015,29 @@ public class XposedEntry implements IXposedHookLoadPackage {
         return ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
     }
 
-    /** SystemProperties 不在公开 SDK 里，只能反射；读失败按默认值走。 */
+    /** SystemProperties 不在公开 SDK 里，只能反射；读失败按默认值走。
+     * 审计 L5：Method 对象缓存 —— D 钩子在每个应用每次 Activity 创建时都读
+     * prop（applyOverrideConfiguration 拦截器高频路径），旧实现每次
+     * Class.forName + getMethod，反射查找本身就是几百微秒的税。 */
+    private static volatile java.lang.reflect.Method SP_GET;
+    private static volatile boolean spGetTried;
+
     private static String prop(String key, String def) {
         try {
-            Class<?> c = Class.forName("android.os.SystemProperties");
-            Object v = c.getMethod("get", String.class, String.class)
-                    .invoke(null, key, def);
+            java.lang.reflect.Method m = SP_GET;
+            if (m == null) {
+                if (spGetTried) return def;   // 上次查找已失败，别反复付学费
+                synchronized (XposedEntry.class) {
+                    if (!spGetTried) {
+                        spGetTried = true;
+                        SP_GET = Class.forName("android.os.SystemProperties")
+                                .getMethod("get", String.class, String.class);
+                    }
+                }
+                m = SP_GET;
+                if (m == null) return def;
+            }
+            Object v = m.invoke(null, key, def);
             return v instanceof String ? (String) v : def;
         } catch (Throwable t) {
             return def;

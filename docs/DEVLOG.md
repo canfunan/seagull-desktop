@@ -12,6 +12,55 @@
 
 ---
 
+## 批次 AUDIT — 全量审计 35 项修复（高危6/中风险16/低风险13）
+
+### 目标
+
+用户要求对全仓库做代码级审计（root/特权链、虚拟屏/镜像链、服务/UI 链三路深审 + 桌面核心链人工复核），
+输出审计报告后按清单逐项修复全部 35 项，每项复盘，最后出总报告并推送构建。
+
+### 改了什么
+
+高危 6 项：TouchForward 主线程 socket IO 快照化（H1）、RootMain pushEvent 写手线程化+有界队列（H2）、
+QuickBar.runFn 后台化（H3）、设置页/RootPanel 主线程 root 调用簇统一 bgTaskDialog 后台化（H4）、
+dead() 守卫全覆盖（H5）、MirrorSlot 生命周期 LIFE_LOCK 串行化（H6）。
+
+中风险 16 项：LauncherModel IO_LOCK 消 CME 丢档 + Weather 持锁（M2）、歌词配置 CFG_VER 代际化
+消 1Hz 全量 JSON 解析（M3）、歌词组件原位 setText（M4）、placeClockBox/placeWidget/IslandView
+先比较后赋值消 requestLayout 风暴（M5）、loadApps 进程缓存+包广播失效（M6）、runWatch 身份校验 +
+AtomicInteger + 30s 读超时（M7）、守护进程 GEN 代际握手（PONG 捎带 → 客户端清对账表，M8）、
+共享投影引用计数（M9）、WindowCard vd.resize 优先（M10）、包名正则放行大写（M11）、注入坐标钳制（M12）、
+快照双缓冲（M13）、armed 点按双触发修复（M14）、Surface blob 上限（M15）、su 进程强制回收（M16）。
+
+低风险 13 项：注入面白名单（L1）、cpuPct 节流（L2）、HTTP 封顶（L3）、歌词目录去重（L4）、
+XposedEntry 反射缓存（L5）、keepScreenOn 保存/恢复（L6）、能力缓存重探（L7）、RootMain 四处加固
+（L8）、更新包完整性校验（L9）、allowBackup=false（L10）、FileProvider 只读（L11）、selfReport
+去指纹（L12）、死代码/并发杂项（L13）、兼容注解（L14）、Constants 收编（L15）、QuickbarCheck
+LruCache 垫片（L16，7 项自检首次全绿）。
+
+文档：docs/FIXLIST.md（35/35 勾选+修复说明）、docs/AUDIT-REPORT.md（总报告，评分 6.5→8.5）。
+
+### 复盘
+
+做对：每批次修复后立即 --release 11 检查点（共 5 轮），三处编辑工具块匹配事故（save() 中段被吞、
+injectTouch 重复、PipBoard canResize 重复+maskAlpha 被吞）全部被编译器当场捕获并修复，未带病提交。
+
+做错/修正：编辑工具多行替换按首尾锚匹配，锚点间代码会被吞 —— 之后多行编辑必须小锚点 +
+git diff 删除行核对。M8 的 DisplayListener、M6 的 pinStatic、L12 的门控方式做了三处有据取舍，
+记录在总报告 §4。
+
+### 验证
+
+javac --release 11 全量通过；7 项自检 169 断言全绿（PrivCodec 39 / Transform 54 / Lrc 15 /
+StackList 30 / TrustedFlags 10 / DumpParse 14 / QuickbarCheck 7）。真机四类场景（触摸/部署/断链/长稳）
+待 CI 出包后验证，见总报告 §2。
+
+### 遗留
+
+真机回归是当前最大缺口；ROM 相关的私有屏行为差异依赖真机确认（降级链已完整）。
+
+---
+
 ## 批次 CI — 画中画透壁纸圆角化 + 动态壁纸 + 壁纸页时钟编辑/小组件 + Dock 替换应用
 
 ### 目标

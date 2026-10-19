@@ -34,8 +34,8 @@ public final class RootOps {
      *   0x00800000 EXCLUDE_FROM_RECENTS —— 镜像实例不进最近任务（参考版 0x18800000 同款）
      * 组合 = 0x18800000。LAUNCH_FLAGS（字符串）给 am 命令用，LAUNCH_FLAGS_INT 给守护进程用。
      */
-    public static final String LAUNCH_FLAGS = "0x18800000";
-    public static final int LAUNCH_FLAGS_INT = 0x18800000;
+    public static final String LAUNCH_FLAGS = Constants.LAUNCH_FLAGS;
+    public static final int LAUNCH_FLAGS_INT = Constants.LAUNCH_FLAGS_INT;
 
     private RootOps() {}
 
@@ -54,7 +54,19 @@ public final class RootOps {
         if (cur != null) {
             cur = cur.trim();
             if (!cur.contains(pkg)) {
-                String merged = cur.isEmpty() || "null".equals(cur) ? mine : cur + ":" + mine;
+                // 审计 L1：settings 里的现值不校验就原样拼回 —— 白写进命令行。
+                // 只保留形如 pkg/cls 的合法 ComponentName 条目，其余丢弃
+                StringBuilder merged = new StringBuilder();
+                if (!cur.isEmpty() && !"null".equals(cur)) {
+                    for (String c : cur.split(":")) {
+                        if (c.matches("[a-zA-Z0-9_.]+/[a-zA-Z0-9_.$]+")) {
+                            if (merged.length() > 0) merged.append(':');
+                            merged.append(c);
+                        }
+                    }
+                }
+                if (merged.length() > 0) merged.append(':');
+                merged.append(mine);
                 Caps.exec("settings put secure enabled_notification_listeners " + merged);
                 log.append("通知监听: 已追加\n");
             } else {
@@ -65,6 +77,8 @@ public final class RootOps {
         log.append("POST_NOTIFICATIONS: 已尝试\n");
         return log.toString();
     }
+
+    /* ---------------- 触摸回注 ---------------- */
 
     /**
      * 放开录屏 appops（镜像前置）。
@@ -88,7 +102,9 @@ public final class RootOps {
      * 返回 true 表示命令已下发成功（是否真的上去需另行 verify / ensureOnDisplay）。
      */
     public static boolean launchOnDisplay(Context ctx, String pkg, int displayId) {
-        if (pkg == null || !pkg.matches("[a-z0-9_.]+")) {
+        // 审计 M11：包名合法字符含大写（老应用有 Com.Example 形式），旧正则
+        // 把合法包全拒了。放宽到大小写 + 数字 + 下划线 + 点，仍挡注入
+        if (pkg == null || !pkg.matches("[a-zA-Z0-9_.]+")) {
             Log.w(TAG, "launchOnDisplay: 包名非法，拒绝执行: " + pkg);
             return false;
         }
@@ -212,7 +228,8 @@ public final class RootOps {
 
     /** 清空某槽时还原兼容设置，别把主屏上这个应用的行为也永久改掉。 */
     public static void resetCompat(String pkg) {
-        if (pkg == null || pkg.isEmpty()) return;
+        // 审计 L1：pkg 会拼进 root 命令行，入口统一做白名单校验
+        if (pkg == null || !pkg.matches("[a-zA-Z0-9_.]+")) return;
         String out = Caps.exec("am compat reset " + pkg);
         Log.i(TAG, "am compat reset " + pkg + " -> "
                 + (out == null ? "无回显" : out.trim()));
@@ -239,6 +256,9 @@ public final class RootOps {
             if (head.matcher(lines[i]).find()) { start = i; break; }
         }
         if (start < 0) return null;
+        // u0 前缀：车机 ROM 单用户设备，dumpsys window 的窗口键恒为
+        // "u0 pkg/..."（审计 L14 留证说明）；多用户 ROM 上这里会失配，
+        // 届时按 am get-current-user 的 userId 动态拼即可
         String winKey = "u0 " + pkg + "/";
         int[] best = null;
         long bestArea = -1;
@@ -397,9 +417,15 @@ public final class RootOps {
 
     /* ---------------- 触摸回注 ---------------- */
 
-    /** 单条静默命令（触摸注入用）。 */
+    /** 单条静默命令（触摸注入用）。
+     * 审计 L1：cmd 只可能是 tap/swipe/keyevent + 数字参数 —— 白名单正则
+     * 收死语法面，防上游坐标计算异常把杂字符拼进 root 命令行。 */
     public static boolean injectTouch(int displayId, String cmd) {
         if (displayId <= 0) return false;
+        if (cmd == null || !cmd.matches("(tap|swipe|keyevent|draganddrop) [-0-9. ]+")) {
+            Log.w(TAG, "injectTouch: 命令不合法，拒绝: " + cmd);
+            return false;
+        }
         String out = Caps.exec("input -d " + displayId + " " + cmd);
         return out != null;
     }
@@ -504,7 +530,8 @@ public final class RootOps {
      * 二者对调用方的决策一致：去冷启动。仅后台线程调用（内部 sleep + su）。
      */
     public static boolean moveExistingTask(Context ctx, String pkg, int displayId) {
-        if (pkg == null || !pkg.matches("[a-z0-9_.]+")) {
+        // 审计 M11：同 launchOnDisplay，允许大写
+        if (pkg == null || !pkg.matches("[a-zA-Z0-9_.]+")) {
             Log.w(TAG, "moveExistingTask: 包名非法 " + pkg);
             return false;
         }

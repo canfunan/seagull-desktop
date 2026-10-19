@@ -47,13 +47,16 @@ public final class TouchForward {
     private int displayId = -1;
     /** 画布→VD 的逐轴比例（vdW/画布W、vdH/画布H）。1:1 时恒 1。 */
     private float fx = 1f, fy = 1f;
-    private float downX, downY;
+    /** VD 逻辑尺寸：注入坐标钳制到 [0, vd-1]（手指滑出画布的 MOVE/UP 尾段别丢到屏外）。 */
+    private volatile int vdW = -1, vdH = -1;
+    private volatile float downX, downY;
     private long downAt;
-    private float lastX, lastY;
+    private volatile float lastX, lastY;
     private long lastAt;
     private boolean moved;
-    /** 当前手势走不走守护进程中继（每次 DOWN 时定，手势中途不换通道）。 */
-    private boolean gestureOnDaemon;
+    /** 当前手势走不走守护进程中继（每次 DOWN 时定，手势中途不换通道）。中继在
+     *  seagull-touch 线程里执行，失败回退写在那个线程 —— 必须 volatile。 */
+    private volatile boolean gestureOnDaemon;
     /** 命令通道是否见过本手势的 DOWN（守护进程半路退回来的手势没有，见 stroke）。 */
     private boolean commandDown;
 
@@ -70,6 +73,12 @@ public final class TouchForward {
         this.fy = scaleY > 0 ? scaleY : 1f;
     }
 
+    /** 中继通道的注入钳制边界（VD 逻辑尺寸）。 */
+    public void setVdBounds(int w, int h) {
+        this.vdW = w;
+        this.vdH = h;
+    }
+
     public boolean ready() { return displayId > 0; }
 
     /** 每一次 MotionEvent 都喂进来（12.1 点/滑/长按都从这里出）。 */
@@ -81,7 +90,13 @@ public final class TouchForward {
             gestureOnDaemon = PrivClient.available();
         }
         if (gestureOnDaemon) {
-            replay(e);
+            // 审计 H1：中继含 socket 往返（2s 超时 + PrivClient 类锁竞争），
+            // 绝不能在 UI 线程做 —— obtain() 快照后丢给 seagull-touch 线程，
+            // 顺序由单线程 Handler 天然保证
+            final android.view.MotionEvent snap = android.view.MotionEvent.obtain(e);
+            h.post(() -> {
+                try { replay(snap); } finally { snap.recycle(); }
+            });
             return;
         }
         stroke(e, a);
@@ -103,8 +118,8 @@ public final class TouchForward {
         float[] xs = new float[n];
         float[] ys = new float[n];
         for (int i = 0; i < n; i++) {
-            xs[i] = e.getX(i) * fx;
-            ys[i] = e.getY(i) * fy;
+            xs[i] = clampF(e.getX(i) * fx, 0, vdW - 1);
+            ys[i] = clampF(e.getY(i) * fy, 0, vdH - 1);
         }
         boolean ok = PrivClient.motion(displayId, e.getAction(), e.getDownTime(),
                 e.getEventTime(), xs, ys, n);
@@ -162,12 +177,16 @@ public final class TouchForward {
     /** 供「长按」按钮用：原地不动按 longPressMs。 */
     public void longPress(float x, float y) {
         if (PrivClient.available()) {
-            // DOWN 与 UP 同点，中间隔 longPressMs —— 目标应用判定长按的就是这段时长
-            long now = android.os.SystemClock.uptimeMillis();
-            float[] px = {x * fx}, py = {y * fy};
-            PrivClient.motion(displayId, android.view.MotionEvent.ACTION_DOWN, now, now, px, py, 1);
-            PrivClient.motion(displayId, android.view.MotionEvent.ACTION_UP, now,
-                    now + longPressMs, px, py, 1);
+            // DOWN 与 UP 同点，中间隔 longPressMs —— 目标应用判定长按的就是这段时长。
+            // 同样丢 touch 线程：两次 motion 是 socket 往返（审计 H1）
+            final float[] px = {clampF(x * fx, 0, vdW - 1)}, py = {clampF(y * fy, 0, vdH - 1)};
+            final int d = displayId;
+            h.post(() -> {
+                long now = android.os.SystemClock.uptimeMillis();
+                PrivClient.motion(d, android.view.MotionEvent.ACTION_DOWN, now, now, px, py, 1);
+                PrivClient.motion(d, android.view.MotionEvent.ACTION_UP, now,
+                        now + longPressMs, px, py, 1);
+            });
             return;
         }
         swipe(x, y, x, y, longPressMs);
@@ -185,9 +204,19 @@ public final class TouchForward {
         run(cmd);
     }
 
-    private int pxX(float v) { return Math.round(v * fx); }
+    /** 审计 M12：命令坐标同样钳到 VD 边界内（input 对越界坐标按 ROM 行为不一）。 */
+    private int pxX(float v) {
+        return Math.round(clampF(v * fx, 0, vdW - 1));
+    }
 
-    private int pxY(float v) { return Math.round(v * fy); }
+    private int pxY(float v) {
+        return Math.round(clampF(v * fy, 0, vdH - 1));
+    }
+
+    private static float clampF(float v, float lo, float hi) {
+        if (hi < lo) return v;   // VD 尺寸未知（<=0）时先不钳制，保持原比例映射
+        return v < lo ? lo : (v > hi ? hi : v);
+    }
 
     private static long clamp(long v, long lo, long hi) {
         return v < lo ? lo : (v > hi ? hi : v);

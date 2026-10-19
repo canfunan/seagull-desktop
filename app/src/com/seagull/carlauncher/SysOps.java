@@ -62,9 +62,24 @@ public final class SysOps {
         try { return Integer.parseInt(s.trim()); } catch (Throwable t) { return -1; }
     }
 
-    /** 设置屏幕常亮（车机导航时用）。 */
+    /**
+     * 设置屏幕常亮（车机导航时用）。
+     * 审计 L6：旧实现关常亮时写死 60000 —— 用户原本设的 30s/2min/永不
+     * 全被覆盖。开常亮前先把当前值存下来，关闭时还原。
+     */
+    private static volatile String savedScreenOffTimeout;
+
     public static R keepScreenOn(boolean on) {
-        return run("settings put system screen_off_timeout " + (on ? 2147483647 : 60000));
+        if (on) {
+            if (savedScreenOffTimeout == null) {
+                String cur = Caps.exec("settings get system screen_off_timeout");
+                savedScreenOffTimeout = (cur == null || cur.trim().isEmpty())
+                        ? "60000" : cur.trim();
+            }
+            return run("settings put system screen_off_timeout 2147483647");
+        }
+        String restore = savedScreenOffTimeout != null ? savedScreenOffTimeout : "60000";
+        return run("settings put system screen_off_timeout " + restore);
     }
 
     /* ---------------- 音频 ---------------- */
@@ -199,8 +214,16 @@ public final class SysOps {
     /**
      * 15.10 CPU 占用：读 /proc/stat 的两次采样差。
      * 免 root、免依赖，两行就够；拿不到（个别 ROM 禁读）就回 "—"。
+     * 审计 L2：内部 sleep(120) 采样 —— 结果 2s 缓存，顶栏/监控行高频轮询
+     * 不再每次都付 120ms 阻塞（也提示调用方放后台线程）。
      */
+    private static volatile long cpuAt;
+    private static volatile String cpuVal;
+
     public static String cpuPct() {
+        long now = System.currentTimeMillis();
+        String cached = cpuVal;
+        if (cached != null && now - cpuAt < 2000) return cached;
         long[] a = cpuStat();
         if (a == null) return "—";
         try { Thread.sleep(120); } catch (Throwable ignore) {}   // 采样间隔，太短算出来全是 0
@@ -210,7 +233,10 @@ public final class SysOps {
         long total = 0;
         for (int i = 0; i < b.length; i++) total += b[i] - a[i];
         if (total <= 0) return "—";
-        return Math.round(100f * (total - idle) / total) + "%";
+        String v = Math.round(100f * (total - idle) / total) + "%";
+        cpuVal = v;
+        cpuAt = now;
+        return v;
     }
 
     /** 返回 [idle, iowait, user, nice, system, idle, irq, softirq, steal...] */

@@ -169,10 +169,17 @@ public final class WallpaperPage extends FrameLayout {
         int bw = Math.max(0, clockBox.getMeasuredWidth());
         int bh = Math.max(0, clockBox.getMeasuredHeight());
         int left = Math.round(w * model.wallClockX - bw / 2f);
-        lp.leftMargin = clamp(left, dp(8), Math.max(dp(8), w - bw - dp(8)));
-        lp.topMargin = clamp(Math.round(h * model.wallClockY), dp(8),
+        // 审计 M5：时钟每秒 tick 都走到这里。lp 就是当前生效的 LayoutParams，
+        // 先比较后赋值：位置没变就不碰 setLayoutParams（省一整轮
+        // requestLayout + measure + layout）
+        int nl = clamp(left, dp(8), Math.max(dp(8), w - bw - dp(8)));
+        int nt = clamp(Math.round(h * model.wallClockY), dp(8),
                 Math.max(dp(8), h - bh - dp(8)));
-        clockBox.setLayoutParams(lp);
+        if (lp.leftMargin != nl || lp.topMargin != nt) {
+            lp.leftMargin = nl;
+            lp.topMargin = nt;
+            clockBox.setLayoutParams(lp);
+        }
     }
 
     private void nudgeClock(float dx, float dy) {
@@ -353,11 +360,16 @@ public final class WallpaperPage extends FrameLayout {
         int w = getWidth(), h = getHeight();
         if (w <= 0 || h <= 0) return;
         LayoutParams lp = (LayoutParams) v.getLayoutParams();
-        lp.leftMargin = clamp(Math.round(w * x - v.getMeasuredWidth() / 2f),
+        // 审计 M5：同 placeClockBox，先比较后赋值
+        int nl = clamp(Math.round(w * x - v.getMeasuredWidth() / 2f),
                 dp(8), Math.max(dp(8), w - v.getMeasuredWidth() - dp(8)));
-        lp.topMargin = clamp(Math.round(h * y), dp(8),
+        int nt = clamp(Math.round(h * y), dp(8),
                 Math.max(dp(8), h - v.getMeasuredHeight() - dp(8)));
-        v.setLayoutParams(lp);
+        if (lp.leftMargin != nl || lp.topMargin != nt) {
+            lp.leftMargin = nl;
+            lp.topMargin = nt;
+            v.setLayoutParams(lp);
+        }
     }
 
     private void nudgeWidget(View v, int id, float dx, float dy) {
@@ -481,11 +493,12 @@ public final class WallpaperPage extends FrameLayout {
                     }
                     @Override public void onLongPress(MotionEvent e) {
                         dragging = true;
+                        longPressed = true;
                         moved = false;
                         target.getParent().requestDisallowInterceptTouchEvent(true);
                     }
                 });
-        private boolean dragging, moved, pinch;
+        private boolean dragging, moved, pinch, longPressed;
         private float lx, ly, spanStart, spanLast;
 
         /** 不带缩放的构造（组件用）。 */
@@ -559,10 +572,15 @@ public final class WallpaperPage extends FrameLayout {
                         if (zoomEnd != null) zoomEnd.run();
                     }
                     if (dragging) {
-                        if (!moved && longTap != null) longTap.run();
-                        else if (moved && end != null) end.run();
+                        // 审计 M14：armed 组件快速点按 —— DOWN 即 dragging=true，
+                        // 旧实现 UP 走 longTap 弹菜单 + 300ms 后 onSingleTapConfirmed
+                        // 再触发 tap，一次点击双动作。现在 armed 快速点按只留给
+                        // onSingleTapConfirmed（tap），长按菜单看 longPressed 标记。
+                        if (moved && end != null) end.run();
+                        else if (longPressed && longTap != null) longTap.run();
                         dragging = false;
                     }
+                    longPressed = false;
                     break;
             }
             return true;

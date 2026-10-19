@@ -186,15 +186,27 @@ public final class WindowCard {
     /** 把虚拟屏的输出挂到卡片的 Surface 上（尺寸跟随卡片，等比铺满）。 */
     private void attach(Surface surface, int w, int h) {
         try {
-            detach();
             if (surface == null || !surface.isValid()) return;
+            int nw = Math.max(160, w), nh = Math.max(96, h);
+            // 审计 M10：拖拽改尺寸每帧触发 surfaceChanged —— 旧实现每次都
+            // release + createVirtualDisplay（系统侧建屏开销大、画面闪烁）。
+            // 先走 vd.resize 原地改尺寸，失败再整建兜底。
+            if (vd != null) {
+                try {
+                    vd.resize(nw, nh, ctx.getResources().getDisplayMetrics().densityDpi);
+                    return;
+                } catch (Throwable t) {
+                    Log.w(TAG, "vd.resize 失败，重建虚拟屏: " + t);
+                    detach();
+                }
+            }
             DisplayManager dm = (DisplayManager) ctx.getSystemService(Context.DISPLAY_SERVICE);
-            vd = dm.createVirtualDisplay("seagull-card", Math.max(160, w), Math.max(96, h),
+            vd = dm.createVirtualDisplay("seagull-card", nw, nh,
                     ctx.getResources().getDisplayMetrics().densityDpi,
                     surface, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     null, null);
             Log.i(TAG, "镜像虚拟屏 id=" + (vd != null ? vd.getDisplay().getDisplayId() : -1)
-                    + " " + w + "x" + h);
+                    + " " + nw + "x" + nh);
         } catch (Throwable t) {
             Log.e(TAG, "attach 失败", t);
         }

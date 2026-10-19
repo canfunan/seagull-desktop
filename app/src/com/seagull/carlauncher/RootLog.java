@@ -25,6 +25,7 @@ public final class RootLog {
 
     public static final String PATH = "/data/local/tmp/seagull-root.log";
     private static final long MAX_BYTES = 256 * 1024;
+    private static boolean chmodDone;
     private static final SimpleDateFormat FMT =
             new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US);
 
@@ -44,6 +45,15 @@ public final class RootLog {
         else android.util.Log.i(tag, msg);
         File f = new File(PATH);
         try {
+            if (chmodDone) { /* 已收权 */ }
+            else {
+                // 审计 L8：/data/local/tmp 默认 0644 = 任意 shell 可读。
+                // 日志里有包名/窗口信息，收成 600 只留 root 和本 uid
+                chmodDone = true;
+                try {
+                    Runtime.getRuntime().exec(new String[]{"chmod", "600", PATH}).waitFor();
+                } catch (Throwable ignore) { }
+            }
             if (f.length() > MAX_BYTES) rotate(f);
             try (BufferedWriter out = new BufferedWriter(new FileWriter(f, true))) {
                 out.append(FMT.format(new Date())).append(' ')

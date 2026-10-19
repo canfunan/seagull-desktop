@@ -95,8 +95,10 @@ public final class MirrorSlot implements CanvasSource {
     }
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    /** 触摸转发交给 TouchForward（跟手/防误滑/长按/排障都在里面）。 */
-    private TouchForward touch;
+    /** 触摸转发交给 TouchForward（跟手/防误滑/长按/排障都在里面）。
+     * 审计 L13：volatile —— touchFor() 的 DCL 读路径在触摸主线程，
+     * 无 volatile 时另一线程的写入可能对本线程不可见（DCL 经典坑）。 */
+    private volatile TouchForward touch;
 
     /**
      * 懒初始化必须双检加锁：部署后台线程（deploy）与触摸主线程（onTouch）两条
@@ -165,6 +167,18 @@ public final class MirrorSlot implements CanvasSource {
 
     private static final java.util.LinkedHashSet<Integer> ACTIVE = new java.util.LinkedHashSet<>();
 
+    static {
+        // 审计 M8：守护进程自退出后被 su 重启（gen 变化）时，它 HELD 表里的屏
+        // 全没了 —— 客户端这边记的 displayId 全是幽灵，触摸路由和「投到车机屏」
+        // 都会拿着死 id 空转。这里清对账表；各 slot 自身的 displayId 等下次
+        // deploy() 重建时自然换成新值。
+        PrivClient.onRespawn = () -> {
+            int n;
+            synchronized (MirrorSlot.class) { n = ACTIVE.size(); ACTIVE.clear(); }
+            if (n > 0) Log.w(TAG, "守护进程重启，已清 " + n + " 个失效 displayId 记账");
+        };
+    }
+
     private static synchronized void register(int d) { if (d > 0) ACTIVE.add(d); }
     private static synchronized void unregister(int d) { ACTIVE.remove(d); }
     public static synchronized boolean hasMirrorDisplay() { return !ACTIVE.isEmpty(); }
@@ -206,6 +220,19 @@ public final class MirrorSlot implements CanvasSource {
      * 手机桌面镜像进画中画，正是"画中画里看到的是桌面而不是应用"的来源。
      */
     public boolean deploy(MediaProjection mp, String pkg, Surface surface, int w, int h, int dpi) {
+        // 审计 H6：deploy/detach/teardown 来自不同线程（PipBoard 后台部署线程、
+        // UI 线程、surface 回调），裸并发会交叉改写 vd/displayId/rootBased 等
+        // 生命周期字段（A 槽 deploy 到一半 B 线程 teardown → 半成品状态）。
+        // LIFE_LOCK 把生命周期操作整体串行化：teardown 要等 deploy 落地（最多
+        // 一次 su 往返），换来的是状态永远一致。
+        synchronized (LIFE_LOCK) {
+            return deployLocked(mp, pkg, surface, w, h, dpi);
+        }
+    }
+
+    private final Object LIFE_LOCK = new Object();
+
+    private boolean deployLocked(MediaProjection mp, String pkg, Surface surface, int w, int h, int dpi) {
         // 【批次 AE·黑屏根因修复】surface 为 null（画布 GONE / 布局还没跑）时：
         //   · VD 还活着且包没换 → 什么都不做直接返回。VD 一拆，屏上的任务跟着被
         //     销毁 —— 这正是「进音乐杀高德 / 进高德杀音乐 / 返回桌面画布黑屏」的
@@ -298,7 +325,7 @@ public final class MirrorSlot implements CanvasSource {
 
         teardownVd();
         lastPkg = pkg;
-        projection = mp;
+        setProjection(mp);
         needsProjection = false;
         trusted = false;
         mode = "";
@@ -317,7 +344,7 @@ public final class MirrorSlot implements CanvasSource {
                 rootBased = true;
                 trusted = rc.trusted;
                 mode = "root屏";
-                projection = null;   // root 屏与投影无关
+                setProjection(null);   // root 屏与投影无关（按引用计数妥善处置旧会话）
                 displayId = rc.displayId;
                 vdW = w;
                 vdH = h;
@@ -347,7 +374,7 @@ public final class MirrorSlot implements CanvasSource {
         if (made != null) {
             vd = made;
             mode = "直建(flags=0)";
-            projection = null;   // 私有屏与投影无关
+            setProjection(null);   // 私有屏与投影无关
             Log.i(TAG, "[" + name + "] 私有屏直建成功 flags=0 " + w + "x" + h);
         } else {
             made = createTrustedVd(w, h, dpi, surface);
@@ -355,7 +382,7 @@ public final class MirrorSlot implements CanvasSource {
                 vd = made;
                 trusted = true;
                 mode = "TRUSTED";
-                projection = null;   // TRUSTED 屏不靠 MediaProjection
+                setProjection(null);   // TRUSTED 屏不靠 MediaProjection
                 Log.i(TAG, "[" + name + "] TRUSTED 虚拟屏建成 " + w + "x" + h);
             } else {
                 // 兜底：MediaProjection 路径（需要录屏授权 token）
@@ -803,7 +830,23 @@ public final class MirrorSlot implements CanvasSource {
     /**
      * 拉最新一帧快照（PipBoard 主线程定时调）。无新帧返回 null（ImageView 保持旧图）。
      * rowStride 与 w*4 不一致（行对齐 padding）时按整行建图再裁剪，一次 copy 无逐像素循环。
+     *
+     * 审计 M13：快照泵 600ms 一拍，960×540 ARGB 一帧约 2MB —— 旧实现每拍 new
+     * Bitmap，~3.3MB/s 的分配压力全喂给 GC（车机低端内存上就是周期性卡顿）。
+     * 改双缓冲轮替复用：UI 显示 0 号缓冲时下一帧写 1 号，再下一帧才覆写 0 号
+     * （此时 ImageView 已切到 1 号）。PipBoard 侧只 setImageBitmap 不 recycle，
+     * 与该模式兼容。
      */
+    private Bitmap snapBuf0, snapBuf1;
+    private int snapBufIdx;
+
+    private static Bitmap snapEnsure(Bitmap old, int rw, int h) {
+        if (old != null && !old.isRecycled()
+                && old.getWidth() == rw && old.getHeight() == h) return old;
+        try { return Bitmap.createBitmap(rw, h, Bitmap.Config.ARGB_8888); }
+        catch (Throwable t) { return null; }
+    }
+
     public Bitmap acquireSnapshot() {
         ImageReader r = snapReader;
         if (r == null || !snapMode) return null;
@@ -816,9 +859,20 @@ public final class MirrorSlot implements CanvasSource {
             buf.rewind();
             int rowStride = p.getRowStride();
             int w = img.getWidth(), h = img.getHeight();
-            Bitmap b = Bitmap.createBitmap(rowStride / 4, h, Bitmap.Config.ARGB_8888);
+            int rw = rowStride / 4;
+            if (rw <= 0 || h <= 0 || w <= 0) return null;
+            Bitmap b;
+            if ((snapBufIdx++ & 1) == 0) {
+                b = snapBuf0 = snapEnsure(snapBuf0, rw, h);
+            } else {
+                b = snapBuf1 = snapEnsure(snapBuf1, rw, h);
+            }
+            if (b == null) return null;
             b.copyPixelsFromBuffer(buf);
-            if (rowStride / 4 != w) b = Bitmap.createBitmap(b, 0, 0, w, h);
+            if (rw != w) {
+                try { return Bitmap.createBitmap(b, 0, 0, w, h); }
+                catch (Throwable t) { return b; }
+            }
             return b;
         } catch (Throwable t) {
             Log.w(TAG, "[" + name + "] 快照拉帧失败: " + t);
@@ -835,6 +889,9 @@ public final class MirrorSlot implements CanvasSource {
         ImageReader r = snapReader;
         snapReader = null;
         liveSurface = null;
+        // 审计 M13：缓冲位图只断引用（UI 可能还持有其中一块在显示），不 recycle
+        snapBuf0 = null;
+        snapBuf1 = null;
         if (r != null) {
             try { r.close(); } catch (Throwable ignore) {}
         }
@@ -856,6 +913,7 @@ public final class MirrorSlot implements CanvasSource {
         float sx = (vdW > 0 && svW > 0) ? vdW / (float) svW : transformer.scaleX();
         float sy = (vdH > 0 && svH > 0) ? vdH / (float) svH : transformer.scaleY();
         touchFor().setDisplay(displayId, sx, sy);
+        touchFor().setVdBounds(vdW, vdH);
         touchFor().feed(e);
     }
 
@@ -863,17 +921,23 @@ public final class MirrorSlot implements CanvasSource {
 
     /** surface 被销毁：只断输出，保留 VD 与目标任务栈，下次 surface 回来再挂。 */
     public void detachSurface() {
-        if (rootBased && displayId > 0) {
-            final int d = displayId;
-            rootExecAsync(() -> PrivClient.surface(d, null));
+        synchronized (LIFE_LOCK) {
+            if (rootBased && displayId > 0) {
+                final int d = displayId;
+                rootExecAsync(() -> PrivClient.surface(d, null));
+                ready = false;
+                return;
+            }
+            try { if (vd != null) vd.setSurface(null); } catch (Throwable ignore) {}
             ready = false;
-            return;
         }
-        try { if (vd != null) vd.setSurface(null); } catch (Throwable ignore) {}
-        ready = false;
     }
 
     public void teardownVd() {
+        synchronized (LIFE_LOCK) { teardownVdLocked(); }
+    }
+
+    private void teardownVdLocked() {
         final int d = displayId;
         final boolean wasRoot = rootBased;
         ready = false;
@@ -891,19 +955,66 @@ public final class MirrorSlot implements CanvasSource {
             try { if (vd != null) vd.release(); } catch (Throwable ignore) {}
         }
         vd = null;
-        // 每槽一份独立投影会话（批次 Q）：VD 拆了就把自己那份停掉。
-        // 早期两槽共用一份会话，这里只能再等等——现在没这个问题了。
+        // 批次 Q 本意「每槽一份独立投影会话」，但 PipBoard 拿不到第二份授权
+        // 时仍会让两槽共用同一个 MediaProjection（PipBoard.java 降级分支）。
+        // 审计 M9：共用实例被一槽 stop 会连带杀掉另一槽的流（画面全黑）。
+        // 引用计数判定：独占才 stop，共享的 stop 责任归 PipBoard.stopProjections()。
         if (projection != null) {
-            try { projection.stop(); } catch (Throwable ignore) {}
+            MediaProjection p = projection;
             projection = null;
+            if (projRelease(p)) {
+                try { p.stop(); } catch (Throwable ignore) {}
+            } else {
+                Log.i(TAG, "[" + name + "] 共享投影会话，跳过 stop（由 stopProjections 统一收）");
+            }
         }
         displayId = -1;
         lastSig = "";
         lastPkg = "";
     }
 
+    /** 审计 M9：共享投影会话引用计数（IdentityHashMap，同一授权降级复用时 >1）。 */
+    private static final java.util.IdentityHashMap<MediaProjection, int[]> PROJ_REFS =
+            new java.util.IdentityHashMap<>();
+
+    /** 记一次槽对本投影的持有；本槽独占返回 true。 */
+    private static boolean projAcquire(MediaProjection mp) {
+        if (mp == null) return true;
+        synchronized (PROJ_REFS) {
+            int[] c = PROJ_REFS.get(mp);
+            if (c == null) { PROJ_REFS.put(mp, new int[]{1}); return true; }
+            c[0]++;
+            return false;
+        }
+    }
+
+    /** 释放一次槽的持有；引用归零（或未记账）返回 true = 允许 stop。 */
+    private static boolean projRelease(MediaProjection mp) {
+        if (mp == null) return true;
+        synchronized (PROJ_REFS) {
+            int[] c = PROJ_REFS.get(mp);
+            if (c == null) return true;
+            if (--c[0] <= 0) { PROJ_REFS.remove(mp); return true; }
+            return false;
+        }
+    }
+
+    /** 槽内统一换投影：旧引用按引用计数处置，新引用记账。 */
+    private void setProjection(MediaProjection mp) {
+        MediaProjection old = projection;
+        projection = mp;
+        if (mp != old) {
+            projAcquire(mp);
+            if (projRelease(old)) {
+                try { if (old != null) old.stop(); } catch (Throwable ignore) {}
+            }
+        }
+    }
+
     public void teardown() {
-        teardownVd();
+        synchronized (LIFE_LOCK) {
+            teardownVdLocked();
+        }
         if (touch != null) {
             touch.shutdown();
             touch = null;

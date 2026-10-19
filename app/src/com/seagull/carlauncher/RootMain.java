@@ -50,16 +50,60 @@ public final class RootMain {
     private static final String TAG = "SeagullPrivd";
     private static final String SOCKET = PrivClient.SOCKET;
     private static final long IDLE_EXIT_MS = 60_000;
+    /** 审计 M8：守护进程实例代际 —— 每次进程启动不同，随 STATE 下发给客户端对账 */
+    private static final long GEN = System.currentTimeMillis();
 
     private static volatile long lastActive = System.currentTimeMillis();
-    private static volatile int clients;
+    /** 审计 M7：在途客户端数，accept 线程 ++ / serve 线程 --，原子化 */
+    private static final java.util.concurrent.atomic.AtomicInteger clients =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     /** 守护进程持有（root 建）的虚拟屏：displayId → VirtualDisplay。 */
     private static final java.util.Map<Integer, android.hardware.display.VirtualDisplay> HELD =
             new java.util.concurrent.ConcurrentHashMap<>();
     /** 事件订阅连接（WATCH on 的会话）。写入方：pushEvent（多线程）。 */
-    private static final java.util.List<BufferedWriter> SUBSCRIBERS =
+    private static final java.util.List<Subscriber> SUBSCRIBERS =
             java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+    /**
+     * 审计 H2：订阅写手线程化。旧实现 pushEvent 在调用方线程（TaskWatcher /
+     * LaunchController）里直接 write——某一订阅者 socket 缓冲写满（对端假死、
+     * WiFi 半开）就整条事件链路卡死，连带应用启动都跟着挂。现在每个订阅连接
+     * 一条写手线程 + 有界队列（64 条）：pushEvent 只做 offer（满即丢，事件是
+     * 通知语义，丢旧的可接受），写阻塞/失败只影响自己那条连接。
+     */
+    private static final class Subscriber {
+        final BufferedWriter w;
+        final java.util.concurrent.ArrayBlockingQueue<String> q =
+                new java.util.concurrent.ArrayBlockingQueue<>(64);
+        final Thread writer;
+        volatile boolean dead;
+        int dropped;
+
+        Subscriber(BufferedWriter w) {
+            this.w = w;
+            writer = new Thread(() -> {
+                while (!dead) {
+                    try {
+                        String line = q.poll(5, java.util.concurrent.TimeUnit.SECONDS);
+                        if (line == null) continue;
+                        synchronized (w) {
+                            w.write(line);
+                            w.write('\n');
+                            w.flush();
+                        }
+                    } catch (InterruptedException ie) {
+                        return;
+                    } catch (Throwable t) {
+                        dead = true;
+                        return;
+                    }
+                }
+            }, "seagull-evt-writer");
+            writer.setDaemon(true);
+            writer.start();
+        }
+    }
     /** ActivityThread.getSystemContext() 缓存：root 上下文（建屏/装控制器都要 Context）。 */
     private static volatile android.content.Context sysCtx;
 
@@ -97,6 +141,10 @@ public final class RootMain {
             return;
         }
         startWatchdog();
+        // 审计 L8：selfUid 在守护进程刚起来时算好（反射或 dumpsys 一次），
+        // 别等第一个客户端来了才在 accept 线程上 fork dumpsys；
+        // dumpsys 子进程用完即销毁、stderr 重定向避免挂在无读者的管道上
+        try { selfUid(); } catch (Throwable ignore) {}
         Log.i(TAG, "listening on abstract socket " + SOCKET);
         while (true) {
             LocalSocket c = null;
@@ -119,7 +167,7 @@ public final class RootMain {
                     continue;
                 }
                 lastActive = System.currentTimeMillis();
-                clients++;
+                clients.incrementAndGet();
                 final LocalSocket cc = c;
                 Thread t = new Thread(() -> serve(cc), "seagull-privd-client");
                 t.setDaemon(true);
@@ -127,6 +175,9 @@ public final class RootMain {
             } catch (Throwable t) {
                 Log.w(TAG, "accept 失败: " + t);
                 if (c != null) { try { c.close(); } catch (Throwable ignore) {} }
+                // 审计 L8：accept 持续异常（fd 打光/SELinux 抽风）时退避，
+                // 不然死循环刷 logcat 把整台机的日志盘刷爆
+                try { Thread.sleep(200); } catch (InterruptedException ie) { return; }
             }
         }
     }
@@ -157,7 +208,7 @@ public final class RootMain {
         try {
             java.lang.reflect.Method m = android.os.Process.class
                     .getMethod("getUidForName", String.class);
-            Object v = m.invoke(null, "com.seagull.carlauncher");
+            Object v = m.invoke(null, Constants.SELF_PACKAGE);
             if (v instanceof Integer) sSelfUid = (Integer) v;
         } catch (Throwable t) {
             Log.w(TAG, "selfUid 反射失败，回落 dumpsys: " + t);
@@ -165,7 +216,7 @@ public final class RootMain {
         if (sSelfUid > 0) return sSelfUid;
         try {
             java.lang.Process p = Runtime.getRuntime().exec(
-                    new String[]{"dumpsys", "package", "com.seagull.carlauncher"});
+                    new String[]{"dumpsys", "package", Constants.SELF_PACKAGE});
             java.io.BufferedReader r = new java.io.BufferedReader(
                     new java.io.InputStreamReader(p.getInputStream()));
             String line;
@@ -178,6 +229,7 @@ public final class RootMain {
                 if (k > j) { sSelfUid = Integer.parseInt(line.substring(j, k)); break; }
             }
             r.close();
+            p.destroy();   // 审计 L8：读完即杀，别留僵尸
         } catch (Throwable t) {
             Log.w(TAG, "selfUid dumpsys 也失败: " + t);
         }
@@ -188,12 +240,16 @@ public final class RootMain {
 
     private static void serve(LocalSocket c) {
         boolean subscribed = false;
+        Subscriber sub = null;
         BufferedWriter out = null;
         try (LocalSocket s = c;
              BufferedReader in = new BufferedReader(
                      new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8))) {
             out = new BufferedWriter(
                     new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8));
+            // 审计 M7：30s 无任何字节（含 PING）即断 —— 对端进程被杀/断电残留
+            // 的死连接最多占位半分钟，不再永久挂着顶掉空闲退出
+            s.setSoTimeout(30_000);
             String line;
             while ((line = readLineSafe(in)) != null) {
                 lastActive = System.currentTimeMillis();
@@ -209,13 +265,16 @@ public final class RootMain {
                 if (PrivCodec.OP_WATCH.equals(r.op)) {
                     boolean on = r.args.length > 0 && "on".equals(r.args[0]);
                     if (on && !subscribed) {
-                        SUBSCRIBERS.add(out);
+                        sub = new Subscriber(out);
+                        SUBSCRIBERS.add(sub);
                         subscribed = true;
                         // 有订阅者才挂监听：事件没人听就不白注册
                         TaskWatcher.start();
                         RootLog.i(TAG, "订阅连接上线（共 " + SUBSCRIBERS.size() + "）");
                     } else if (!on && subscribed) {
-                        SUBSCRIBERS.remove(out);
+                        if (sub != null) { sub.dead = true; sub.writer.interrupt(); }
+                        SUBSCRIBERS.remove(sub);
+                        sub = null;
                         subscribed = false;
                         if (SUBSCRIBERS.isEmpty()) TaskWatcher.stop();
                     }
@@ -230,14 +289,17 @@ public final class RootMain {
                 out.write(resp);
                 out.flush();
             }
+        } catch (java.net.SocketTimeoutException stale) {
+            // 审计 M7：读超时 = 对端假死，按断开处理（不再当异常刷日志）
         } catch (IOException eof) {
             // 客户端断开：正常路径
         } catch (Throwable t) {
             Log.w(TAG, "client 会话异常: " + t);
         } finally {
-            clients--;
+            clients.decrementAndGet();
             // 订阅写手必须摘干净：残留的话 pushEvent 每轮都对死连接抛异常再摘一次
-            if (out != null) SUBSCRIBERS.remove(out);
+            if (sub != null) { sub.dead = true; sub.writer.interrupt(); }
+            if (out != null) SUBSCRIBERS.remove(sub);
             if (subscribed && SUBSCRIBERS.isEmpty()) TaskWatcher.stop();
             lastActive = System.currentTimeMillis();
         }
@@ -245,21 +307,23 @@ public final class RootMain {
 
     /**
      * 事件推送（多线程调用：TaskWatcher / LaunchController）。
-     * 写坏一条不影响的：连接死掉就摘掉，其他订阅者照常。
+     * 审计 H2：快照后逐个 offer，不在锁内做任何 IO；死/满队列的订阅者
+     * 顺手摘掉，写阻塞只影响它自己的写手线程。
      */
     public static void pushEvent(String line) {
+        Object[] snap;
         synchronized (SUBSCRIBERS) {
-            for (int i = SUBSCRIBERS.size() - 1; i >= 0; i--) {
-                BufferedWriter w = SUBSCRIBERS.get(i);
-                try {
-                    synchronized (w) {
-                        w.write(line);
-                        w.write('\n');
-                        w.flush();
-                    }
-                } catch (Throwable dead) {
-                    SUBSCRIBERS.remove(i);
-                }
+            snap = SUBSCRIBERS.toArray();
+        }
+        for (Object o : snap) {
+            Subscriber s = (Subscriber) o;
+            if (s.dead) { SUBSCRIBERS.remove(s); continue; }
+            if (!s.q.offer(line)) {
+                // 队列满 = 对端消费不动：丢这条事件（通知语义可容忍），
+                // 连续满三次视作假死摘除，避免长期空转
+                if (++s.dropped >= 3) { s.dead = true; SUBSCRIBERS.remove(s); }
+            } else {
+                s.dropped = 0;
             }
         }
     }
@@ -268,7 +332,8 @@ public final class RootMain {
         try {
             switch (r.op) {
                 case PrivCodec.OP_PING:
-                    return "pong";
+                    // 审计 M8：pong 捎带代际，客户端发现 gen 变了就知道 held 屏全失效
+                    return "pong;gen=" + Long.toHexString(GEN);
                 case PrivCodec.OP_LAUNCH:
                     return doLaunch(r.args);
                 case PrivCodec.OP_MOTION:
@@ -594,6 +659,8 @@ public final class RootMain {
         int h = Integer.parseInt(a[1]);
         int dpi = Integer.parseInt(a[2]);
         if (w <= 0 || h <= 0 || dpi <= 0) return "err:bad size " + w + "x" + h + "@" + dpi;
+        // 审计 L8：上限钳制，防异常/恶意请求把 root 进程内存打爆
+        if (w > 4096 || h > 4096 || dpi > 1000) return "err:size 超限 " + w + "x" + h + "@" + dpi;
         android.content.Context ctx = sysCtx();
         android.hardware.display.DisplayManager dm =
                 (android.hardware.display.DisplayManager)
@@ -661,6 +728,9 @@ public final class RootMain {
         } catch (IllegalArgumentException bad) {
             return "err:bad base64";
         }
+        // 审计 M15：Surface Parcel 实际只有几百字节，64KB 行协议已天然封顶；
+        // 这里再给显式上限，防止畸形大 blob 在 root 进程里白耗内存
+        if (raw.length > 64 * 1024) return "err:surface blob 过大 " + raw.length;
         android.os.Parcel p = null;
         try {
             p = android.os.Parcel.obtain();
@@ -715,9 +785,13 @@ public final class RootMain {
     }
 
     private static String doState() {
+        // 审计 M8：gen 随 STATE 下发 —— 客户端用它做代际握手，
+        // 守护进程自退出后被 su 重启（gen 变化）时，客户端据此知道
+        // HELD 里的虚拟屏全没了，避免拿着陈旧 displayId 继续画
         return "watch=" + (TaskWatcher.isRegistered() ? 1 : 0)
                 + " held=" + HELD.keySet()
                 + " subs=" + SUBSCRIBERS.size()
+                + " gen=" + Long.toHexString(GEN)
                 + " " + LaunchController.stateLine();
     }
 
@@ -776,7 +850,7 @@ public final class RootMain {
                     return;
                 }
                 long idle = System.currentTimeMillis() - lastActive;
-                if (clients <= 0 && idle > IDLE_EXIT_MS) {
+                if (clients.get() <= 0 && idle > IDLE_EXIT_MS) {
                     Log.i(TAG, "无客户端 " + (idle / 1000) + "s，自退出");
                     System.exit(0);
                 }

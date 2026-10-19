@@ -23,6 +23,8 @@ public class RootPanelActivity extends BaseActivity {
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         setContentView(build());
+        // 审计 L7：能力缓存重探（首次 su 被拒绝后给重试入口），顺带预热 hasRoot
+        new Thread(() -> Caps.resetCapabilities(), "seagull-capreset").start();
         if (getIntent() != null && getIntent().getBooleanExtra("selftest", false)) SelfTest.run(this);
         if (getIntent() != null && getIntent().getBooleanExtra("l3test", false)) SelfTestL3.run(this);
     }
@@ -94,10 +96,18 @@ public class RootPanelActivity extends BaseActivity {
             runOnUiThread(() -> warn.setVisibility(root ? View.GONE : View.VISIBLE));
         }).start();
 
-        /* 亮度 */
+        /* 亮度 —— 审计 H4：getBrightness 是 su fork，先画容器后台读回填 */
         col.addView(section("屏幕亮度（0-255）"));
-        col.addView(slider(1, 255, Math.max(1, SysOps.getBrightness()), v ->
-                op("亮度=" + v, () -> SysOps.setBrightness(v))));
+        final LinearLayout brightSlot = new LinearLayout(this);
+        brightSlot.setOrientation(LinearLayout.VERTICAL);
+        col.addView(brightSlot);
+        new Thread(() -> {
+            int b = SysOps.getBrightness();
+            final int v = b < 0 ? 128 : Math.max(1, Math.min(255, b));
+            if (isFinishing() || isDestroyed()) return;
+            runOnUiThread(() -> brightSlot.addView(slider(1, 255, v, val ->
+                    op("亮度=" + val, () -> SysOps.setBrightness(val)))));
+        }, "seagull-bright").start();
 
         /* 音量 */
         col.addView(section("媒体音量（0-15）"));

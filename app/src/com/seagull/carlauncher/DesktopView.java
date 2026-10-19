@@ -7,8 +7,7 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
-import android.os.Handler;
-import android.os.Looper;
+
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -44,12 +43,15 @@ public class DesktopView extends FrameLayout {
     }
 
     private final Host host;
-    private final Handler ui = new Handler(Looper.getMainLooper());
+    // 审计 L13：原 ui Handler 从未使用（死代码），连同 import 一起清掉
 
     private LinearLayout mainCol, widgetStrip;
     private GridLayout grid;
     private LinearLayout dockBar;
     private TextView dockHandle;
+    /** 审计 M4：歌词组件文本位（makeWidget(5) 登记时有效），1Hz 原位刷新用 */
+    private TextView lyricBig, lyricSmall;
+    private String[] lyricLinesCache;
     private FrameLayout dragLayer;
     /* 拖拽高亮的复用对象：dispatchDraw 逐帧跑，旧实现每帧 new Rect/int[2]（批次 V） */
     private final android.graphics.Rect hiRect = new android.graphics.Rect();
@@ -90,6 +92,21 @@ public class DesktopView extends FrameLayout {
      */
     private final Lyrics.Sink lyricSink = new Lyrics.Sink() {
         @Override public void onLyric(String[] w, String t, String a) {
+            // 审计 M4：1Hz 歌词帧只原位 setText；旧实现每次整条组件条
+            // removeAllViews 重建（构造器路径、手势回调、时钟基线全打断）。
+            // 结构变化（加/拿组件）仍走 renderWidgets。
+            if (lyricBig != null && lyricBig.isAttachedToWindow()) {
+                if (lyricLinesCache == null || lyricLinesCache.length != w.length
+                        || !java.util.Arrays.equals(lyricLinesCache, w)) {
+                    lyricLinesCache = w;
+                    lyricBig.setText(w.length == 0 ? "未在播放" : w[0]);
+                    if (lyricSmall != null) {
+                        lyricSmall.setText(w.length > 1 && !w[1].isEmpty()
+                                ? w[1] : Lyrics.nowPlaying());
+                    }
+                }
+                return;
+            }
             LauncherModel m = model();
             if (m != null && m.hasWidget(5)) renderWidgets(m);
         }
@@ -497,6 +514,10 @@ public class DesktopView extends FrameLayout {
                 big.setTextSize(13);
                 small.setText(w.length > 1 && !w[1].isEmpty() ? w[1] : Lyrics.nowPlaying());
                 small.setTextSize(11);
+                // 审计 M4：登记歌词组件的两个文本位，1Hz 歌词帧原位刷新
+                lyricBig = big;
+                lyricSmall = small;
+                lyricLinesCache = w;
                 break;
             default: big.setText("—"); small.setText("空"); break;
         }
@@ -784,10 +805,11 @@ public class DesktopView extends FrameLayout {
 
     private View scan(ViewGroup g, float rawX, float rawY, View cur) {
         if (g == null || g.getVisibility() != VISIBLE) return cur;
+        // 审计 L13：拖拽 MOVE 每帧遍历全部子视图，int[2] 提到循环外复用
+        int[] loc = new int[2];
         for (int i = 0; i < g.getChildCount(); i++) {
             View c = g.getChildAt(i);
             if (c == dragView || c.getTag() == null) continue;
-            int[] loc = new int[2];
             c.getLocationOnScreen(loc);
             if (rawX >= loc[0] && rawX <= loc[0] + c.getWidth()
                     && rawY >= loc[1] && rawY <= loc[1] + c.getHeight()) {

@@ -207,7 +207,8 @@ public final class PipBoard extends LinearLayout {
     /** snapOn[w] = 槽 w 正处于快照预览态（分屏 + frozen 槽）。 */
     private final boolean[] snapOn = {false, false, false};
     private boolean snapPumping;
-    private static final Map<String, Boolean> RESIZE_CACHE = new HashMap<>();
+    /** 审计 L13：读多写少的判定缓存，换 ConcurrentHashMap 免去每次过全锁 */
+    private static final Map<String, Boolean> RESIZE_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** 环境光三档得出的遮罩透明度。 */
     private float maskAlpha = MASK_MID;
@@ -850,41 +851,39 @@ public final class PipBoard extends LinearLayout {
      * 可缩放走老路 —— 绝不破坏现有应用的现状。
      */
     private static boolean canResize(Context c, String pkg) {
-        synchronized (RESIZE_CACHE) {
-            Boolean hit = RESIZE_CACHE.get(pkg);
-            if (hit != null) return hit;
-            boolean can = true;
-            try {
-                PackageManager pm = c.getPackageManager();
-                Intent i = pm.getLaunchIntentForPackage(pkg);
-                if (i != null) {
-                    ActivityInfo ai = pm.getActivityInfo(i.getComponent(), 0);
-                    // ApplicationInfo.resizeableActivity 未进编译 jar（隐藏字段）→ 反射取，
-                    // 拿不到按「未声明」走（targetSdk≥24 默认可缩放，别冤枉正常应用）
-                    boolean declaredFalse = true;
-                    try {
-                        java.lang.reflect.Field f = android.content.pm.ApplicationInfo.class
-                                .getField("resizeableActivity");
-                        Object v = f.get(ai != null ? ai.applicationInfo : null);
-                        if (v instanceof Boolean && (Boolean) v) declaredFalse = false;
-                    } catch (Throwable reflectionMiss) {
-                        declaredFalse = false;   // 字段不存在 → 无法判定 → 走老路
-                    }
-                    if (declaredFalse) {
-                        int cc = ai != null ? ai.configChanges : 0;
-                        can = (cc & ActivityInfo.CONFIG_ORIENTATION) != 0
-                                && (cc & ActivityInfo.CONFIG_SCREEN_SIZE) != 0
-                                && (cc & ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE) != 0;
-                    }
+        Boolean hit = RESIZE_CACHE.get(pkg);
+        if (hit != null) return hit;
+        boolean can = true;
+        try {
+            PackageManager pm = c.getPackageManager();
+            Intent i = pm.getLaunchIntentForPackage(pkg);
+            if (i != null) {
+                ActivityInfo ai = pm.getActivityInfo(i.getComponent(), 0);
+                // ApplicationInfo.resizeableActivity 未进编译 jar（隐藏字段）→ 反射取，
+                // 拿不到按「未声明」走（targetSdk≥24 默认可缩放，别冤枉正常应用）
+                boolean declaredFalse = true;
+                try {
+                    java.lang.reflect.Field f = android.content.pm.ApplicationInfo.class
+                            .getField("resizeableActivity");
+                    Object v = f.get(ai != null ? ai.applicationInfo : null);
+                    if (v instanceof Boolean && (Boolean) v) declaredFalse = false;
+                } catch (Throwable reflectionMiss) {
+                    declaredFalse = false;   // 字段不存在 → 无法判定 → 走老路
                 }
-            } catch (Throwable t) {
-                can = true;   // 查询失败宁可走老路
+                if (declaredFalse) {
+                    int cc = ai != null ? ai.configChanges : 0;
+                    can = (cc & ActivityInfo.CONFIG_ORIENTATION) != 0
+                            && (cc & ActivityInfo.CONFIG_SCREEN_SIZE) != 0
+                            && (cc & ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE) != 0;
+                }
             }
-            RESIZE_CACHE.put(pkg, can);
-            Log.i(TAG, "canResize " + pkg + " = " + can
-                    + (can ? "" : " → 冻结 VD 尺寸 + 快照预览（防重建回首页）"));
-            return can;
+        } catch (Throwable t) {
+            can = true;   // 查询失败宁可走老路
         }
+        RESIZE_CACHE.put(pkg, can);
+        Log.i(TAG, "canResize " + pkg + " = " + can
+                + (can ? "" : " → 冻结 VD 尺寸 + 快照预览（防重建回首页）"));
+        return can;
     }
 
     /**

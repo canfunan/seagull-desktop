@@ -175,7 +175,11 @@ public class GardenActivity extends BaseActivity {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
-    @Override public void onBackPressed() {
+    // android.app.Activity：API 33+ 起系统推荐 PredictiveBack，
+    // 显式 @Deprecated 标记本类仍走旧回调（车机 ROM 普遍 API 33 以下，行为不变）
+    @Deprecated
+    @Override
+    public void onBackPressed() {
         finish();   // 4.8 返回键回桌面，不留在菜园
     }
 

@@ -99,7 +99,7 @@ public final class Lyrics {
 
     /** 给任意展示方取当前窗口（0=自动行数）。10.15 卡片与菜园共用这一个出口。 */
     public static String[] window(Context ctx, int wantLines) {
-        return window(ctx, new LauncherModel(ctx, false), wantLines);
+        return window(ctx, cfg(ctx), wantLines);   // 审计 M3：同走配置快照
     }
 
     /** 每秒跳一次的地方只 new 一次模型（读存档要解 JSON，一秒三次太浪费）。 */
@@ -206,7 +206,7 @@ public final class Lyrics {
         }
         lastTick = now;
 
-        LauncherModel m = new LauncherModel(ctx, false);
+        LauncherModel m = cfg(ctx);   // 审计 M3：配置快照缓存，配置没变不重建
         String k = (a + "|" + t).toLowerCase(Locale.ROOT);
         if (!t.equals(title) || !a.equals(artist)) {
             title = t; artist = a; key = k;
@@ -216,6 +216,25 @@ public final class Lyrics {
         }
         advance(m);
         push(ctx, m);
+    }
+
+    /**
+     * 审计 M3：歌词相关配置的模型快照。旧实现 step 每秒整份 new LauncherModel
+     * （全量 SP+JSON 解析）。设置页写歌词字段时 LauncherModel.bumpCfg()，
+     * 这里按代际号决定是否重读。
+     */
+    private static LauncherModel cfgM;
+    private static int cfgVer = -1;
+
+    private static LauncherModel cfg(Context ctx) {
+        int v = LauncherModel.cfgVersion();
+        LauncherModel m = cfgM;
+        if (m == null || v != cfgVer) {
+            m = new LauncherModel(ctx, false);
+            cfgM = m;
+            cfgVer = v;
+        }
+        return m;
     }
 
     private static void advance(LauncherModel m) {
@@ -234,7 +253,7 @@ public final class Lyrics {
     /* ==================== 取歌词 ==================== */
 
     private static void lookup(final Context ctx, final String k) {
-        final LauncherModel m = new LauncherModel(ctx, false);
+        final LauncherModel m = cfg(ctx);   // 审计 M3：同走配置快照
         final String t = title, a = artist;
         POOL.execute(new Runnable() {
             @Override public void run() {
@@ -255,7 +274,7 @@ public final class Lyrics {
                         @Override public void run() {
                             cur_lyric = text == null ? Lrc.EMPTY : Lrc.parse(text);
                             cur = -1;
-                            advance(new LauncherModel(ctx, false));
+                            advance(cfg(ctx));   // 审计 M3
                         }
                     });
                 } catch (Throwable e) {
@@ -293,8 +312,16 @@ public final class Lyrics {
     /** LOCAL：在 Music 目录里找同名 lrc。 */
     private static String localFile(String t, String a) {
         if (t.isEmpty()) return null;
-        String[] roots = {"/sdcard/Music", "/storage/emulated/0/Music",
-                System.getProperty("user.home") + "/Music"};
+        // 审计 L4：用标准 API 拿公开音乐目录；/sdcard 与 /storage/emulated/0
+        // 是同一份文件系统（符号链接），旧写法把同一目录原样扫两遍
+        java.util.LinkedHashSet<String> roots = new java.util.LinkedHashSet<>();
+        try {
+            File m = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_MUSIC);
+            if (m != null) roots.add(m.getAbsolutePath());
+        } catch (Throwable ignore) {}
+        roots.add("/storage/emulated/0/Music");
+        roots.add(System.getProperty("user.home") + "/Music");
         for (String root : roots) {
             File dir = new File(root);
             if (!dir.isDirectory()) continue;

@@ -22,7 +22,7 @@ public final class SelfTestMirror {
     private static final String TARGET = "com.android.deskclock";
 
     private static final String[] FLAG_CANDIDATES = {
-            "0x18800000",   // EXCLUDE_FROM_RECENTS(0x00800000) | MULTIPLE_TASK | NEW_TASK —— 批次 K 口径
+            Constants.LAUNCH_FLAGS,   // EXCLUDE_FROM_RECENTS(0x00800000) | MULTIPLE_TASK | NEW_TASK —— 批次 K 口径
             "0x18000000",   // MULTIPLE_TASK | NEW_TASK —— 批次 J 口径（不带 singleTask 目标会被拉回主屏）
             "0x10104000",   // 报告 §6 提到的另一组
     };

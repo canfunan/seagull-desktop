@@ -83,12 +83,9 @@ public final class SeagullFileProvider extends ContentProvider {
             throws FileNotFoundException {
         File f = fileFor(uri);
         if (f == null || !f.isFile()) throw new FileNotFoundException("no file for " + uri);
-        int m;
-        if (mode == null) m = ParcelFileDescriptor.MODE_READ_ONLY;
-        else if (mode.contains("w")) m = ParcelFileDescriptor.MODE_WRITE_ONLY
-                | ParcelFileDescriptor.MODE_CREATE | ParcelFileDescriptor.MODE_TRUNCATE;
-        else m = ParcelFileDescriptor.MODE_READ_ONLY;
-        return ParcelFileDescriptor.open(f, m);
+        // 审计 L11：本 Provider 只供应用内共享只读文件（壁纸库/日志），
+        // 统一强制 READ_ONLY —— 拿写模式 open 的外部组件改不了共享文件
+        return ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
     }
 
     @Override public AssetFileDescriptor openAssetFile(Uri uri, String mode)

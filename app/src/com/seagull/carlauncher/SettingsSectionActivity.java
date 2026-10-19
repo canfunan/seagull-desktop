@@ -53,6 +53,13 @@ public class SettingsSectionActivity extends BaseActivity {
         super.onCreate(b);
         section = getIntent().getStringExtra(EXTRA_SECTION);
         if (section == null) section = "system";
+        // 审计 H4 配套：systemBody 渲染要 Caps.level/canVirtualDisplay，首调会 fork su。
+        // 后台先预热缓存，抢在用户点进「能力」分节前落地
+        new Thread(() -> {
+            try { Caps.hasRoot(); } catch (Throwable ignore) {}
+            try { Caps.level(this); } catch (Throwable ignore) {}
+            try { Caps.canVirtualDisplay(this); } catch (Throwable ignore) {}
+        }, "seagull-capwarm").start();
         render();
     }
 
@@ -440,6 +447,7 @@ public class SettingsSectionActivity extends BaseActivity {
             new Thread(() -> {
                 final String p = Wallpaper.importVideo(model, u);
                 runOnUiThread(() -> {
+                    if (dead()) return;
                     if (p == null) { toast("这段视频读不出来，换一段试试"); render(); return; }
                     model.wallVideo = p;
                     model.save();
@@ -449,11 +457,18 @@ public class SettingsSectionActivity extends BaseActivity {
             return;
         }
         if (req != REQ_WALL || data == null || data.getData() == null) return;
-        LauncherModel.Wall w = Wallpaper.onPicked(model, "", data.getData());
-        if (w == null) { render(); return; }
-        if (wallPickIsDay) model.useWall(w, false);
-        else model.useWall(w, true);
-        render();
+        // 审计 M1：图片导入是全量流拷贝（大照片几十 MB），与视频同款后台化
+        final android.net.Uri u = data.getData();
+        new Thread(() -> {
+            final LauncherModel.Wall w = Wallpaper.onPicked(model, "", u);
+            runOnUiThread(() -> {
+                if (dead()) return;
+                if (w == null) { render(); return; }
+                if (wallPickIsDay) model.useWall(w, false);
+                else model.useWall(w, true);
+                render();
+            });
+        }, "wall-img-import").start();
     }
 
     private void wallRow(final LauncherModel.Wall w) {
@@ -615,7 +630,7 @@ public class SettingsSectionActivity extends BaseActivity {
     }
 
     private void fetchWeather() {
-        Weather.refresh(this, model, () -> runOnUiThread(this::render));
+        Weather.refresh(this, model, () -> runOnUiThread(() -> { if (!dead()) render(); }));
     }
 
     private boolean locGranted() {
@@ -631,8 +646,11 @@ public class SettingsSectionActivity extends BaseActivity {
     private void grantLocation() {
         String perm = android.Manifest.permission.ACCESS_COARSE_LOCATION;
         if (Caps.hasRoot()) {
-            Caps.exec("pm grant " + getPackageName() + " " + perm);
-            runOnUiThread(this::render);
+            // 审计 H4：pm grant 是 su fork（3s 超时），挪后台
+            new Thread(() -> {
+                Caps.exec("pm grant " + getPackageName() + " " + perm);
+                runOnUiThread(() -> { if (!dead()) render(); });
+            }, "seagull-grant").start();
             return;
         }
         try {
@@ -654,6 +672,7 @@ public class SettingsSectionActivity extends BaseActivity {
             for (int i = 0; i < vals.length; i++) names[i] = vals[i].label;
             choiceDialog("歌词来源", names, model.lyricSource.ordinal(), i -> {
                 model.lyricSource = vals[i];
+                LauncherModel.bumpCfg();
                 model.save(); render();
             });
         });
@@ -661,6 +680,7 @@ public class SettingsSectionActivity extends BaseActivity {
             String[] names = {"自动（横屏 5 / 竖屏 3）", "1 行", "2 行", "3 行", "4 行", "5 行"};
             choiceDialog("歌词行数", names, model.lyricLines, i -> {
                 model.lyricLines = i;
+                LauncherModel.bumpCfg();
                 model.save(); render();
             });
         });
@@ -675,12 +695,13 @@ public class SettingsSectionActivity extends BaseActivity {
             final int def = cur;
             choiceDialog("对时偏移", names, def, i -> {
                 model.lyricOffsetMs = -2000 + i * 500;
+                LauncherModel.bumpCfg();
                 model.save(); render();
             });
         });
         sliderRow("媒体卡片行数", 1, 6, model.mediaCardLines, " 行", v -> { model.mediaCardLines = v; });
-        toggleRow("状态栏歌词", model.lyricStatusBar, () -> { model.lyricStatusBar = !model.lyricStatusBar; });
-        toggleRow("通知文字歌词", model.lyricNotification, () -> { model.lyricNotification = !model.lyricNotification; });
+        toggleRow("状态栏歌词", model.lyricStatusBar, () -> { model.lyricStatusBar = !model.lyricStatusBar; LauncherModel.bumpCfg(); });
+        toggleRow("通知文字歌词", model.lyricNotification, () -> { model.lyricNotification = !model.lyricNotification; LauncherModel.bumpCfg(); });
         toggleRow("车载蓝牙歌词（媒体信息）", model.lyricBluetooth, () -> { model.lyricBluetooth = !model.lyricBluetooth; });
         actionRow("这首歌词不对（换版本）", "在搜到的版本里轮换", v -> {
             Lyrics.nextVersion(this);
@@ -691,6 +712,7 @@ public class SettingsSectionActivity extends BaseActivity {
             if (ck.isEmpty()) { toast("现在没有歌在放"); return; }
             if (model.lyricHidden.contains(ck)) model.lyricHidden.remove(ck);
             else model.lyricHidden.add(ck);
+            LauncherModel.bumpCfg();
             model.save(); render();
         });
         if (ck.isEmpty()) note("10.9 这首不显示歌词、10.10 换版本都要先有歌在放。");
@@ -718,7 +740,15 @@ public class SettingsSectionActivity extends BaseActivity {
         try {
             String s = Settings.Secure.getString(getContentResolver(),
                     "enabled_notification_listeners");
-            return s != null && s.contains(getPackageName());
+            if (s == null) return false;
+            // 审计 L14：按 ComponentName 精确比对，contains 会撞别的监听器类名里
+            // 恰好内嵌本包名的场景
+            String want = new android.content.ComponentName(this, MediaListenerService.class)
+                    .flattenToString();
+            for (String item : s.split(":")) {
+                if (item.trim().equals(want)) return true;
+            }
+            return false;
         } catch (Throwable t) { return false; }
     }
 
@@ -753,11 +783,11 @@ public class SettingsSectionActivity extends BaseActivity {
 
         sectionLabel("窗口搬运（需 root）");
         actionRow("收回窗口", "把虚拟屏上的窗口搬回主屏", v -> rootOnly(
-                () -> msgDialog("收回窗口", TaskMover.reclaim(this, MirrorSlot.newestDisplay()))));
+                () -> bgTaskDialog("收回窗口", () -> TaskMover.reclaim(this, MirrorSlot.newestDisplay()))));
         actionRow("从边缘小标签拉回", "把主屏上的窗口拉进虚拟屏", v -> rootOnly(
-                () -> msgDialog("拉回窗口", TaskMover.pullBack(this, MirrorSlot.newestDisplay()))));
+                () -> bgTaskDialog("拉回窗口", () -> TaskMover.pullBack(this, MirrorSlot.newestDisplay()))));
         actionRow("搬运排障", "dumpsys 里的 displayId / taskId", v -> rootOnly(
-                () -> msgDialog("搬运排障", TaskMover.dump(this))));
+                () -> bgTaskDialog("搬运排障", () -> TaskMover.dump(this))));
 
         sectionLabel("入口");
         actionRow("窗口能力自检页", "能力探测与逐项验证",
@@ -924,11 +954,10 @@ public class SettingsSectionActivity extends BaseActivity {
                 + "等价于 setprop persist.seagull.rootbridge 0，秒级生效不用卸载。");
 
         sectionLabel("15.10 系统监控");
-        actionRow("CPU / 温度 / 内存", SysOps.monitorLine(this), v -> {
-            new Thread(() -> {
-                final String out = SysOps.monitorLine(this);
-                runOnUiThread(() -> msgDialog("系统监控", out));
-            }).start();
+        // 审计 H4：monitorLine 内含 /proc/stat 双读 + Thread.sleep(120) + 温度文件读，
+        // 只在点按时后台采样，渲染期放占位文案
+        actionRow("CPU / 温度 / 内存", "点按采集当前采样", v -> {
+            bgTaskDialog("系统监控", () -> SysOps.monitorLine(this));
         });
         actionRow("设为默认桌面", "把默认桌面改成海鸥桌面", v -> {
             try {
@@ -955,7 +984,7 @@ public class SettingsSectionActivity extends BaseActivity {
         actionRow("root 通道", Caps.rootWho(), v -> {
             new Thread(() -> {
                 Caps.hasRoot();
-                runOnUiThread(this::render);
+                runOnUiThread(() -> { if (!dead()) render(); });
             }).start();
         });
         actionRow("当前窗口档位", Caps.levelName(Caps.level(this)), null);
@@ -983,11 +1012,14 @@ public class SettingsSectionActivity extends BaseActivity {
                 v -> startActivity(new Intent(this, WindowTestActivity.class)));
         actionRow(getString(R.string.mirror_title), getString(R.string.mirror_sub),
                 v -> startActivity(new Intent(this, MirrorActivity.class)));
-        actionRow("强制停止应用", "输入包名，root 通道执行", v ->
+            actionRow("强制停止应用", "输入包名，root 通道执行", v ->
                 inputDialog("包名", "", pkg -> {
                     if (pkg.trim().isEmpty()) return;
-                    SysOps.R r = SysOps.forceStop(pkg.trim());
-                    toast(r.toString());
+                    // 审计 H4：forceStop 是 su fork（3s 超时），挪后台
+                    new Thread(() -> {
+                        SysOps.R r = SysOps.forceStop(pkg.trim());
+                        runOnUiThread(() -> toast(r.toString()));
+                    }, "seagull-forcestop").start();
                 }));
         note("亮度 / 音量 / Wi-Fi / 蓝牙 / 飞行模式开关在 root 面板里。");
     }
@@ -1262,8 +1294,16 @@ public class SettingsSectionActivity extends BaseActivity {
             final java.io.File f = out;
             final String e = err;
             runOnUiThread(() -> {
+                if (dead()) return;
                 if (f == null || !f.isFile()) { msgDialog("下载失败", e); return; }
                 try {
+                    // 审计 L9：GitHub release 资产没有可用的摘要字段，能落地的完整性
+                    // 校验是 ZIP 魔数 + 最小尺寸（签名不匹配由 PackageInstaller 安装期兜底）
+                    if (!apkLooksSane(f)) {
+                        msgDialog("装不上", "下载的包不完整（大小或格式不对），重试一次。\n"
+                                + f.getAbsolutePath());
+                        return;
+                    }
                     // content:// + FileProvider：targetSdk 24 起 Uri.fromFile()
                     // 直接 FileUriExposedException（旧实现就是这样，装新版本必崩）
                     android.net.Uri u = SeagullFileProvider.uriFor(SettingsSectionActivity.this, f);
@@ -1281,6 +1321,19 @@ public class SettingsSectionActivity extends BaseActivity {
                 }
             });
         }).start();
+    }
+
+    /** 审计 L9：下载产物最小完整性校验（ZIP 头 PK + 体积下限）。 */
+    private static boolean apkLooksSane(java.io.File f) {
+        try {
+            if (f.length() < 64 * 1024) return false;
+            try (java.io.InputStream in = new java.io.FileInputStream(f)) {
+                byte[] magic = new byte[2];
+                return in.read(magic) == 2 && magic[0] == 'P' && magic[1] == 'K';
+            }
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     private static String httpText(String url) throws Exception {
@@ -1491,11 +1544,27 @@ public class SettingsSectionActivity extends BaseActivity {
     }
 
     private void msgDialog(String title, String msg) {
+        if (dead()) return;   // 审计 H5：后台任务回来时页面可能已销毁，弹窗必炸 BadTokenException
         new AlertDialog.Builder(this)
                 .setTitle(title)
                 .setMessage(msg)
                 .setPositiveButton("好", null)
                 .show();
+    }
+
+    /** 审计 H5：所有异步回执统一先过这道闸。 */
+    private boolean dead() {
+        return isFinishing() || isDestroyed();
+    }
+
+    /** 审计 H4：root/dumpsys 重活在后台跑，结果回主线程弹窗（TaskMover 一族用）。 */
+    private void bgTaskDialog(String title, java.util.concurrent.Callable<String> job) {
+        new Thread(() -> {
+            String out;
+            try { out = job.call(); } catch (Throwable t) { out = "执行失败：" + t; }
+            final String o = out;
+            runOnUiThread(() -> msgDialog(title, o));
+        }, "seagull-rootop").start();
     }
 
     private void appPicker(String title, Consumer<LauncherModel.App> pick) {

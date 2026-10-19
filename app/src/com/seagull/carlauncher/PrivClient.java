@@ -29,7 +29,7 @@ public final class PrivClient {
     private static final String TAG = "SeagullPriv";
     /** abstract namespace 的服务名，两边写死一致。 */
     public static final String SOCKET = "seagull.privd";
-    private static final String DAEMON_MAIN = "com.seagull.carlauncher.RootMain";
+    private static final String DAEMON_MAIN = Constants.SELF_PACKAGE + ".RootMain";
     private static final int SPAWN_WAIT_MS = 3500;
 
     private static Context appCtx;
@@ -173,7 +173,35 @@ public final class PrivClient {
         if (sock == null) return false;
         PrivCodec.Response r = roundTrip(
                 PrivCodec.encodeRequest(nextSeq(), PrivCodec.OP_PING));
+        if (r != null && r.ok) handleGen(r.payload);
         return r != null && r.ok;
+    }
+
+    /** 审计 M8：守护进程代际（随 PING/STATE 下发），0 = 未知 */
+    private static volatile long daemonGen;
+    /** 代际变化回调（守护进程自退出后被 su 重启时触发，MirrorSlot 用来清对账表） */
+    public static volatile Runnable onRespawn;
+
+    /**
+     * 审计 M8：代际握手。守护进程 60s 无客户端自退出，之后任何命令都会被
+     * su 重启一份新进程 —— 新进程里 HELD 表是空的，旧 displayId 全是幽灵。
+     * PING 应答里带 gen（进程启动时间戳），gen 变了就回调 onRespawn，
+     * 客户端据此清掉对已死屏的记账。
+     */
+    private static void handleGen(String payload) {
+        if (payload == null) return;
+        int i = payload.indexOf(";gen=");
+        if (i < 0) return;
+        long g;
+        try { g = Long.parseLong(payload.substring(i + 5), 16); } catch (Throwable t) { return; }
+        long old = daemonGen;
+        daemonGen = g;
+        if (old != 0 && old != g) {
+            Log.w(TAG, "守护进程代际变化 " + Long.toHexString(old) + "→" + Long.toHexString(g)
+                    + "（自退出后重启），held 屏全部失效");
+            Runnable cb = onRespawn;
+            if (cb != null) { try { cb.run(); } catch (Throwable ignore) {} }
+        }
     }
 
     /** 把 comp（pkg/.Activity 形式）启动到指定虚拟屏；flags 为 Intent  flags（含 NEW_TASK）。 */
@@ -432,7 +460,9 @@ public final class PrivClient {
         } finally {
             try { if (s != null) s.close(); } catch (Throwable ignore) {}
             if (watchSock == s) watchSock = null;
-            if (evtListener != null) evtListener = null;
+            // 审计 M7：只有自己仍是登记线程时才清 listener —— unsubscribe() 换代后，
+            // 旧线程迟到的 finally 不能把新订阅者刚挂上的回调抹掉（事件静默丢失）
+            if (watchThread == Thread.currentThread()) evtListener = null;
         }
     }
 

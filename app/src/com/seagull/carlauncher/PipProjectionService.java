@@ -70,7 +70,11 @@ public class PipProjectionService extends Service {
             running = true;   // Activity 轮询此标志，true 后才允许 createVirtualDisplay
             Log.i(TAG, "投影前台服务已启动");
         } catch (Throwable t) {
-            Log.e(TAG, "startForeground 失败", t);
+            // 审计 L13：前台通知起不来（通知权限被关/ROM 限制）= 5 秒后系统
+            // 会 ANR-crash 这个服务 —— 与其等系统杀，不如自己体面退场
+            Log.e(TAG, "startForeground 失败，服务自停", t);
+            running = false;
+            try { stopSelf(); } catch (Throwable ignore) {}
         }
         return START_NOT_STICKY;
     }

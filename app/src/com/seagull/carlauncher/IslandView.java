@@ -47,10 +47,15 @@ public class IslandView extends View {
     /** 按模型摆位置 + 取内容；桌面每次 refresh 时调一次。 */
     public void bind(LauncherModel m) {
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) getLayoutParams();
-        lp.width = dp(m.islandWidth);
-        lp.topMargin = dp(m.islandOffsetY);
-        lp.gravity = android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL;
-        setLayoutParams(lp);
+        // 审计 M5：refresh 高频走到这里，尺寸/位置没变就不重设
+        // （setLayoutParams 每次都全链 requestLayout）
+        int nw = dp(m.islandWidth), nTop = dp(m.islandOffsetY);
+        if (lp.width != nw || lp.topMargin != nTop) {
+            lp.width = nw;
+            lp.topMargin = nTop;
+            lp.gravity = android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL;
+            setLayoutParams(lp);
+        }
         if (m.islandLyric) {
             String[] w = Lyrics.window(getContext(), m, 1);
             setLabel(w.length == 0 ? "" : w[0], Lyrics.nowPlaying());

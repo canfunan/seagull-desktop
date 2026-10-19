@@ -107,28 +107,36 @@ public final class Weather {
                         JSONArray dmax = day.getJSONArray("temperature_2m_max");
                         JSONArray dmin = day.getJSONArray("temperature_2m_min");
 
-                        m.weatherSummary = code(cur.optInt("weather_code")) + " "
-                                + Math.round(cur.optDouble("temperature_2m")) + "°";
-                        StringBuilder sb = new StringBuilder();
-                        for (int i = 1; i < Math.min(4, dcode.length()); i++) {
-                            if (i > 1) sb.append("　");
-                            sb.append(dayName(day.optJSONArray("time").optString(i)))
-                                    .append(' ').append(code(dcode.optInt(i)))
-                                    .append(' ').append(Math.round(dmin.optDouble(i)))
-                                    .append('~').append(Math.round(dmax.optDouble(i))).append('°');
+                        // 审计 M2：改模型字段 + save() 序列化集合都要持 IO_LOCK，
+                        // 与主线程的图标拖动/文件夹操作互斥（否则 save 里的
+                        // JSONArray(集合) 会撞 ConcurrentModificationException，
+                        // 被 try 吞掉 = 静默丢档）
+                        synchronized (m.ioLock()) {
+                            m.weatherSummary = code(cur.optInt("weather_code")) + " "
+                                    + Math.round(cur.optDouble("temperature_2m")) + "°";
+                            StringBuilder sb = new StringBuilder();
+                            for (int i = 1; i < Math.min(4, dcode.length()); i++) {
+                                if (i > 1) sb.append("　");
+                                sb.append(dayName(day.optJSONArray("time").optString(i)))
+                                        .append(' ').append(code(dcode.optInt(i)))
+                                        .append(' ').append(Math.round(dmin.optDouble(i)))
+                                        .append('~').append(Math.round(dmax.optDouble(i))).append('°');
+                            }
+                            m.weatherForecast = sb.toString();
+                            m.weatherUpdatedAt = System.currentTimeMillis();
+                            m.weatherError = "";
+                            m.save();
                         }
-                        m.weatherForecast = sb.toString();
-                        m.weatherUpdatedAt = System.currentTimeMillis();
-                        m.weatherError = "";
-                        m.save();
                     }
                 } catch (Throwable t) {
                     Log.w(TAG, "取天气失败", t);
                     err = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
                 }
                 if (err != null) {
-                    m.weatherError = err;
-                    m.save();
+                    synchronized (m.ioLock()) {
+                        m.weatherError = err;
+                        m.save();
+                    }
                 }
                 if (done != null) MAIN.post(done);
             }
@@ -256,7 +264,16 @@ public final class Weather {
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             byte[] buf = new byte[4096];
             int n;
-            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            long total = 0;
+            while ((n = in.read(buf)) > 0) {
+                total += n;
+                // 审计 L3：响应体封顶 512KB —— 天气 JSON 正常十几 KB，异常
+                // 回包（HTML 错误页/被劫持页）不该无限吃进内存
+                if (total > 512 * 1024) {
+                    throw new java.net.SocketTimeoutException("响应超过 512KB 上限");
+                }
+                bo.write(buf, 0, n);
+            }
             String s = bo.toString("UTF-8");
             if (code >= 400) throw new IllegalStateException("HTTP " + code + " " + s);
             return s;

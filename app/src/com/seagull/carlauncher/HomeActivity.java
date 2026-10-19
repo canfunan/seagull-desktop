@@ -72,6 +72,21 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         setContentView(buildUi());
         refreshMini();
         ui.postDelayed(tick, 30_000L);
+        // 审计 M6：装卸/更新应用即时失效 loadApps 缓存（TTL 20s 是兜底）
+        android.content.IntentFilter pf = new android.content.IntentFilter();
+        pf.addAction(Intent.ACTION_PACKAGE_ADDED);
+        pf.addAction(Intent.ACTION_PACKAGE_REMOVED);
+        pf.addAction(Intent.ACTION_PACKAGE_REPLACED);
+        pf.addDataScheme("package");
+        try {
+            registerReceiver(new android.content.BroadcastReceiver() {
+                @Override public void onReceive(Context c, Intent i) {
+                    invalidateAppsCache();
+                }
+            }, pf);
+        } catch (Throwable t) {
+            android.util.Log.w("SeagullHome", "包广播注册失败", t);
+        }
     }
 
     /**
@@ -83,10 +98,10 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         try {
             java.io.File dir = getFilesDir().getParentFile();
             java.io.File xml = new java.io.File(dir, "shared_prefs/" + PREFS + ".xml");
+            // 审计 L12：不再把 dataDir 绝对路径打进 logcat（设备指纹信息），
+            // 存档存在性/尺寸 + 配置计数保留 —— 诊断价值不变
             android.util.Log.i("SeagullDiag",
-                    "dataDir=" + dir.getAbsolutePath()
-                    + " | xml=" + xml.getAbsolutePath()
-                    + " exists=" + xml.exists()
+                    "selfReport | xmlExists=" + xml.exists()
                     + (xml.exists() ? " size=" + xml.length() : "")
                     + " | mode=" + model.mode
                     + " dock=" + model.dock.size()
@@ -649,8 +664,25 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         }
     }
 
+    /**
+     * 审计 M6：应用列表进程级缓存。queryIntentActivities + 每个应用
+     * loadLabel/loadIcon 在低端车机上一次几百毫秒 —— 桌面重建、AppListActivity、
+     * VirtualDisplayActivity、PipBoard 抽屉反复全量重拉。缓存 + 20s TTL，
+     * 装卸/更新广播即时失效。
+     */
+    private static volatile List<AppEntry> APPS_CACHE;
+    private static volatile long APPS_CACHE_AT;
+    private static final long APPS_TTL_MS = 20_000;
+
+    /** 装卸应用后调（包广播 receiver 已挂），下次 loadApps 全量重扫。 */
+    public static void invalidateAppsCache() { APPS_CACHE = null; }
+
     /** 静态加载器：调用方必须传 Context（未 attach 的 Activity 实例会 NPE 炸进程）。 */
     public static List<AppEntry> loadApps(Context ctx) {
+        List<AppEntry> hit = APPS_CACHE;
+        if (hit != null && System.currentTimeMillis() - APPS_CACHE_AT < APPS_TTL_MS) {
+            return new ArrayList<>(hit);   // 拷贝出去：调用方改列表不动缓存
+        }
         PackageManager pm = ctx.getPackageManager();
         Intent main = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
         List<android.content.pm.ResolveInfo> ris;
@@ -677,7 +709,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                 return a.label.compareToIgnoreCase(b.label);
             }
         });
-        return list;
+        APPS_CACHE = list;
+        APPS_CACHE_AT = System.currentTimeMillis();
+        return new ArrayList<>(list);
     }
 
     public void launch(String pkg) {

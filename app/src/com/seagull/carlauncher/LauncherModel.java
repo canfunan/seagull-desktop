@@ -850,24 +850,46 @@ public final class LauncherModel {
 
     private SharedPreferences sp() { return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
 
+    /**
+     * 审计 M2：存取互斥锁。save() 在调用线程（含 Weather 的网络线程）序列化
+     * pinned/dock/widgets/folders 集合，主线程同时拖图标/建文件夹改这些集合
+     * 就是 ConcurrentModificationException —— save 被 try 吞掉 = 那次配置静默
+     * 丢档。凡序列化集合、批量改集合的路径都持这把锁。
+     */
+    private final Object IO_LOCK = new Object();
+    public Object ioLock() { return IO_LOCK; }
+
+    /**
+     * 审计 M3：歌词配置代际。Lyrics.step 每秒一跳，旧实现每跳整份
+     * new LauncherModel（全量 SharedPreferences+JSON 解析）只为读几个歌词
+     * 字段 —— 每秒一次的解析风暴。改为配置写入方（设置页/load）bumpCfg()，
+     * Lyrics 按 cfgVersion() 缓存模型快照，配置没变就一克内存都不花。
+     */
+    private static final java.util.concurrent.atomic.AtomicInteger CFG_VER =
+            new java.util.concurrent.atomic.AtomicInteger();
+    public static int cfgVersion() { return CFG_VER.get(); }
+    public static void bumpCfg() { CFG_VER.incrementAndGet(); }
+
     public void save() {
         try {
-            JSONObject o = new JSONObject();
-            o.put("v", 2);
-            /* 桌面 */
-            o.put("mode", mode.name());
-            o.put("labels", showLabels);
-            o.put("pinned", new JSONArray(pinned));
-            o.put("dock", new JSONArray(dock));
-            o.put("widgets", new JSONArray(widgets));
-            JSONArray fs = new JSONArray();
-            for (Folder f : folders) {
-                JSONObject fo = new JSONObject();
-                fo.put("name", f.name);
-                fo.put("keys", new JSONArray(f.keys));
-                fs.put(fo);
-            }
-            o.put("folders", fs);
+            String json;
+            synchronized (IO_LOCK) {
+                JSONObject o = new JSONObject();
+                o.put("v", 2);
+                /* 桌面 */
+                o.put("mode", mode.name());
+                o.put("labels", showLabels);
+                o.put("pinned", new JSONArray(pinned));
+                o.put("dock", new JSONArray(dock));
+                o.put("widgets", new JSONArray(widgets));
+                JSONArray fs = new JSONArray();
+                for (Folder f : folders) {
+                    JSONObject fo = new JSONObject();
+                    fo.put("name", f.name);
+                    fo.put("keys", new JSONArray(f.keys));
+                    fs.put(fo);
+                }
+                o.put("folders", fs);
             /* 布局 */
             o.put("layoutPreset", layoutPreset);
             o.put("stripAlpha", widgetStripAlpha);
@@ -1014,10 +1036,12 @@ public final class LauncherModel {
             o.put("tasks", ta);
             /* 系统 */
             o.put("autoHome", autoHome);
+            json = o.toString();
+            }
 
             // apply 异步落盘：配置保存全在主线程（图标拖动、开关切换都在 UI 上），
             // commit() 会同步 fsync，大存档时主线程能卡到几十毫秒（批次 T 坐实）
-            sp().edit().putString(K_LAYOUT, o.toString()).apply();
+            sp().edit().putString(K_LAYOUT, json).apply();
         } catch (Throwable t) {
             Log.w(TAG, "保存布局失败", t);
         }
@@ -1026,6 +1050,7 @@ public final class LauncherModel {
     public void load() {
         String raw = sp().getString(K_LAYOUT, null);
         if (raw == null) { defaults(); return; }
+        bumpCfg();   // 审计 M3：整份配置被盘上内容覆盖，歌词模型缓存作废
         // 重读前先清空列表字段，否则 widgets/folders/tasks 会越读越多
         reset();
         try {
