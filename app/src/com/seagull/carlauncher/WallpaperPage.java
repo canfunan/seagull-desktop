@@ -90,6 +90,8 @@ public final class WallpaperPage extends FrameLayout {
 
     /** I5 监控块：内存/CPU/存储三行小字，后台线程采样。 */
     private final LinearLayout monBox;
+    private final LinearLayout musBox;
+    private final TextView musL0, musL1, musL2, musL3;
     private final TextView monL1, monL2, monL3;
 
     /** I4 指南针兜底：GPS 航向失联时用加速度计+磁力计方位角补显。 */
@@ -241,6 +243,37 @@ public final class WallpaperPage extends FrameLayout {
                 },
                 () -> model.save()));
 
+        // M5 播放列表块：当前曲 + 队列两行 + 提示行；点按开选歌页，长按菜单
+        musBox = new LinearLayout(c);
+        musBox.setOrientation(LinearLayout.VERTICAL);
+        musL0 = tv(c, 15, R.color.leaf, true);          // 状态行：当前曲
+        musL1 = tv(c, 12, R.color.text_dim, true);      // 队列 +1
+        musL2 = tv(c, 12, R.color.text_dim, true);      // 队列 +2
+        musL3 = tv(c, 11, R.color.text_dim, true);      // 提示行
+        musBox.addView(musL0);
+        musBox.addView(musL1, topMargin(c, 3));
+        musBox.addView(musL2, topMargin(c, 3));
+        musBox.addView(musL3, topMargin(c, 5));
+        musBox.setVisibility(GONE);
+        addView(musBox, new LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT));
+        musBox.setOnTouchListener(new Drag(musBox,
+                (dx, dy) -> nudgeBlock(musBox, dx, dy),
+                () -> getContext().startActivity(new android.content.Intent(
+                        getContext(), MusicActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)),
+                this::showMonMenu,
+                () -> saveBlockPos(musBox, pos -> {
+                    model.wallMusX = pos[0]; model.wallMusY = pos[1];
+                }),
+                null,
+                () -> zoomBase = model.wallMusScale <= 0 ? 1f : model.wallMusScale,
+                f -> {
+                    float s = clampf(zoomBase * f, 0.5f, 2.4f);
+                    applyMusScale(s);
+                    model.wallMusScale = s;
+                },
+                () -> model.save()));
+
         // 点空白处取消组件选中（长按空白仍是添加小组件）
         setOnClickListener(v -> deselectWidget());
         setOnLongClickListener(v -> { showAddWidget(); return true; });
@@ -248,6 +281,7 @@ public final class WallpaperPage extends FrameLayout {
         applyGps();
         applyCd();
         applyMon();
+        applyMus();
         loadWidgets();
         tick();
     }
@@ -324,6 +358,7 @@ public final class WallpaperPage extends FrameLayout {
         if (!model.wallGpsEnabled) show.add("显示行车块");
         if (!model.wallCdEnabled) show.add("显示倒数块");
         if (!model.wallMonEnabled) show.add("显示监控块");
+        if (!model.wallMusEnabled) show.add("显示音乐块");
         String[] sizes = {"小", "标准", "大", "特大"};
         String[] opts = show.isEmpty() ? sizes
                 : java.util.Arrays.copyOf(sizes, sizes.length + show.size());
@@ -339,9 +374,11 @@ public final class WallpaperPage extends FrameLayout {
                         if (cmd.equals("显示行车块")) model.wallGpsEnabled = true;
                         else if (cmd.equals("显示倒数块")) model.wallCdEnabled = true;
                         else if (cmd.equals("显示监控块")) model.wallMonEnabled = true;
+                        else if (cmd.equals("显示音乐块")) { model.wallMusEnabled = true; ensureMusicScanned(); }
                         refreshGpsBlock();
                         refreshCdBlock();
                         refreshMonBlock();
+                        refreshMusBlock();
                     }
                     model.save();
                 })
@@ -670,6 +707,51 @@ public final class WallpaperPage extends FrameLayout {
                 .show();
     }
 
+    /* ---------------- M5 播放列表块 ---------------- */
+
+    private void applyMus() {
+        applyMusScale(model.wallMusScale <= 0 ? 1f : model.wallMusScale);
+    }
+
+    private void applyMusScale(float s) {
+        musL0.setTextSize(15 * s);
+        musL1.setTextSize(12 * s);
+        musL2.setTextSize(12 * s);
+        musL3.setTextSize(11 * s);
+        musBox.post(() -> placeBlock(musBox, model.wallMusX, model.wallMusY));
+    }
+
+    /** tick/resume 驱动：可见时原位改文本（M4 审计纪律，无结构重建）。 */
+    public void refreshMusBlock() {
+        if (!model.wallMusEnabled) { musBox.setVisibility(GONE); return; }
+        musBox.setVisibility(VISIBLE);
+        java.util.List<MusicLib.Track> q = MusicService.queue();
+        int i = MusicService.index();
+        if (i >= 0 && i < q.size()) {
+            MusicLib.Track cur = q.get(i);
+            musL0.setText((MusicService.isPlaying() ? "▶ " : "⏸ ")
+                    + MusicLib.label(cur));
+            musL1.setText(i + 1 < q.size() ? "下首 " + MusicLib.label(q.get(i + 1)) : "队列到头，播完循环");
+            musL2.setText(i + 2 < q.size() ? "再下 " + MusicLib.label(q.get(i + 2)) : "");
+            musL3.setText("点按选歌 · 长按菜单");
+        } else {
+            List<MusicLib.Track> lib = MusicLib.last();
+            musL0.setText("本地音乐");
+            musL1.setText(lib.isEmpty() ? "还没扫到歌" : "共 " + lib.size() + " 首");
+            musL2.setText("");
+            musL3.setText("点按选歌 · 长按菜单");
+        }
+    }
+
+    /** 桌面 tick 驱动扫描（没扫过才起一次）；结果回主线程刷块。 */
+    private void ensureMusicScanned() {
+        if (musScanned) return;
+        musScanned = true;
+        MusicLib.scan(getContext(), tracks -> refreshMusBlock());
+    }
+
+    private boolean musScanned;
+
     /**
      * 采样走后台线程：cpuPct 内部有 120ms sleep（SysOps L2 注释明确提示
      * 调用方放后台线程），tick 在 UI 线程上，直接调会卡帧。
@@ -799,6 +881,7 @@ public final class WallpaperPage extends FrameLayout {
         gpsBox.post(this::placeGpsBox);
         cdBox.post(() -> placeBlock(cdBox, model.wallCdX, model.wallCdY));
         monBox.post(() -> placeBlock(monBox, model.wallMonX, model.wallMonY));
+        musBox.post(() -> placeBlock(musBox, model.wallMusX, model.wallMusY));
         for (Integer wid : new ArrayList<>(widgetPos.keySet())) refitWidget(wid);
     }
 
@@ -1297,6 +1380,8 @@ public final class WallpaperPage extends FrameLayout {
         if (cdBox != null && cdBox.getVisibility() == VISIBLE) updateCdRows();
         // I5 监控：30s 一个采样周期，后台线程
         if (monBox != null && monBox.getVisibility() == VISIBLE) refreshMonRows();
+        // M5 音乐块：可见时跟队列/播放态；开着但还没扫过库就先扫一次
+        if (musBox != null && musBox.getVisibility() == VISIBLE) { ensureMusicScanned(); refreshMusBlock(); }
 
         String now = Lyrics.nowPlaying();
         if (media != null) {

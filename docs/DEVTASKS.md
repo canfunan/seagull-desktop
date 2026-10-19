@@ -38,11 +38,11 @@
 - [x] L1 导航通知解析骨架（高德/百度包 ongoing 通知 → 正则模板常量 → IslandView 横幅；格式真机探明后填模板，失败静默隐藏） — NavNotiParser（NAV_PKGS 三包 + T_TURN/T_REMAIN 模板常量，真机探明后填改）；MediaListenerService.onNotificationPosted/Removed/重连回放三口接入；IslandView.bind 横幅优先于时钟/歌词；HomeActivity 挂/摘静态监听；正文不进 logcat（批次 V 纪律）
 
 ## 批次 M 本地音乐
-- [ ] M1 音乐扫描：/sdcard/Music File API + U盘 StorageVolume + root /mnt/media_rw 扫描
-- [ ] M2 播放服务：MediaPlayer + 前台服务 + MediaSession（MiniPlayer 自动联动）
-- [ ] M3 音乐列表 UI + 队列（选中/播放/切歌）
-- [ ] M4 .lrc 联动歌词组件（复用 Lrc 解析器）
-- [ ] M5 播放列表组件（桌面点歌/切歌）
+- [x] M1 音乐扫描：/sdcard/Music File API + U盘 StorageVolume + root /mnt/media_rw 扫描 — MusicLib 三来源去重（公开 Music 目录 File API、getStorageVolumes 可移动卷 getDirectory()（API30+，29 走 root find）、root find 全量兜底）；文件名「歌手 - 歌名」约定对齐 Lyrics；上限 2000 首；后台线程扫描
+- [x] M2 播放服务：MediaPlayer + 前台服务 + MediaSession（MiniPlayer 自动联动） — MusicService：队列内存态+index、prepare 在后台线程、AudioFocusRequest、标准 MediaSession（metadata+playbackstate+transport 回调）——MiniPlayer/Lyrics 从 getActiveSessions 自动读到本地会话，零联动代码；前台通知低优先级渠道
+- [x] M3 音乐列表 UI + 队列（选中/播放/切歌） — MusicActivity：播放头（歌名/进度 SeekBar 拖完才 seek/三键）+ListView 全曲目；点行=置队列从该首播；高亮行变化才 notifyDataSetChanged（轮询不全量刷）
+- [x] M4 .lrc 联动歌词组件（复用 Lrc 解析器） — 本地播放即标准媒体会话 → Lyrics 现有 localFile（Music 目录同曲同名 .lrc）直接命中；U盘/root 来源不在 Music 目录的，Lyrics 解析链加 MusicLib.lrcFor(title,artist) 兜底（扫描缓存里同曲 lrcPath 读全文）；框架 MediaMetadata 无自定义键（LYRICS 属 androidx），extras 注入路线放弃
+- [x] M5 播放列表组件（桌面点歌/切歌） — 壁纸页第五块 musBox（同 Drag/Zoom/placeBlock 生态）：当前曲+队列两行+提示行，点按开 MusicActivity 选歌、长按块菜单（缩放/隐藏）；时钟块菜单加「显示音乐块」，tick 原位刷新（M4 审计纪律）
 
 ## 批次 N 手感
 - [ ] N1 桌面手势（双指下滑锁屏[lockNow/input POWER 真机试]、上滑进画中画、长按拖拽分屏）

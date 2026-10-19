@@ -320,6 +320,12 @@ public final class LauncherModel {
     public float wallMonScale = 1f;
     public boolean wallMonEnabled = false;
 
+    /** M5 桌面播放列表块（点歌/切歌），同块生态机制，默认关。 */
+    public float wallMusX = 0.16f;
+    public float wallMusY = 0.13f;
+    public float wallMusScale = 1f;
+    public boolean wallMusEnabled = false;
+
     /** J2 限行卡：城市名 + 周一..周五尾号（"1,6,2,7,3,8,4,9,5,0"）。 */
     public boolean restrictEnabled = false;
     public String restrictCity = "";
@@ -1075,6 +1081,10 @@ public final class LauncherModel {
             wmo.put("x", wallMonX); wmo.put("y", wallMonY); wmo.put("s", wallMonScale);
             wmo.put("on", wallMonEnabled);
             o.put("wallMon", wmo);
+            JSONObject wmu = new JSONObject();
+            wmu.put("x", wallMusX); wmu.put("y", wallMusY); wmu.put("s", wallMusScale);
+            wmu.put("on", wallMusEnabled);
+            o.put("wallMus", wmu);
             o.put("restrictOn", restrictEnabled);
             o.put("restrictCity", restrictCity);
             o.put("restrictTails", restrictTails);
@@ -1328,6 +1338,13 @@ public final class LauncherModel {
                 wallMonY = (float) wmo2.optDouble("y", 0.13);
                 wallMonScale = (float) wmo2.optDouble("s", 1.0);
                 wallMonEnabled = wmo2.optBoolean("on", false);
+            }
+            JSONObject wmu2 = o.optJSONObject("wallMus");
+            if (wmu2 != null) {
+                wallMusX = (float) wmu2.optDouble("x", 0.16);
+                wallMusY = (float) wmu2.optDouble("y", 0.13);
+                wallMusScale = (float) wmu2.optDouble("s", 1.0);
+                wallMusEnabled = wmu2.optBoolean("on", false);
             }
             restrictEnabled = o.optBoolean("restrictOn", false);
             restrictCity = o.optString("restrictCity", "");

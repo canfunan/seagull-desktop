@@ -267,6 +267,9 @@ public final class Lyrics {
                     } else {
                         lrc = cache(ctx, k);
                     }
+                    // M4 本地播放器兜底：扫描缓存里同曲的同目录 .lrc（U盘/root 来源
+                    // 不在 Music 目录约定里，localFile 摸不到）
+                    if (lrc == null || lrc.trim().isEmpty()) lrc = MusicLib.lrcFor(t, a);
                     if (lrc == null || lrc.trim().isEmpty()) lrc = online(ctx, k, t, a);
                     if (lrc == null || lrc.trim().isEmpty()) lrc = fromSession(ctx);
                     final String text = lrc;

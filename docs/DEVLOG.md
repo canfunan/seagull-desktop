@@ -2500,3 +2500,39 @@ HomeActivity onResume 挂静态监听、onDestroy 摘（与 Weather.onUpdated
 真机待验：高德/百度 ongoing 通知实际文案（回填模板）、百度车机版包名
 （现挂 com.baidu.BaiduMap，车版可能是 com.baidu.BaiduMap.car 之类）。
 javac --release 11 绿。
+
+## 批次 M 本地音乐（M1-M5）
+
+**M1 扫描** — 三来源：① 公开 Music 目录 File API（Lyrics.localFile 同一前例）；
+② StorageManager.getStorageVolumes() 可移动+mounted 卷，getDirectory()
+（API 30+ 公开）可读走 File 遍历，读不动记 uuid 交 root find；③ root find
+/mnt/media_rw /storage 全量兜底。命名约定「歌手 - 歌名.ext」拆元数据
+（与 Lyrics 找 .lrc 的约定天然对齐），不逐个开 MediaMetadataRetriever
+（大库太慢）；同目录同名 .lrc 记进 track.lrcPath。后台线程，上限 2000 首。
+
+**M2 播放服务** — MediaPlayer+前台服务+标准 MediaSession。设计核心：
+本地播放就是一条普通媒体会话 —— MiniPlayer（getActiveSessions）和歌词
+组件自动读到，播放/暂停/切歌/seek 经 transport 回调回到服务，MiniPlayer
+的控制键不用改一行代码就管本地歌。prepare 放后台线程（本地大 flac 同步
+prepare 不上主线程）；AudioFocusRequest(GAIN) 正常申请。
+
+**M3 列表页** — 播放头+ListView 全曲目；点行=队列即列表从该首播；进度条
+拖完松手才 seek；高亮行变了才 notifyDataSetChanged。
+
+**M4 歌词联动** — 关键发现：框架 MediaMetadata 没有自定义键（LYRICS 是
+androidx 的常量），fromSession 只能读 description.extras，而框架 Builder
+注入不了 extras —— 「元数据塞 lrc 全文」路线封死。改走两条现成路：
+Music 目录的歌由 Lyrics.localFile 同名命中；U盘/root 来源由新增的
+MusicLib.lrcFor(title,artist) 在 Lyrics 解析链里兜底（扫描缓存线性找）。
+
+**M5 桌面块** — musBox 第五块进块生态（Drag/Zoom/placeBlock/saveBlockPos
+全复用）：当前曲+下两首+提示行，点按开 MusicActivity（选歌=点歌），
+长按=块菜单；时钟块菜单加「显示音乐块」；tick 原位 setText。
+
+**复盘**：① M2 的「白拿」设计最值：会话标准协议让 MiniPlayer/歌词/控制
+三处 UI 零改动接入本地播放，验证了当初把 MiniPlayer 押在 MediaSession
+而非私有快照上的正确性；② M4 的 androidx 依赖陷阱差点踩进去——写码前
+先 grep 框架 API 再定方案，这次是 javac 拦住了；③ 扫描缓存（MusicLib.last）
+成为 M3/M5/M4 三处共用数据源，一次扫描全桌面受益。真机待验：U盘热插拔
+后的重扫（现只在进页/开块时扫，插拔事件未监听）、前台通知在目标 ROM 的
+常驻表现、ROOT find 的 2>/dev/null 在 toybox 的兼容性。javac --release 11 绿。

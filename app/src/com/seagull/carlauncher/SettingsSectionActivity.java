@@ -1220,6 +1220,8 @@ public class SettingsSectionActivity extends BaseActivity {
     }
 
     private void marketBody() {
+        actionRow("本地音乐", "Music 目录 / U盘 / root 三来源扫描，播放联动桌面歌词",
+                v -> startActivity(new Intent(this, MusicActivity.class)));
         actionRow(getString(R.string.root_panel_title), getString(R.string.root_panel_sub),
                 v -> startActivity(new Intent(this, RootPanelActivity.class)));
         actionRow(getString(R.string.window_test_title), "能力探测与逐项验证",

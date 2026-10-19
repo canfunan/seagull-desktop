@@ -201,6 +201,10 @@
             android:label="菜园"
             android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout" />
 
+        <activity android:name=".MusicActivity" android:exported="false"
+            android:label="本地音乐"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout" />
+
         <service
             android:name=".BallService"
             android:exported="false" />
@@ -232,6 +236,12 @@
         <service
             android:name=".RootShellService"
             android:exported="false" />
+
+        <!-- M2 本地音乐播放：前台服务 + MediaSession（MiniPlayer/歌词自动联动） -->
+        <service
+            android:name=".MusicService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <!--
             APK 自更新：安装 intent 的 Uri 走 SeagullFileProvider（见同名 java，零依赖
