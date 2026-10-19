@@ -134,11 +134,20 @@ Entries discovered by the Agent during task execution should follow this format:
   - 共享受限资源（录屏投影/相机/麦克风）在多槽架构里必须逐槽独占，写完两槽代码要自问"这个 session 允许几个实例"
 
 [Project Knowledge Summary]
+- Date: 2026-10-19
+- Context: Discovered by Agent while delivering audit-fix batch APK (commit efec5fa)
+- Category: Operations & Deployment
+- Instructions:
+  - CI 出包交付全流程：push 后 `curl -s -H "Authorization: Bearer <PAT>" https://api.github.com/repos/caogenfunan123/seagull-desktop/actions/runs?per_page=2` 查状态（GitHub 免费池 queued 可等 10-20 分钟，轮询用后台 terminal）；completed success 后取 runs/<id>/artifacts 拿 artifact id，下载 `.../actions/artifacts/<id>/zip`（需 -L），python zipfile 解包 cp 到 /workspace/SeagullLauncher.apk
+  - api.github.com 用 curl + Bearer token 实测可用（2026-10-19 连续 20+ 次成功）；此前记录的 SSL_ERROR_SYSCALL 已不复现，只有无超时的长 curl 才会被 shell 超时杀掉——curl 必须带 -m
+  - 编辑工具做多行 oldString 替换时按首尾锚做块匹配，锚点之间的中间代码会被静默吞掉（本批次吞过 save() 中段、maskAlpha、构造器）：大段改动必须小锚点或 python 精确替换，改完必跑 javac 检查点 + git diff 删除行核对
+
+[Project Knowledge Summary]
 - Date: 2026-10-01
 - Context: Discovered by Agent while building the seagull-pip-lab replica repo (new GitHub repo from scratch)
 - Category: Environment Configuration
 - Instructions:
   - 本环境 git credential helper（/app/agent/bin/agent git-credential-helper）会间歇返回 `server returned status 500`：此时 `git push`/`git credential fill` 全挂，但 `gh repo create --push`（用 gh 自身鉴权）照样能用。补救推送不把 token 写进 .git/config：`git -c credential.helper= push https://x-access-token:$TOKEN@github.com/<repo>.git main:main`
-  - PAT 从 /root/.git-credentials 现取：`sed -nE 's#https://[^:]+:([^@]+)@github.com.*#\1#p' /root/.git-credentials`；注意 api.github.com 上直接 curl 会 SSL_ERROR_SYSCALL，一律走 `export GH_TOKEN=... && gh ...`
+  - PAT 从 /root/.git-credentials 现取：`sed -nE 's#https://[^:]+:([^@]+)@github.com.*#\1#p' /root/.git-credentials`；api.github.com 早年 curl 报 SSL_ERROR_SYSCALL，2026-10-19 实测带 Bearer token 的短 curl（-m 30）稳定可用，gh 路径仍是兜底
   - 新仓要从零建 GitHub 仓库 + CI：`gh repo create caogenfunan123/<name> --private --source=<dir> --push`，再拷主项目 .github/workflows/build-apk.yml 改产物名；签名密钥统一靠 secret：`base64 -w0 <keystore> | gh secret set SEAGULL_KEYSTORE_B64 --repo <repo>`、密码同样 `gh secret set`，不要回显
   - 本地没有 aapt2/SDK 全量，只能做 javac 类型检查（/tmp/opencode/android-sdk/platforms/android-33.jar）；资源引用错误（如 @color/xxx 没定义、@string 名字不匹配）只能等 CI 才发现，所以写完 res 后必须逐个 grep manifest/values 交叉核对
