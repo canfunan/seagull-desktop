@@ -57,6 +57,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     private PagerView pager;
     private DockBar dock;
     private WallpaperPage poster;
+    private WallpaperVideoView videoLayer;   // 批次 CI：动态壁纸层（root 最底层）
     private AppGridPage appsPage;
     private PipBoard pip;
     private IslandView island;
@@ -98,6 +99,12 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         }
     }
 
+    /** 批次 CI：退后台停动态壁纸（解码器与电池都不陪跑）。 */
+    @Override protected void onPause() {
+        super.onPause();
+        if (videoLayer != null) videoLayer.pauseForBackground();
+    }
+
     @Override protected void onResume() {
         super.onResume();
         // 从设置页 / 壁纸选择回来：配置变了就整屏重画一次
@@ -119,6 +126,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             if (appsPage != null) appsPage.setApps(loadApps(this));
             if (dock != null) dock.applySkin();
             if (poster != null) { poster.applySkin(); poster.tick(); }
+            syncWallVideo();   // 批次 CI：设置页换了动态壁纸，回来即换源
         }
         if (island != null) {
             island.bind(model);
@@ -190,6 +198,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (pip != null) pip.onActivityResult(req, res, data);   // 录屏授权只在投影兜底路径才弹
+        if (poster != null) poster.onActivityResult(req, res, data);   // 批次 CI：小组件 bind 回执
     }
 
     private int dp(float v) {
@@ -271,7 +280,8 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     /** 主界面（第 1 页）：PipBoard 双画布（地图 + 音乐）。媒体控件已内嵌进底部 Dock。 */
     private FrameLayout buildMainPage() {
         FrameLayout page = new FrameLayout(this);
-        page.setBackgroundColor(Skin.c(R.color.ground));
+        // 批次 CI：主页透明 —— 壁纸与暗度遮罩从 root 透出来，画中画不再压一块深底
+        page.setBackgroundColor(0x00000000);
 
         pip = new PipBoard(this, slot -> PipBoard.showPicker(this, slot, pip), true, model);
         // 点画布 = 进入该应用：铺满内容区（导航栏原地不动）
@@ -286,7 +296,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         // 批次 BB：键条「导航栏」键 = 收起/唤出 Dock 导航栏
         pip.setOnToggleDock(this::toggleDock);
         // 批次 AD：画布直接铺到内容区底部（与底栏零缝隙）
-        page.addView(pip, new FrameLayout.LayoutParams(-1, -1));
+        // 批次 CI：整卡悬浮 —— 四周 10dp 边距露壁纸，配合 PipBoard 画布圆角
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(-1, -1);
+        int pm = dp(10);
+        plp.setMargins(pm, pm, pm, pm);
+        page.addView(pip, plp);
         return page;
     }
 
@@ -310,22 +324,34 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     }
 
     /**
-     * 壁纸铺底 + 背景遮罩。遮罩层加在 root 的最底层，三页内容透明地盖在上面，
-     * 只有第 0 页（壁纸桌面）透出壁纸 —— 对齐参考「左滑是壁纸桌面」。
+     * 壁纸铺底 + 背景遮罩。遮罩层加在 root 的最底层，页内容透明地盖在上面：
+     * 第 0 页（壁纸桌面）与第 1 页（画中画，批次 CI 起透壁纸）都能看到壁纸。
      */
     private void applyWallpaper(FrameLayout root) {
-        int w = getResources().getDisplayMetrics().widthPixels;
-        int h = getResources().getDisplayMetrics().heightPixels;
-        String path = currentWallPath();
-        android.graphics.Bitmap bmp = Wallpaper.loadForScreen(this, path, w, h);
-        if (bmp == null) {
+        boolean hasVideo = model.wallVideo != null && !model.wallVideo.isEmpty();
+        if (hasVideo) {
+            // 动态壁纸在播时静态大图不再解码（盖住了还白占几十 MB 内存）
             root.setBackgroundColor(Skin.c(R.color.ground));
-            return;
+        } else {
+            int w = getResources().getDisplayMetrics().widthPixels;
+            int h = getResources().getDisplayMetrics().heightPixels;
+            String path = currentWallPath();
+            android.graphics.Bitmap bmp = Wallpaper.loadForScreen(this, path, w, h);
+            if (bmp == null) {
+                root.setBackgroundColor(Skin.c(R.color.ground));
+            } else {
+                android.graphics.drawable.BitmapDrawable bd =
+                        new android.graphics.drawable.BitmapDrawable(getResources(), bmp);
+                bd.setGravity(Gravity.FILL);
+                root.setBackground(bd);
+            }
         }
-        android.graphics.drawable.BitmapDrawable bd =
-                new android.graphics.drawable.BitmapDrawable(getResources(), bmp);
-        bd.setGravity(Gravity.FILL);
-        root.setBackground(bd);
+        // 批次 CI：动态壁纸层（视频循环静音）压在静态底之上、遮罩与三页之下
+        videoLayer = null;
+        if (hasVideo) {
+            videoLayer = new WallpaperVideoView(this, model.wallVideo);
+            root.addView(videoLayer, 0, new FrameLayout.LayoutParams(-1, -1));
+        }
         if (model.wallDim > 0) {
             View dim = new View(this);
             dim.setBackgroundColor((model.wallDim * 255 / 100) << 24);
@@ -339,6 +365,30 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (model == null) return "";
         if (Skin.isLight(model)) return model.wallDay;
         return model.wallNight.isEmpty() ? model.wallDay : model.wallNight;
+    }
+
+    /**
+     * 动态壁纸层同步（批次 CI）：onResume 幂等对齐 —— 开了就挂上（root 最底层，
+     * 遮罩之下）、换源就 setPath、关了就摘层。皮肤重建路径由 applyWallpaper 负责。
+     */
+    private void syncWallVideo() {
+        String want = model.wallVideo == null ? "" : model.wallVideo;
+        if (want.isEmpty()) {
+            if (videoLayer != null) {
+                FrameLayout p = (FrameLayout) videoLayer.getParent();
+                if (p != null) p.removeView(videoLayer);
+                videoLayer = null;
+            }
+            return;
+        }
+        if (videoLayer == null || videoLayer.getParent() == null) {
+            if (poster == null) return;
+            FrameLayout root = (FrameLayout) poster.getRootView();
+            videoLayer = new WallpaperVideoView(this, want);
+            root.addView(videoLayer, 0, new FrameLayout.LayoutParams(-1, -1));
+        } else {
+            videoLayer.setPath(want);
+        }
     }
 
     /* ------------------------- 底部导航栏 ------------------------- */
@@ -375,6 +425,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                     (cur == 1 ? "● " : "○ ") + "默认开在 1 号窗口",
                     (cur == 2 ? "● " : "○ ") + "默认开在 2 号窗口",
                     "全屏打开（当前窗口留着）",
+                    "替换应用…",
                     "从 Dock 拿下来"
             };
             new AlertDialog.Builder(HomeActivity.this)
@@ -384,8 +435,32 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                             case 0: model.setDockWindow(a.pkg, cur == 1 ? 0 : 1); break;
                             case 1: model.setDockWindow(a.pkg, cur == 2 ? 0 : 2); break;
                             case 2: model.setDockWindow(a.pkg, 0); launch(a.pkg); break;
+                            case 3: replaceDockApp(a); break;
                             default: model.toggleDock(a.key()); break;
                         }
+                        if (dock != null) dock.bind(model);
+                    })
+                    .show();
+        }
+        /** 长按 Dock 图标「替换应用」：原地换人，顺序位次不变（批次 CI）。 */
+        private void replaceDockApp(final LauncherModel.App a) {
+            final int i = model.dock.indexOf(a.key());
+            if (i < 0) return;
+            final List<HomeActivity.AppEntry> apps = loadApps(HomeActivity.this);
+            if (apps.isEmpty()) { toast("没有可用应用"); return; }
+            String[] names = new String[apps.size()];
+            for (int k = 0; k < apps.size(); k++) names[k] = apps.get(k).label;
+            new AlertDialog.Builder(HomeActivity.this)
+                    .setTitle("替换成哪个应用？")
+                    .setItems(names, (d, w) -> {
+                        String key = apps.get(w).pkg;
+                        if (key.equals(a.key()) || model.dock.contains(key)) {
+                            toast("它已经在 Dock 里了");
+                            return;
+                        }
+                        model.dock.remove(i);
+                        model.dock.add(i, key);
+                        model.save();
                         if (dock != null) dock.bind(model);
                     })
                     .show();

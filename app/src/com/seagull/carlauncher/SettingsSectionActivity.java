@@ -385,7 +385,15 @@ public class SettingsSectionActivity extends BaseActivity {
         actionRow("夜间壁纸", model.wallNight.isEmpty() ? "未设置" : model.wallNight, v -> pickWall(false));
         actionRow("清空壁纸", "回到纯色底", v -> {
             model.wallDay = ""; model.wallNight = "";
+            model.wallVideo = "";
             for (LauncherModel.Wall w : new ArrayList<>(model.wallLib)) model.removeWall(w);
+            model.save(); render();
+        });
+        actionRow("动态壁纸（视频）",
+                model.wallVideo.isEmpty() ? "未设置" : "已设置 · 循环静音播放",
+                v -> pickWallVideo());
+        actionRow("清除动态壁纸", "换回静态图", v -> {
+            model.wallVideo = "";
             model.save(); render();
         });
         sectionLabel("壁纸库（" + model.wallLib.size() + " / " + LauncherModel.WALL_LIB_MAX + "）");
@@ -396,11 +404,20 @@ public class SettingsSectionActivity extends BaseActivity {
                 wallRow(w);
             }
         }
-        note("视频壁纸与毛玻璃（RenderEffect）依赖 API 29+ 特性与额外解码开销，"
-                + "公开版先只支持静态图；等有实测收益再加。");
+        note("动态壁纸挑一段视频循环静音播放（批次 CI 已支持）；"
+                + "毛玻璃（RenderEffect）等有实测收益再加。");
     }
 
     private static final int REQ_WALL = 0x5A11;
+    private static final int REQ_WALLVIDEO = 0x5A12;
+
+    private void pickWallVideo() {
+        try {
+            startActivityForResult(Wallpaper.chooserVideo(), REQ_WALLVIDEO);
+        } catch (Throwable t) {
+            toast("这台设备没有文件选择器");
+        }
+    }
 
     private void pickWall(final boolean day) {
         try {
@@ -415,6 +432,22 @@ public class SettingsSectionActivity extends BaseActivity {
 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_WALLVIDEO) {
+            if (data == null || data.getData() == null) return;
+            final Uri u = data.getData();
+            toast("正在导入动态壁纸…");
+            // 视频动辄几十 MB，拷贝丢后台，主线程只收结果（批次 CI 复盘修正）
+            new Thread(() -> {
+                final String p = Wallpaper.importVideo(model, u);
+                runOnUiThread(() -> {
+                    if (p == null) { toast("这段视频读不出来，换一段试试"); render(); return; }
+                    model.wallVideo = p;
+                    model.save();
+                    render();
+                });
+            }, "wall-video-import").start();
+            return;
+        }
         if (req != REQ_WALL || data == null || data.getData() == null) return;
         LauncherModel.Wall w = Wallpaper.onPicked(model, "", data.getData());
         if (w == null) { render(); return; }

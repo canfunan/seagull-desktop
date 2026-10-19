@@ -8,6 +8,7 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Outline;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
@@ -28,6 +29,7 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.view.ViewOutlineProvider;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -82,7 +84,13 @@ public final class PipBoard extends LinearLayout {
     private static final float LUX_NIGHT = 20f;   // 低于它算夜间（带回差）
     private static final float LUX_DAY = 2000f;   // 高于它算白天强光
     /** 批次 AA：底部常驻键条高度。显示时挤压画布盒的底边距，应用窗口随 VD resize。 */
-    private static final int KEYBAR_DP = 34;
+    private static final int KEYBAR_DP = 40;
+    /** 批次 CI：键条玻璃化后悬浮贴底 —— 左右/底边距露壁纸，与 DockBar 同语言。 */
+    private static final int KB_MARGIN_H = 10;
+    private static final int KB_MARGIN_B = 8;
+
+    /** 键条占用的总高度：条高 + 底边距（画布挤压与 VD 定尺寸都用它，保证一致）。 */
+    private int keybarReserve() { return dp(KEYBAR_DP + KB_MARGIN_B); }
 
     private final Activity act;
     private final Host host;
@@ -219,7 +227,9 @@ public final class PipBoard extends LinearLayout {
         this.host = host;
         this.model = model != null ? model : new LauncherModel(act);
         setOrientation(HORIZONTAL);
-        setBackgroundColor(Skin.c(R.color.ground));
+        // 批次 CI：本体透明，透出 HomeActivity 壁纸（root 壁纸在最底层，
+        // 主页/本板不再垫 ground 底色）。MirrorActivity 复用时它自带 ground 兜底。
+        setBackgroundColor(0x00000000);
         setPadding(0, 0, 0, 0);   // 批次 AD：画布铺满内容区，不留任何内边距（去框感）
 
         svA = new SurfaceView(act);
@@ -349,8 +359,9 @@ public final class PipBoard extends LinearLayout {
     /* ------------------------- 两张卡片（左右分割） ------------------------- */
 
     /**
-     * 一块画布 = 一个容器：**没有卡底、没有描边、没有内边距**（批次 AD）。
-     * 画布与画布、画布与底栏之间因此零缝隙，用户看到的"屏幕"直接拼在一起。
+     * 一块画布 = 一个容器：批次 AD 删掉了卡底/描边/内边距，批次 CI 起整卡
+     * 圆角悬浮 —— 卡片与 SurfaceView 都按 OUTLINE 裁圆角（画布四角透壁纸），
+     * HomeActivity 一侧再给 PipBoard 让 10dp 边距。
      * 画布上方依次叠：状态行 / 空态大按钮 / 非焦点遮罩。
      * 触摸统一走容器 OnTouchListener（覆盖层都不是点击目标）。
      */
@@ -358,6 +369,7 @@ public final class PipBoard extends LinearLayout {
         FrameLayout card = new FrameLayout(act);
         card.setBackground(null);
         card.setClipChildren(false);
+        roundify(card);   // 批次 CI：快照/遮罩/占位卡/空态都跟着裁圆角
 
         // 批次 AA：画布盒 —— Surface/提示/空态/遮罩全收进来；键条显示时挤压盒底边距，
         // 应用窗口跟着 VD resize（attachTo/syncSize 按盒实际尺寸走），不用改任何坐标换算。
@@ -366,6 +378,7 @@ public final class PipBoard extends LinearLayout {
         box.setClipChildren(false);
 
         SurfaceView view = which == 1 ? svA : svB;
+        roundify(view);   // 批次 CI：打洞区域按圆角裁（API 23+ SurfaceView 支持 outline 裁剪）
         box.addView(view, new FrameLayout.LayoutParams(-1, -1));
 
         // 批次 CF：快照预览层（盖在 SurfaceView 上，仅 frozen 槽的分屏态亮出）
@@ -411,7 +424,13 @@ public final class PipBoard extends LinearLayout {
         LinearLayout keybar = buildKeybar(which);
         if (which == 1) barA = keybar; else barB = keybar;
         card.addView(box, new FrameLayout.LayoutParams(-1, -1));
-        card.addView(keybar, new FrameLayout.LayoutParams(-1, dp(KEYBAR_DP), Gravity.BOTTOM));
+        // 批次 CI：玻璃键条悬浮贴底（左右 10 / 底 8 边距露壁纸），挤压量用 keybarReserve()
+        FrameLayout.LayoutParams klp =
+                new FrameLayout.LayoutParams(-1, dp(KEYBAR_DP), Gravity.BOTTOM);
+        klp.leftMargin = dp(KB_MARGIN_H);
+        klp.rightMargin = dp(KB_MARGIN_H);
+        klp.bottomMargin = dp(KB_MARGIN_B);
+        card.addView(keybar, klp);
         keybar.setVisibility(View.GONE);   // 分屏（预览）模式没有键条；进入单应用才顶出来
 
         // 批次 AD：删掉焦点描边。两块画布之间那条亮线正是用户说的"框框 / 边框感"。
@@ -656,7 +675,8 @@ public final class PipBoard extends LinearLayout {
     private LinearLayout buildKeybar(int which) {
         LinearLayout bar = new LinearLayout(act);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setBackgroundColor(0xF2101418);
+        // 批次 CI：与 DockBar 同款磨砂玻璃（胶囊圆角），替代不透明深底
+        bar.setBackground(new GlassDrawable(20));
         bar.setGravity(Gravity.CENTER);
         bar.setClickable(true);   // 吃掉键条区域的触摸，别穿透进应用（尤其左右两键之间）
         int vpad = dp(4);
@@ -785,7 +805,8 @@ public final class PipBoard extends LinearLayout {
      * SystemUI 导航栏，应用布局不知道要留边，只能物理让位）。
      */
     private void applyKeybar(int which) {
-        int squeeze = which != 0 ? dp(KEYBAR_DP) : 0;
+        // 批次 CI：悬浮键条 = 条高 + 底边距，画布让出整块区域（玻璃条四周透壁纸）
+        int squeeze = which != 0 ? keybarReserve() : 0;
         if (boxA != null) {
             FrameLayout.LayoutParams pa = (FrameLayout.LayoutParams) boxA.getLayoutParams();
             if (pa.bottomMargin != squeeze) {
@@ -807,16 +828,17 @@ public final class PipBoard extends LinearLayout {
     /* ---------------- 批次 CF：快照预览核心 ---------------- */
 
     /**
-     * frozen 槽的固定 VD 尺寸 = 单应用画布尺寸：全宽 × (全高 - 键条高)。
-     * 单应用态 SurfaceView 尺寸与此严格一致（applyKeybar 挤压同一高度）→
+     * frozen 槽的固定 VD 尺寸 = 单应用画布尺寸：全宽 × (全高 - 键条总占高)。
+     * 单应用态 SurfaceView 尺寸与此严格一致（applyKeybar 挤压同一总量）→
      * 1:1 实显零换算；分屏态输出在快照读面，画布只显示等比缩小的 ImageView。
      */
     private int[] fixedVdSize() {
+        int reserve = keybarReserve();
         int w = getWidth() > 0 ? getWidth()
                 : designW(1) + designW(2) + dp(SPLIT_W);
-        int h = getHeight() > 0 ? getHeight() - dp(KEYBAR_DP)
+        int h = getHeight() > 0 ? getHeight() - reserve
                 : Math.max(1, act.getResources().getDisplayMetrics().heightPixels
-                        - dp(150) - dp(KEYBAR_DP));
+                        - dp(150) - reserve);
         return new int[]{Math.max(1, w), Math.max(1, h)};
     }
 
@@ -967,7 +989,8 @@ public final class PipBoard extends LinearLayout {
      */
     private FrameLayout buildGate() {
         FrameLayout gate = new FrameLayout(act);
-        gate.setBackgroundColor(0xEE101012);
+        // 批次 CI：占位卡玻璃化 + 圆角与画布一致 —— 透出下层壁纸，与 Dock/键条同一语言
+        gate.setBackground(new GlassDrawable(CARD_CORNER_DP));
         gate.setClickable(true);   // 吃掉点击，别穿透到卡容器（容器 UP 会走 enterSlot 双触发）
 
         LinearLayout col = new LinearLayout(act);
@@ -1102,6 +1125,12 @@ public final class PipBoard extends LinearLayout {
         View empty = which == 1 ? emptyA : emptyB;
         if (hint == null) return;
         String pkg = pkgOf(which);
+        // 批次 CI：纯空槽把 SurfaceView 藏掉 —— 打洞消失，壁纸从透明栈里透出来；
+        // 有绑定/有槽位才挂面（surfaceChanged 回调会在可见后自动 attach，链路自愈）
+        SurfaceView sv = which == 1 ? svA : svB;
+        boolean wantCanvas = (s != null && s.ready()) || (pkg != null && !pkg.isEmpty());
+        int wantV = wantCanvas ? View.VISIBLE : View.GONE;
+        if (sv.getVisibility() != wantV) sv.setVisibility(wantV);
         // 批次 CG：槽 2 绑定了应用但还没被显式进入 → 占位卡接管，其余状态全藏
         if (which == 2 && gateB != null) {
             boolean gated = !s2Entered && pkg != null && !pkg.isEmpty();
@@ -1552,6 +1581,20 @@ public final class PipBoard extends LinearLayout {
     private final long[] revealUntil = new long[3];
 
     private String pkgOf(int which) { return loadPkg(act, which); }
+
+    /** 画布圆角半径：与键条/占位卡同一语言（批次 CI）。 */
+    private static final float CARD_CORNER_DP = 20f;
+
+    /** 视图按 outline 裁圆角（View 自身与子树都会被裁）。 */
+    private void roundify(View v) {
+        final float r = dp(CARD_CORNER_DP);
+        v.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), r);
+            }
+        });
+        v.setClipToOutline(true);
+    }
 
     private int dp(float v) {
         return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,

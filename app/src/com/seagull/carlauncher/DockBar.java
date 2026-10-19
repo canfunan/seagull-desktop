@@ -48,10 +48,7 @@ public class DockBar extends LinearLayout {
 
     private static final int MAX_ICONS = 6;
 
-    /** 玻璃条恒深色：底 80% 近黑、描边与高光白系。图标纯白。 */
-    private static final int BAR_BG = 0xCC121216;
-    private static final int BAR_EDGE = 0x22FFFFFF;
-    private static final int BAR_TOP = 0x30FFFFFF;
+    /** 玻璃条恒深色（色值搬进 GlassDrawable 共用），圆角半径本类自留。 */
     private static final int BAR_CORNER_DP = 24;
     private static final int INK = 0xFFFFFFFF;
     private static final int INK_DIM = 0xB3FFFFFF;
@@ -424,47 +421,6 @@ public class DockBar extends LinearLayout {
     private static int dp(Context c, float v) {
         return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
                 c.getResources().getDisplayMetrics()));
-    }
-
-    /**
-     * 磨砂玻璃底：80% 透明近黑圆角矩形 + 1px 玻璃描边 + 顶部高光线。
-     * 画成 Drawable 而非叠 View，收起/唤出的位移动画不会把高光留在屏外。
-     */
-    private static final class GlassDrawable extends android.graphics.drawable.Drawable {
-        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint top = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final float radius;
-
-        GlassDrawable(float cornerDp) {
-            radius = cornerDp * Skin.density;
-            fill.setColor(BAR_BG);
-            edge.setColor(BAR_EDGE);
-            edge.setStyle(Paint.Style.STROKE);
-            edge.setStrokeWidth(2f);
-            top.setColor(BAR_TOP);
-            top.setStrokeWidth(2f);
-        }
-
-        @Override public void draw(Canvas cv) {
-            float w = getBounds().width(), h = getBounds().height();
-            if (w <= 0 || h <= 0) return;
-            cv.drawRoundRect(0, 0, w, h, radius, radius, fill);
-            cv.drawRoundRect(1f, 1f, w - 1f, h - 1f, radius - 1f, radius - 1f, edge);
-            cv.drawLine(radius, 1.5f, w - radius, 1.5f, top);
-        }
-
-        /** 三支画笔一起淡（fill/edge/top 各按自身基色 alpha 等比缩放）。 */
-        @Override public void setAlpha(int a) {
-            fill.setAlpha(a);
-            edge.setAlpha(Math.round(0x22 * a / 255f));
-            top.setAlpha(Math.round(0x30 * a / 255f));
-            invalidateSelf();
-        }
-        @Override public void setColorFilter(android.graphics.ColorFilter cf) {
-            fill.setColorFilter(cf); invalidateSelf();
-        }
-        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
     }
 
     /** 单个白色矢量图标：细线几何，线宽 ~7%，圆头圆角。contentScale 把图形

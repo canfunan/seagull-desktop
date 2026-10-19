@@ -254,6 +254,13 @@ public final class LauncherModel {
     public String wallDay = "";                // 白天壁纸路径
     public String wallNight = "";              // 夜间壁纸路径
     public int wallDim = 0;                    // 背景遮罩 0~100
+    public String wallVideo = "";              // 动态壁纸视频路径（批次 CI，空 = 静态图）
+    /** 壁纸页时钟块：位置比例（0~1，左上角）与字号倍率（批次 CI 可编辑）。 */
+    public float wallClockX = 0.5f;
+    public float wallClockY = 0.13f;
+    public float wallClockScale = 1f;
+    /** 壁纸页小组件记录（批次 CI）：[{"id":appWidgetId,"x":0~1,"y":0~1}] */
+    public String wallWidgetsJson = "[]";
     public final List<Wall> wallLib = new ArrayList<>();
     public int fontScale = 100;                // 全局字号 50~150
 
@@ -893,6 +900,11 @@ public final class LauncherModel {
                 wa.put(wo);
             }
             o.put("wallLib", wa);
+            o.put("wallVideo", wallVideo);
+            JSONObject wck = new JSONObject();
+            wck.put("x", wallClockX); wck.put("y", wallClockY); wck.put("s", wallClockScale);
+            o.put("wallClock", wck);
+            o.put("wallWidgets", wallWidgetsJson);
             /* 屏幕 */
             o.put("marginH", marginH);
             o.put("marginV", marginV);
@@ -1084,6 +1096,14 @@ public final class LauncherModel {
             wallDay = o.optString("wallDay", "");
             wallNight = o.optString("wallNight", "");
             wallDim = o.optInt("wallDim", 0);
+            wallVideo = o.optString("wallVideo", "");
+            JSONObject wco = o.optJSONObject("wallClock");
+            if (wco != null) {
+                wallClockX = (float) wco.optDouble("x", 0.5);
+                wallClockY = (float) wco.optDouble("y", 0.13);
+                wallClockScale = (float) wco.optDouble("s", 1.0);
+            }
+            wallWidgetsJson = o.optString("wallWidgets", "[]");
             fontScale = o.optInt("fontScale", 100);
             JSONArray wa = o.optJSONArray("wallLib");
             if (wa != null) {

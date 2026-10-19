@@ -12,6 +12,88 @@
 
 ---
 
+## 批次 CI — 画中画透壁纸圆角化 + 动态壁纸 + 壁纸页时钟编辑/小组件 + Dock 替换应用
+
+### 目标
+
+用户五条：① 应用界面也透出壁纸；② 壁纸页时间日期可编辑大小和移动位置、壁纸页可加小组件；
+③ 支持一直循环播放的动态壁纸；④ 桌面画中画圆角显示；⑤ 底栏图标长按可替换应用。
+
+### 改了什么
+
+**画中画整卡悬浮 + 圆角（①④）**：
+- HomeActivity 给 PipBoard 让四周 10dp 边距（原来铺满内容区），壁纸从四周透出 ——
+  分屏、单应用（键条悬浮玻璃化已就位）两种形态统一「悬浮卡片浮在壁纸上」。
+- PipBoard 新增 `roundify()`：画布卡（card，裁快照/遮罩/占位卡/空态）与 SurfaceView
+  本体都按 outline 裁 `CARD_CORNER_DP=20` 圆角。SurfaceView 打洞跟随 outline 裁剪是
+  API 23+ 支持的行为（视频播放器圆角同款做法），minSdk 29 无兼容问题。
+- 槽 2 占位卡玻璃底圆角同步改 20。
+
+**动态壁纸（③）**：
+- `WallpaperVideoView`（新文件）：TextureView + MediaPlayer，`setLooping(true)` +
+  `setVolume(0,0)` 恒静音循环（车机声音归系统），prepare 丢后台线程；
+  Surface 销毁/摘树/onPause 全 release，回前台 `syncWallVideo()` 幂等重建。
+- 层级：root 最底层 = 静态壁纸背景 → 视频层（index 0）→ 壁纸压暗遮罩 → 三页。
+  视频层透出画中画透明区与壁纸页，压暗遮罩照常生效。
+- 模型新增 `wallVideo`（JSON "wallVideo"）；`Wallpaper.chooserVideo()/importVideo()`
+  从系统选择器拷进 `filesDir/walls/*.vid`（与静态图同一套无权限路径）。
+- 设置页壁纸组新增「动态壁纸（视频）」「清除动态壁纸」两行；「清空壁纸」连带清视频；
+  顺带把「视频壁纸暂不支持」的过期 note 改掉。
+
+**壁纸页时钟编辑 + 小组件（②）**：
+- WallpaperPage 重构：时钟+日期+媒体/歌词收进一个 `clockBox` 可拖动块 ——
+  长按进入拖动（requestDisallowIntercept 拦掉 pager 横翻），位置存
+  `wallClockX/x=中点比例、wallClockY/y=顶边比例`；长按原地松手弹字号菜单
+  （小/标准/大/特大 = 0.7/1.0/1.3/1.6 倍），行距等比缩放。
+- 系统小组件承载：AppWidgetHost（实例 id 0x5E59）+ BIND_APPWIDGET（清单已有）。
+  长按页面空白 → 列出 `getInstalledProviders()` → `bindAppWidgetIdIfAllowed`
+  （默认桌面静默通过）→ 要授权走系统 ACTION_APPWIDGET_BIND 回执（REQ_BIND=0x5E01，
+  HomeActivity.onActivityResult 原样转发 poster）。组件尺寸取 provider minWidth/minHeight，
+  可拖动摆位、长按移除；记录 `[{"id","x","y"}]` 存 `wallWidgetsJson`，被卸载的组件
+  恢复时顺手清记录释放 id。startListening/stopListening 跟随页面挂树/摘树。
+
+**Dock 替换应用（⑤）**：
+- 长按 Dock 图标菜单插入「替换应用…」：原地换人（model.dock 同 index 删旧插新），
+  顺序位次不变；已在 Dock 里的目标拒绝；换完 `dock.bind(model)` 刷新。
+
+### 复盘
+
+- 空槽 SurfaceView 藏掉（上一轮批次 CH 追加）是壁纸透出的前提：SurfaceView 的打洞
+  区域无视窗口内容，壁纸在洞里根本看不见；藏掉后打洞消失，透明栈里壁纸自然透出。
+- 时钟块位置口径定成「x=中点比例、y=顶边比例」是为了让默认 x=0.5 保持水平居中
+  （块宽未知也能居中），两种对象（时钟块/组件）共用一套 Drag 手势与钳制逻辑。
+- 视频壁纸恒静音 + 退后台 release 是刻意的：车机媒体声道绝不能被壁纸抢，
+  解码器也不该在后台陪跑。
+- **全量复盘修掉的四个雷**（提交前自查抓到）：
+  1. `AppWidgetProviderInfo.loadLabel()` 被本地裁剪版 android.jar 改成了返回
+     `String`，真机 framework 是 `CharSequence` —— 调用点描述符按 stub 生成，
+     真机必抛 NoSuchMethodError（被 catch 吞掉不崩，但组件列表退化成类名）。
+     改用 `p.label` 字段（新旧 framework 签名一致）。教训：**本地桩 jar 改过
+     签名的 API，编译通过也等于没验证**，冷门 API 用字段或经典入口。
+  2. 小组件在页面量尺寸前挂载（开机恢复路径），宽高被 80dp 下限兜底后不再
+     变化 —— 新增 `refitWidget()`：布局完成后按 provider minWidth/minHeight
+     重算尺寸再按比例回位（attachWidget 后 post 一次 + onSizeChanged 逐个 refit）。
+  3. 视频导入（几十 MB）原先在主线程拷贝，挪后台线程，主线程只收结果。
+  4. 挂了动态壁纸时静态大图不再解码（被视频盖住还白占几十 MB 内存）。
+- 时钟块/组件拖动与 pager 横翻的共存：触摸消费靠 PagerView.onInterceptTouchEvent
+  拦截横滑，requestDisallowIntercept 只在长按（拖动意图）后调用 —— 两者不打架。
+- 历史遗留（与本批无关，记录备查）：QuickbarCheck 自 LauncherModel 引入静态
+  LruCache 起在纯 JVM 下必抛 Stub!（桩 android.jar 无实现），CI 又没挂 selfcheck
+  步骤，一直没人发现；修复需给自检提供真实 LruCache 垫片，另开批次处理。
+
+### 验证
+
+- `javac` 全量类型检查 OK（仅历史 deprecation note，无错误）。
+- 交互面（拖动/长按/小组件绑定/视频播放）待真机验证 —— 本地无 Gradle/模拟器。
+
+### 遗留
+
+- 小组件尺寸用 provider 默认 minWidth/minHeight，暂不支持双指缩放调整组件大小。
+- 动态壁纸选择走系统文件选择器，未做内置视频库。
+- SurfaceView 圆角裁剪在个别厂商 ROM 上若不生效，回退方案是叠四角遮罩。
+
+---
+
 ## 批次 CH — 底部 Dock 整条重画：车机悬浮玻璃底栏，媒体控件内嵌，退出键移除
 
 ### 目标

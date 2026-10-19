@@ -29,6 +29,35 @@ public final class Wallpaper {
         return i;
     }
 
+    /** 动态壁纸选择器（批次 CI）：只挑视频。 */
+    public static Intent chooserVideo() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("video/*");
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        return i;
+    }
+
+    /** 导入动态壁纸视频到 app 私有目录，返回路径；失败返回 null（调用方 toast）。 */
+    public static String importVideo(LauncherModel m, Uri uri) {
+        File dir = new File(m.context().getFilesDir(), "walls");
+        if (!dir.exists() && !dir.mkdirs()) return null;
+        File f = new File(dir, System.currentTimeMillis() + ".vid");
+        try (InputStream in = m.context().getContentResolver().openInputStream(uri)) {
+            if (in == null) return null;
+            try (FileOutputStream out = new FileOutputStream(f)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            }
+        } catch (Throwable t) {
+            android.util.Log.w("SeagullWall", "导入动态壁纸失败", t);
+            f.delete();
+            return null;
+        }
+        return f.getAbsolutePath();
+    }
+
     /** 拷贝到 app 私有目录并入壁纸库，返回新条目；满了返回 null。 */
     public static LauncherModel.Wall importImage(LauncherModel m, String name, Uri uri) {
         File dir = new File(m.context().getFilesDir(), "walls");
