@@ -606,6 +606,15 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         startActivity(new Intent(this, SettingsHubActivity.class));
     }
 
+    /** G2 场景一键：快捷栏 @scene: 点击入口。 */
+    public void applyScene(String name) {
+        LauncherModel.Scene s = model == null ? null : model.findScene(name);
+        if (s == null) { toast("场景不存在，请重新选择"); return; }
+        if (pip == null) return;
+        pip.applyScene(s.pkgA, s.pkgB);
+        toast("已应用场景：" + name);
+    }
+
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
 
     /* ------------------------- 系统画中画（L2） ------------------------- */

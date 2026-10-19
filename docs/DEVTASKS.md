@@ -3,8 +3,8 @@
 依据 docs/BACKLOG.md 已拍板 16 项 + docs/RESEARCH.md 方案拆解。执行纪律：每个小功能先调研（官方文档/开源实现/全网）再动手；实现一个复盘一个；全部完成后清单对齐 + 三次大复盘修复 + 推送构建持续监控。
 
 ## 批次 G 开机链
-- [ ] G1 开机自启恢复：BootReceiver（BOOT_COMPLETED/QUICKBOOT_POWERON，exported=true）+ 延迟布屏退避重试（15/30/60s）+ 开关项；adb am broadcast 可测
-- [ ] G2 场景一键：scenes 配置（slotA/slotB/weight/wallpaper）+ QuickBar 场景卡入口 + 一键布屏（deploy 幂等复用）
+- [x] G1 开机自启恢复：BootReceiver（BOOT_COMPLETED/QUICKBOOT_POWERON，exported=true）+ 延迟布屏退避重试（15/30/60s）+ 开关项；adb am broadcast 可测
+- [x] G2 场景一键：scenes 配置（slotA/slotB/weight/wallpaper）+ QuickBar 场景卡入口 + 一键布屏（deploy 幂等复用）
 
 ## 批次 H GPS 管线
 - [ ] H1 LocationHelper：权限申请、GPS_PROVIDER 1s 节流、死亡解绑
@@ -51,3 +51,5 @@
 
 ## 复盘记录
 （每个功能完成后在此追加一行：功能 — 复盘结论）
+- G1 开机自启恢复 — 用 SystemClock.elapsedRealtime<90s 窗口判定替代 BOOT 广播标记，规避 receiver 与 home 启动竞态；slot1 复用现有 deployIfBound+selfHeal 重试链零新增机制；slot2 仅开机窗口放行（批次 CG 手动门槛保持）；新增 autoRestore 开关（默认开）与 QUICKBOOT_POWERON action。javac 绿。
+- G2 场景一键 — 调研期发现 QuickBar 已有 @fn: 前缀分发模式，场景沿用同构 key 约定 @scene:<名字>（名字而非索引，重排序安全）；编辑工具多行锚块匹配吞码两处（QuickBar cell/桌面菜单），改小锚点后恢复。场景存档全局共享（scenes 数组），重命名/删除时同步清洗所有布局快捷栏的引用 key（quickbarByMode 是 private，新增 allQuickbars() 访问器）；PipBoard.applyScene 走 savePkg+s2Entered+deployIfBound 复用幂等部署链，空槽场景 slot2 重新上闸（批次 CG 语义）；删除场景即清格，悬空 key 兜底 toast「场景不存在」。javac 绿。

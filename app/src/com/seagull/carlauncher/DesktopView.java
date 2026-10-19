@@ -434,13 +434,18 @@ public class DesktopView extends FrameLayout {
         final LauncherModel m = model();
         if (m == null) return;
         String cur = QuickBar.slotKey(m, idx);
-        String[] opts = {"清空", "选择应用…", "功能按钮…"};
+        String[] opts = {"清空", "选择应用…", "功能按钮…", "场景…"};
         new AlertDialog.Builder(getContext())
                 .setTitle("快捷栏第 " + (idx + 1) + " 格")
                 .setItems(opts, (d, which) -> {
                     if (which == 0) { m.clearQuickSlot(idx); refresh(); return; }
                     if (which == 1) {
                         appPickDialog("选应用", a -> { m.setQuickSlot(idx, a.key(), a.label); refresh(); });
+                    } else if (which == 3) {
+                        scenePickDialog(name -> {
+                            m.setQuickSlot(idx, "@scene:" + name, name);
+                            refresh();
+                        });
                     } else {
                         new AlertDialog.Builder(getContext())
                                 .setTitle("功能按钮")
@@ -465,6 +470,20 @@ public class DesktopView extends FrameLayout {
         new AlertDialog.Builder(getContext())
                 .setTitle(title)
                 .setItems(labels, (d, which) -> pick.accept(m.allApps.get(which)))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    /** G2：从场景列表挑一个放进快捷栏；没建过场景时提示去设置页。 */
+    private void scenePickDialog(final java.util.function.Consumer<String> pick) {
+        final LauncherModel m = model();
+        if (m == null) return;
+        if (m.scenes.isEmpty()) { host.onToast("还没有场景：设置 → 快捷栏 → 新建场景"); return; }
+        String[] names = new String[m.scenes.size()];
+        for (int i = 0; i < names.length; i++) names[i] = m.scenes.get(i).name;
+        new AlertDialog.Builder(getContext())
+                .setTitle("选场景")
+                .setItems(names, (d, which) -> pick.accept(m.scenes.get(which).name))
                 .setNegativeButton("取消", null)
                 .show();
     }
@@ -540,6 +559,11 @@ public class DesktopView extends FrameLayout {
         QuickBar.Host qh = new QuickBar.Host() {
             @Override public LauncherModel model() { return DesktopView.this.model(); }
             @Override public void onEditSlot(int idx) { quickSlotMenu(idx); }
+            @Override public void onScene(String name) {
+                if (getContext() instanceof HomeActivity) {
+                    ((HomeActivity) getContext()).applyScene(name);
+                }
+            }
         };
         wrap.addView(QuickBar.build(getContext(), qh), new LinearLayout.LayoutParams(-1, 0, 1f));
         return wrap;

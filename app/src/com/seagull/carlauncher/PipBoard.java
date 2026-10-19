@@ -248,6 +248,15 @@ public final class PipBoard extends LinearLayout {
         // 进程级常驻槽：上次退出没拆屏，直接拿回来接着用
         slotA = MirrorHost.slot(act, "pip1");
         slotB = MirrorHost.slot(act, "pip2");
+        // G1 开机恢复窗口：本次开机后 90s 内首次建板，slot2 视为已显式进入
+        // （批次 CG 的手动门槛只管日常手动打开；开机把上次画布布回来是本批次的验收）。
+        // 用 elapsedRealtime 判定（官方语义=本次开机起算），规避 BOOT 广播与
+        // home 启动的时序竞态；开关 autoRestore=false 时保持 CG 原语义。
+        if (model.autoRestore
+                && android.os.SystemClock.elapsedRealtime() < 90_000L
+                && !pkgOf(2).isEmpty()) {
+            s2Entered = true;
+        }
         updateHints();
         applyFocusVisuals(false);
         if (autoDeploy) deployIfBound();
@@ -1359,6 +1368,21 @@ public final class PipBoard extends LinearLayout {
         if (which == 2) s2Entered = true;
         deploySlot(which);
         // 批次 CF：新应用可能是 frozen（快照）也可能不是 —— 落地后重新对齐
+        ui.postDelayed(this::applySnapshotMode, 400);
+    }
+
+    /**
+     * G2 场景一键：两槽包名落盘后整体布屏。
+     * 场景语义 = 用户显式动作：有内容的 slot2 解除闸门；空槽恢复占位卡
+     * （重新上闸，避免「场景清空后被下一次自动部署意外占位」）。
+     * 主线程调用（QuickBar tap 链路）；deploy 内部自带同槽串行与幂等。
+     */
+    public void applyScene(String pkgA, String pkgB) {
+        savePkg(act, 1, pkgA == null ? "" : pkgA);
+        savePkg(act, 2, pkgB == null ? "" : pkgB);
+        s2Entered = !pkgOf(2).isEmpty();
+        updateHints();
+        deployIfBound();
         ui.postDelayed(this::applySnapshotMode, 400);
     }
 

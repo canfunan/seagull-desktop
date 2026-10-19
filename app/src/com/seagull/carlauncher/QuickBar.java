@@ -80,6 +80,8 @@ public final class QuickBar {
         LauncherModel model();
         /** 长按某格：换内容或清空。 */
         void onEditSlot(int idx);
+        /** G2 场景一键：点击 @scene: 格。默认空实现，宿主按需覆写。 */
+        default void onScene(String name) { }
     }
 
     /**
@@ -161,9 +163,11 @@ public final class QuickBar {
             return box;
         }
 
-        if (key.startsWith("@fn:")) {
+        if (key.startsWith("@fn:") || key.startsWith("@scene:")) {
+            boolean fn = key.startsWith("@fn:");
+            String suffix = key.substring(fn ? 4 : 7);
             TextView t = new TextView(ctx);
-            t.setText(key.substring(4).isEmpty() ? "" : fnLabel(key.substring(4)));
+            t.setText(suffix.isEmpty() ? "" : (fn ? fnLabel(suffix) : suffix));
             t.setTextColor(Skin.c(R.color.leaf));
             t.setTextSize(12);
             t.setGravity(Gravity.CENTER);
@@ -193,6 +197,10 @@ public final class QuickBar {
 
     private static void tap(Host host, String key) {
         LauncherModel m = host.model();
+        if (key.startsWith("@scene:")) {
+            if (m != null) host.onScene(key.substring(7));
+            return;
+        }
         if (key.startsWith("@fn:")) {
             // 功能按钮分支也要判空：桌面已销毁时 host.model() 是 null，
             // 旧实现直接 .context() 拿上下文弹 toast，NPE（批次 T 复盘坐实）

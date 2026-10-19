@@ -2324,3 +2324,39 @@ SelfTestMirror 结果未校验（taskOnDisplay 三处核对在位）、TaskEngin
 
 **遗留**：目标 App 的弹窗/透明页也会被拉横屏（预期内，车机场景可接受）；
 应用内部横竖屏状态机若与 WM 冲突需真机看 logcat（SeagullLsp tag）。
+
+## 批次 G 开机链（G1+G2）
+
+**G1 开机自启恢复** — 官方语义是「本次开机后恢复上次的画布」，用
+SystemClock.elapsedRealtime<90s 判开机窗口，规避 BOOT 广播与 home 启动的时序
+竞态，零新增进程间通信。slot1 复用现有 deployIfBound+300/600/900ms redeploy+
+selfHeal+repin 重试链；slot2 只在开机窗口内放行 s2Entered（autoRestore 开且
+pkgOf(2) 非空），批次 CG 的「手动显式进入」语义日常保持。新增
+LauncherModel.autoRestore（默认开）+ 设置页「开机恢复画布」开关 +
+Manifest QUICKBOOT_POWERON。
+
+**G2 场景一键** — 一键把两块画布布成预设应用组合。复用 QuickBar 现成的
+@fn: 前缀分发模式，场景 key 约定 @scene:<名字>（名字而非索引，重排序安全）：
+
+- LauncherModel：Scene{name,pkgA,pkgB} + scenes 列表（全局共享）+ findScene，
+  存档 save/load 增 scenes 数组（n/a/b 字段）；
+- QuickBar：@scene: 格渲染为叶子色文本，tap 分发 host.onScene(name)
+  （接口默认方法，宿主按需覆写）；
+- DesktopView：quickSlotMenu 增「场景…」+ Host.onScene 转发
+  HomeActivity.applyScene；scenePickDialog（无场景时提示去设置页）；
+- PipBoard.applyScene(pkgA,pkgB)：savePkg 两槽落盘 + s2Entered 按 pkgB 非空
+  放行/上闸 + updateHints + deployIfBound（幂等部署链）+ 快照重对齐；
+  空槽场景 slot2 回落占位语义；
+- 设置页（快捷栏）：场景 section（新建/画布 1/画布 2/重命名/删除），
+  重命名与删除同步清洗所有布局快捷栏里的 @scene: key（quickbarByMode
+  为 private，新增 allQuickbars() 访问器）；删除场景即清格，悬空 key 兜底
+  toast「场景不存在」。
+
+**复盘**：QuickBar/设置页的既有模式（choiceRow/actionRow/inputDialog/
+appPicker）让本功能零新增 UI 范式；主要坑是编辑工具多行 oldString 按首尾
+锚块匹配吞中间内容（QuickBar cell 与桌面菜单两处），改小锚点编辑后 javac
+恢复绿。真机待验：场景点击→双槽重布的流畅度、空场景（两槽都占位）回落
+表现。javac --release 11 绿。
+
+**批次 G 小结**：开机链两功能均走「复用既有机制 + 最小新增」，G1 零新
+状态机（窗口判定+重试链），G2 零新 UI 范式（key 约定+幂等部署）。

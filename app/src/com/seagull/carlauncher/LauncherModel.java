@@ -155,10 +155,18 @@ public final class LauncherModel {
 
     /** 快捷栏一格：放应用或功能按钮。 */
     public static final class QuickSlot {
-        public String key;        // 应用 key；功能按钮用 @fn:<name>
+        public String key;        // 应用 key；功能按钮用 @fn:<name>；场景用 @scene:<名字>
         public String label;      // 功能按钮显示名
         public QuickSlot(String key, String label) { this.key = key; this.label = label; }
         public boolean isFunc() { return key != null && key.startsWith("@fn:"); }
+    }
+
+    /** G2 场景一键：一键把两块画布布成预设应用组合。 */
+    public static final class Scene {
+        public String name;       // 展示名（同时是 @scene: key 的后缀）
+        public String pkgA;       // 画布 1 应用包名，空=占位
+        public String pkgB;       // 画布 2 应用包名，空=占位
+        public Scene(String n, String a, String b) { name = n; pkgA = a; pkgB = b; }
     }
 
     /** 自动化任务：触发条件 → 动作。 */
@@ -248,6 +256,15 @@ public final class LauncherModel {
     /* ==================== 状态：快捷栏 ==================== */
 
     public final List<QuickSlot> quickbar = new ArrayList<>();
+
+    /** G2 场景列表（跨布局共享，全局一份）。 */
+    public final List<Scene> scenes = new ArrayList<>();
+
+    public Scene findScene(String name) {
+        if (name == null) return null;
+        for (Scene s : scenes) if (name.equals(s.name)) return s;
+        return null;
+    }
     /** 每个桌面布局各有一份快捷栏（TODO P0-6：换布局时快捷栏跟着换）。 */
     private final Map<Integer, List<QuickSlot>> quickbarByMode = new LinkedHashMap<>();
     public String quickBtn1 = "";     // 快捷开关 1（@fn:xxx）
@@ -376,6 +393,8 @@ public final class LauncherModel {
     /* ==================== 状态：系统 ==================== */
 
     public boolean autoHome = true;
+    /** 开机后自动恢复上次画布（slot1 恒恢复；slot2 仅开机窗口内放行，批次 CG 手动语义不变） */
+    public boolean autoRestore = true;
 
     /* ==================== 运行时 ==================== */
 
@@ -768,6 +787,14 @@ public final class LauncherModel {
 
     private void stashQuickbar() { swapQuickbar(quickbar, quickbarByMode, mode.ordinal()); }
 
+    /** G2：全部布局的快捷栏（含当前），场景重命名/删除时用来同步 @scene: key。 */
+    public List<List<QuickSlot>> allQuickbars() {
+        List<List<QuickSlot>> out = new ArrayList<>();
+        out.add(quickbar);
+        out.addAll(quickbarByMode.values());
+        return out;
+    }
+
     public void setQuickSlot(int idx, String key, String label) {
         while (quickbar.size() <= idx) quickbar.add(new QuickSlot("", ""));
         quickbar.set(idx, new QuickSlot(key == null ? "" : key, label == null ? "" : label));
@@ -1036,6 +1063,16 @@ public final class LauncherModel {
             o.put("tasks", ta);
             /* 系统 */
             o.put("autoHome", autoHome);
+            o.put("autoRestore", autoRestore);
+            JSONArray sc = new JSONArray();
+            for (Scene s : scenes) {
+                JSONObject so = new JSONObject();
+                so.put("n", s.name);
+                so.put("a", s.pkgA);
+                so.put("b", s.pkgB);
+                sc.put(so);
+            }
+            o.put("scenes", sc);
             json = o.toString();
             }
 
@@ -1134,6 +1171,18 @@ public final class LauncherModel {
             }
             quickBtn1 = o.optString("qbtn1", "");
             quickBtn2 = o.optString("qbtn2", "");
+
+            scenes.clear();
+            JSONArray sc = o.optJSONArray("scenes");
+            if (sc != null) {
+                for (int i = 0; i < sc.length(); i++) {
+                    JSONObject so = sc.optJSONObject(i);
+                    if (so == null) continue;
+                    String n = so.optString("n", "");
+                    if (n.isEmpty()) continue;
+                    scenes.add(new Scene(n, so.optString("a", ""), so.optString("b", "")));
+                }
+            }
 
             gardenEnabled = o.optBoolean("garden", true);
             gardenDim = o.optInt("gardenDim", 60);
@@ -1252,6 +1301,7 @@ public final class LauncherModel {
             }
 
             autoHome = o.optBoolean("autoHome", true);
+            autoRestore = o.optBoolean("autoRestore", true);
         } catch (Throwable t) {
             Log.w(TAG, "读取布局失败，回落默认", t);
             defaults();

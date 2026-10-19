@@ -253,10 +253,90 @@ public class SettingsSectionActivity extends BaseActivity {
         sectionLabel("快捷开关");
         fnChoiceRow("快捷开关 1", model.quickBtn1, v -> { model.quickBtn1 = v; });
         fnChoiceRow("快捷开关 2", model.quickBtn2, v -> { model.quickBtn2 = v; });
+
+        sectionLabel("场景一键");
+        if (model.scenes.isEmpty()) {
+            note("还没有场景 — 新建一个，把两块画布布成预设的应用组合，再放进快捷栏一键切换。");
+        }
+        for (int i = 0; i < model.scenes.size(); i++) {
+            final LauncherModel.Scene s = model.scenes.get(i);
+            actionRow(s.name, sceneAppLabel(s.pkgA) + " / " + sceneAppLabel(s.pkgB), v -> sceneMenu(s));
+        }
+        actionRow("＋ 新建场景", "定义画布 1 / 画布 2 的应用组合", v -> createScene());
+    }
+
+    /** G2 场景一键：新建 / 配置 / 重命名 / 删除。 */
+    private void createScene() {
+        inputDialog("场景名称", "", n -> {
+            String name = n == null ? "" : n.trim();
+            if (name.isEmpty()) return;
+            if (model.findScene(name) != null) { toast("已有同名场景"); return; }
+            LauncherModel.Scene s = new LauncherModel.Scene(name, "", "");
+            model.scenes.add(s);
+            model.save();
+            render();
+            sceneMenu(s);
+        });
+    }
+
+    private void sceneMenu(final LauncherModel.Scene s) {
+        String[] opts = {"画布 1：" + sceneAppLabel(s.pkgA), "画布 2：" + sceneAppLabel(s.pkgB),
+                "重命名", "删除"};
+        choiceDialog("场景：" + s.name, opts, -1, i -> {
+            if (i == 0) {
+                appPicker("画布 1", a -> { s.pkgA = a.pkg; model.save(); render(); });
+            } else if (i == 1) {
+                appPicker("画布 2", a -> { s.pkgB = a.pkg; model.save(); render(); });
+            } else if (i == 2) {
+                inputDialog("重命名场景", s.name, n -> renameScene(s, n));
+            } else {
+                confirmDialog("删除场景", "删除「" + s.name + "」？快捷栏里引用它的格子会一并清空。", () -> removeScene(s));
+            }
+        });
+    }
+
+    private void renameScene(LauncherModel.Scene s, String n) {
+        String name = n == null ? "" : n.trim();
+        if (name.isEmpty() || name.equals(s.name)) return;
+        if (model.findScene(name) != null) { toast("已有同名场景"); return; }
+        String oldKey = "@scene:" + s.name;
+        String newKey = "@scene:" + name;
+        for (LauncherModel.QuickSlot q : model.quickbar) if (oldKey.equals(q.key)) q.key = newKey;
+        for (List<LauncherModel.QuickSlot> l : model.allQuickbars())
+            for (LauncherModel.QuickSlot q : l) if (oldKey.equals(q.key)) q.key = newKey;
+        s.name = name;
+        model.save();
+        render();
+    }
+
+    private void removeScene(LauncherModel.Scene s) {
+        String key = "@scene:" + s.name;
+        model.scenes.remove(s);
+        for (LauncherModel.QuickSlot q : model.quickbar) if (key.equals(q.key)) q.key = "";
+        for (List<LauncherModel.QuickSlot> l : model.allQuickbars())
+            for (LauncherModel.QuickSlot q : l) if (key.equals(q.key)) q.key = "";
+        model.save();
+        render();
+    }
+
+    private void scenePickDialog(java.util.function.Consumer<String> pick) {
+        if (model.scenes.isEmpty()) {
+            toast("还没有场景，先「＋ 新建场景」");
+            return;
+        }
+        String[] names = new String[model.scenes.size()];
+        for (int i = 0; i < names.length; i++) names[i] = model.scenes.get(i).name;
+        choiceDialog("选场景", names, -1, i -> pick.accept(names[i]));
+    }
+
+    private String sceneAppLabel(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return "空位";
+        for (LauncherModel.App a : model.allApps) if (a.pkg != null && a.pkg.equals(pkg)) return a.label;
+        return pkg;
     }
 
     private void slotDialog(final int idx) {
-        String[] opts = {"清空", "选择应用…", "功能按钮…"};
+        String[] opts = {"清空", "选择应用…", "功能按钮…", "场景…"};
         choiceDialog("快捷栏第 " + (idx + 1) + " 格", opts, -1, i -> {
             if (i == 0) {
                 model.clearQuickSlot(idx);
@@ -264,6 +344,11 @@ public class SettingsSectionActivity extends BaseActivity {
             } else if (i == 1) {
                 appPicker("选应用", a -> {
                     model.setQuickSlot(idx, a.key(), a.label);
+                    render();
+                });
+            } else if (i == 3) {
+                scenePickDialog(n -> {
+                    model.setQuickSlot(idx, "@scene:" + n, n);
                     render();
                 });
             } else {
@@ -933,6 +1018,7 @@ public class SettingsSectionActivity extends BaseActivity {
 
     private void systemBody() {
         toggleRow("开机自启", model.autoHome, () -> { model.autoHome = !model.autoHome; });
+        toggleRow("开机恢复画布", model.autoRestore, () -> { model.autoRestore = !model.autoRestore; });
 
         sectionLabel("导航与增强（批次 AN）");
         toggleRow("导航信息卡片", model.navEnabled, () -> { model.navEnabled = !model.navEnabled; });
