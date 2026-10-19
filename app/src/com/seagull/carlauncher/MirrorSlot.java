@@ -95,6 +95,9 @@ public final class MirrorSlot implements CanvasSource {
 
     public int displayId() { return displayId; }
     public boolean ready() { return ready; }
+    /** 批次 AI：体检/铺满巡检要用 VD 逻辑尺寸。 */
+    public int vdW() { return vdW; }
+    public int vdH() { return vdH; }
     public boolean trusted() { return trusted; }
     public boolean needsProjection() { return needsProjection; }
     /** 批次 R：true = 这块屏由 MediaProjection 建出，投影一停屏就死。 */
@@ -114,6 +117,15 @@ public final class MirrorSlot implements CanvasSource {
         return last == null ? -1 : last;
     }
     public static synchronized int activeCount() { return ACTIVE.size(); }
+
+    /** 批次 AI：活跃虚拟屏快照（设置页「画中画体检」遍历用）。 */
+    public static synchronized int[] activeDisplays() {
+        int[] a = new int[ACTIVE.size()];
+        int i = 0;
+        for (Integer d : ACTIVE) a[i++] = d;
+        java.util.Arrays.sort(a);
+        return a;
+    }
 
     /* ---------------- 部署 ---------------- */
 

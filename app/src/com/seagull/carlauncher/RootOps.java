@@ -181,6 +181,137 @@ public final class RootOps {
                 + (out == null ? "无回显" : out.trim()));
     }
 
+    /* ---------------- 批次 AI：窗口帧探测与「未铺满」自修复 ---------------- */
+
+    /**
+     * 解析 dumpsys window displays，取 pkg 在 displayId 上**最大**那个窗口的帧
+     * （VD 坐标系）。返回 {l,t,r,b}；解析不出 / 应用不在这块屏 → null。
+     *
+     * 兼容两种 ROM 的 display 头格式（`Display: mDisplayId=5` / `Display #5`）。
+     * 取最大窗口是因为主 Activity 常伴随弹窗/悬浮窗，铺满与否看主体。
+     * 解析失败返回 null，调用方必须「不动进程」—— 宁可漏修不可误杀。
+     */
+    public static int[] windowFrameOnDisplay(int displayId, String pkg) {
+        String out = Caps.exec("dumpsys window displays");
+        if (out == null || out.isEmpty()) return null;
+        java.util.regex.Pattern head = java.util.regex.Pattern.compile(
+                "mDisplayId=" + displayId + "\\b|Display #" + displayId + "\\b");
+        String[] lines = out.split("\n");
+        int start = -1;
+        for (int i = 0; i < lines.length; i++) {
+            if (head.matcher(lines[i]).find()) { start = i; break; }
+        }
+        if (start < 0) return null;
+        String winKey = "u0 " + pkg + "/";
+        int[] best = null;
+        long bestArea = -1;
+        boolean inWindow = false;
+        for (int i = start + 1; i < lines.length; i++) {
+            String l = lines[i];
+            if (i > start && head.matcher(l).find()) break;   // 下一块屏
+            if (l.contains("Window #") || l.contains("mSurfaceWindow{")) {
+                inWindow = l.contains(winKey);
+                continue;
+            }
+            if (!inWindow) continue;
+            int[] f = parseFrame(l);
+            if (f != null) {
+                long area = (long) (f[2] - f[0]) * (f[3] - f[1]);
+                if (area > bestArea) { bestArea = area; best = f; }
+                inWindow = false;   // 一窗一帧，取第一个帧字段
+            }
+        }
+        return best;
+    }
+
+    /** 解析一行里的 frame=[l,t][r,b]（兼容 mFrame= / frame=）。 */
+    private static int[] parseFrame(String line) {
+        int k = line.toLowerCase().indexOf("frame=[");
+        if (k < 0) return null;
+        try {
+            String s = line.substring(k + 7);
+            int mid = s.indexOf("][");
+            if (mid < 0) return null;
+            int end = s.indexOf(']', mid + 2);
+            if (end < 0) return null;
+            String[] p1 = s.substring(0, mid).split(",");
+            String[] p2 = s.substring(mid + 2, end).split(",");
+            return new int[] {
+                    Integer.parseInt(p1[0].trim()), Integer.parseInt(p1[1].trim()),
+                    Integer.parseInt(p2[0].trim()), Integer.parseInt(p2[1].trim())};
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * 某屏上全部带帧的应用窗口（体检页用）：String[n][5] = 标题, l, t, r, b。
+     * 与 windowFrameOnDisplay 同一份解析，只是不按包名过滤、全部收集。
+     */
+    public static String[][] displayWindows(int displayId) {
+        String out = Caps.exec("dumpsys window displays");
+        if (out == null || out.isEmpty()) return new String[0][];
+        java.util.regex.Pattern head = java.util.regex.Pattern.compile(
+                "mDisplayId=" + displayId + "\\b|Display #" + displayId + "\\b");
+        String[] lines = out.split("\n");
+        int start = -1;
+        for (int i = 0; i < lines.length; i++) {
+            if (head.matcher(lines[i]).find()) { start = i; break; }
+        }
+        if (start < 0) return new String[0][];
+        java.util.List<String[]> got = new java.util.ArrayList<>();
+        String curTitle = null;
+        for (int i = start + 1; i < lines.length; i++) {
+            String l = lines[i];
+            if (head.matcher(l).find()) break;
+            int wAt = l.indexOf("Window #");
+            int sAt = l.indexOf("mSurfaceWindow{");
+            if (wAt >= 0 || sAt >= 0) {
+                curTitle = extractTitle(l);
+                continue;
+            }
+            if (curTitle == null) continue;
+            int[] f = parseFrame(l);
+            if (f != null) {
+                got.add(new String[]{curTitle,
+                        String.valueOf(f[0]), String.valueOf(f[1]),
+                        String.valueOf(f[2]), String.valueOf(f[3])});
+                curTitle = null;   // 一窗一帧
+            }
+        }
+        return got.toArray(new String[0][]);
+    }
+
+    /** 从窗口头行提取 `u0 pkg/cls`（失败返回原行截断）。 */
+    private static String extractTitle(String line) {
+        int u = line.indexOf("u0 ");
+        if (u >= 0) {
+            int e = line.indexOf('}', u);
+            String t = line.substring(u + 3, e > u ? e : line.length()).trim();
+            if (!t.isEmpty()) return t;
+        }
+        return line.trim().length() > 60 ? line.trim().substring(0, 60) : line.trim();
+    }
+
+    /**
+     * 未铺满自修复（批次 AI）：探测 pkg 窗口帧 vs 屏尺寸，任一轴 < 92% 判未铺满
+     * → force-stop + 在该屏冷启动（deploy 时已写好兼容位，新进程必然按屏尺寸布局）。
+     * 返回一句结论（进日志 / 体检报告）；**解析失败时绝不动进程** —— 宁可漏修不可误杀。
+     */
+    public static String ensureFilled(Context ctx, String pkg, int displayId, int dispW, int dispH) {
+        if (dispW <= 0 || dispH <= 0) return "屏尺寸未知，跳过";
+        int[] f = windowFrameOnDisplay(displayId, pkg);
+        if (f == null) return "探测不到窗口帧（应用可能不在这块屏），不动进程";
+        int w = f[2] - f[0], h = f[3] - f[1];
+        boolean full = w >= dispW * 92 / 100 && h >= dispH * 92 / 100;
+        if (full) return "已铺满 " + w + "x" + h + " / " + dispW + "x" + dispH;
+        Log.i(TAG, "未铺满 " + w + "x" + h + " / " + dispW + "x" + dispH + " → 冷启动修复 " + pkg);
+        Caps.exec("am force-stop " + pkg);
+        try { Thread.sleep(800); } catch (InterruptedException ignore) {}
+        boolean ok = launchOnDisplay(ctx, pkg, displayId);
+        return "未铺满(" + w + "x" + h + " / " + dispW + "x" + dispH + ") → 已冷启动修复 ok=" + ok;
+    }
+
     private static boolean launchViaApi(Context ctx, String comp, int displayId) {
         try {
             Intent i = new Intent(Intent.ACTION_MAIN);

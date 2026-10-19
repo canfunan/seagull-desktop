@@ -907,6 +907,10 @@ public class SettingsSectionActivity extends BaseActivity {
                 : "不可用 —— 需 uid=1000。root 侧方案：把本应用装进 /system/priv-app", null);
         actionRow("LSPosed 模块自检", "不用抓日志：查模块有没有注入高德 / 网易云 / SystemUI",
                 v -> runLspCheck());
+        actionRow("画中画体检", "窗口帧 vs 虚拟屏尺寸，直接给「铺没铺满」的结论",
+                v -> runPipCheck(false));
+        actionRow("画中画修复", "把画布里的应用冷启动到虚拟屏（铺满的最后手段）",
+                v -> runPipCheck(true));
         note("立即校时与系统自动时间需要平台签名，公开版不可达，对应入口不显示。");
     }
 
@@ -941,6 +945,84 @@ public class SettingsSectionActivity extends BaseActivity {
         actionRow("安装包指纹", "签名证书 SHA-256", v -> showFingerprint());
         actionRow("检查更新", "对比 GitHub 上最新的 release", v -> checkUpdate());
         note("不做登录、会员、云端存档、分享码。备份/恢复只走本地文件导入导出。");
+    }
+
+    /* ------------------------- 画中画体检 / 修复（批次 AI） ------------------------- */
+
+    /**
+     * 「铺没铺满、触摸准不准」的现场证据（不用抓日志）：
+     * 遍历活跃虚拟屏 → 列出屏上每个应用窗口的帧（dumpsys window displays）→
+     * 对照屏尺寸给结论。repair=true 时额外把画布里的应用冷启动到该屏（最后手段：
+     * 铺满巡检/布局抖动都救不回来的顽固应用）。
+     */
+    private void runPipCheck(final boolean repair) {
+        toast(repair ? "正在修复…" : "正在体检…");
+        new Thread(() -> {
+            StringBuilder sb = new StringBuilder();
+            int[] ds = MirrorSlot.activeDisplays();
+            if (ds.length == 0) {
+                sb.append("当前没有活跃的画中画虚拟屏。\n先在桌面部署画中画，再回来体检。");
+            }
+            for (int d : ds) {
+                sb.append("虚拟屏 displayId=").append(d);
+                android.hardware.display.DisplayManager adm =
+                        (android.hardware.display.DisplayManager) getSystemService(DISPLAY_SERVICE);
+                android.view.Display disp = adm == null ? null : adm.getDisplay(d);
+                int dw = -1, dh = -1;
+                if (disp != null) {
+                    android.util.DisplayMetrics dm = new android.util.DisplayMetrics();
+                    disp.getRealMetrics(dm);
+                    dw = dm.widthPixels;
+                    dh = dm.heightPixels;
+                }
+                sb.append("  ").append(dw > 0 ? dw + "x" + dh : "尺寸未知").append('\n');
+
+                String[][] wins = RootOps.displayWindows(d);
+                if (wins.length == 0) sb.append("  <没解析到任何窗口帧>\n");
+                String fixPkg = null;
+                long fixArea = -1;
+                for (String[] w : wins) {
+                    try {
+                        int l = Integer.parseInt(w[1]), t = Integer.parseInt(w[2]);
+                        int r = Integer.parseInt(w[3]), b = Integer.parseInt(w[4]);
+                        int ww = r - l, hh = b - t;
+                        String pct = (dw > 0 && dh > 0)
+                                ? "  " + ww * 100 / dw + "%×" + hh * 100 / dh + "%"
+                                : "";
+                        String verdict = (dw > 0 && ww >= dw * 92 / 100 && hh >= dh * 92 / 100)
+                                ? "铺满 ✓" : "未铺满 ✗";
+                        sb.append("  ").append(w[0]).append('\n')
+                                .append("    frame=[").append(l).append(',').append(t)
+                                .append("][").append(r).append(',').append(b)
+                                .append("]  ").append(ww).append('x').append(hh)
+                                .append(pct).append("  ").append(verdict).append('\n');
+                        // 修复目标 = 最大的非本应用窗口（锚点/桌面自己不算）
+                        if (!w[0].startsWith("com.seagull.carlauncher/")
+                                && (long) ww * hh > fixArea) {
+                            fixArea = (long) ww * hh;
+                            int slash = w[0].indexOf('/');
+                            fixPkg = slash > 0 ? w[0].substring(0, slash) : w[0];
+                        }
+                    } catch (Throwable ignore) {}
+                }
+                if (repair && fixPkg != null) {
+                    Caps.exec("am force-stop " + fixPkg);
+                    try { Thread.sleep(800); } catch (InterruptedException ignore) {}
+                    boolean ok = RootOps.launchOnDisplay(this, fixPkg, d);
+                    sb.append("\n  修复：").append(fixPkg).append(" 冷启动到 displayId=")
+                            .append(d).append(ok ? " ✓" : " ✗（看日志）").append('\n');
+                }
+                sb.append('\n');
+            }
+            if (repair) {
+                sb.append("提示：修复=冷启动，音乐/导航状态会重置；铺满巡检救不回来才用它。\n");
+            } else {
+                sb.append("触摸错位的原理：触摸按「应用铺满虚拟屏」换算，窗口没铺满就全偏。\n");
+                sb.append("未铺满 ✗ 时先回桌面重部署（等 6 秒自动巡检修复），仍不行再点「画中画修复」。\n");
+            }
+            final String rep = sb.toString();
+            runOnUiThread(() -> msgDialog(repair ? "画中画修复" : "画中画体检", rep));
+        }).start();
     }
 
     /* ------------------------- LSPosed 模块自检 ------------------------- */

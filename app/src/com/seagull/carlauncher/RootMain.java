@@ -343,7 +343,15 @@ public final class RootMain {
         try {
             MotionEvent.class.getMethod("setDisplayId", int.class).invoke(ev, ms.displayId);
         } catch (Throwable t) {
-            Log.w(TAG, "setDisplayId 反射失败（老 ROM 没有这个方法）: " + t);
+            // 【批次 AI·fail-closed】setDisplayId 是 @hide 方法，部分 ROM/进程组合下
+            // 反射会失败。此前只打警告继续注入 —— 事件没带 displayId 就落到主屏
+            // (display 0)，表现正是「画布里两个应用触摸位置全错」且无任何可见痕迹。
+            // 现在直接拒绝注入：调用方（TouchForward.replay）收到 err 会把本次手势
+            // 余下事件退回 `input -d <id>` 命令通道，那条路的 displayId 是命令行参数，
+            // 没有这个问题。
+            Log.w(TAG, "setDisplayId 反射失败，拒绝注入（防误注主屏）: " + t);
+            try { ev.recycle(); } catch (Throwable ignore) {}
+            return null;
         }
         return ev;
     }

@@ -947,6 +947,19 @@ public final class PipBoard extends LinearLayout {
                 });
             }
         }, "pip-deploy" + which).start();
+        // 【批次 AI】部署 6 秒后铺满巡检：布局抖动（2s/4.5s）之后应用若仍未铺满
+        //（dumpsys 窗口帧 < 屏尺寸 92%），冷启动修复 —— 兼容位 deploy 时已写好，
+        // 新进程必然按屏尺寸布局。解析失败绝不动进程（宁可漏修不可误杀）。
+        ui.postDelayed(() -> new Thread(() -> {
+            try {
+                MirrorSlot s2 = slotOf(which);
+                if (s2 == null || s2.displayId() <= 0) return;
+                String out = RootOps.ensureFilled(act, pkg, s2.displayId(), s2.vdW(), s2.vdH());
+                Log.i(TAG, "铺满巡检 槽 " + which + ": " + out);
+            } catch (Throwable t) {
+                Log.w(TAG, "铺满巡检异常: " + t);
+            }
+        }, "pip-fill" + which).start(), 6000);
     }
 
     /**
