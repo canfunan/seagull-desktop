@@ -75,6 +75,8 @@ public class MirrorActivity extends BaseActivity {
             int slot = getIntent().getIntExtra(EXTRA_SLOT, 1);
             if (slot < 1 || slot > 2) slot = 1;
             PipBoard.savePkg(this, slot, pkg);
+            // 批次 CG：本页是「用户显式指定投屏」的入口，解除槽 2 的点击闸门
+            PipBoard.markEntered(slot);
             Log.i(TAG, "桌面指定：槽 " + slot + " → " + pkg);
         }
         board.deployIfBound();

@@ -5,22 +5,27 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
-import android.graphics.Typeface;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.LinearLayout;
-import android.widget.TextView;
 
 /**
- * 常驻底部导航栏 —— 复刻 Vivo 智能车载 CarLauncher 的 carmode_dock_view。
+ * 常驻底部导航栏 —— 苹果 CarPlay 风格（批次 CG 整条重画）。
  *
- * 图标顺序与参考一致：首页 / 地图 / 音乐 / 其他 / 退出。
- * 参考布局里每一项是「42dp 图标 + 下方 24x3dp 指示条」，指示条只在选中项显示
- * （CarModeDockItemView 的 indicator_view）。图标本身是矢量，这里直接用 Path
- * 画出来，不引任何 drawable 资源，保证构建不依赖 aapt2 之外的额外素材。
+ * 用户原话「导航栏实在太丑了，想要苹果互联风格的图标和导航栏」。CarPlay 底栏的
+ * 硬特征逐条落地：
+ *   · 通栏贴底、无侧边距、无圆角，深色玻璃观感（车机没有 RenderEffect 毛玻璃，
+ *     用 94% 不透明近黑 + 顶部 1px 高光模拟「玻璃上沿」）；
+ *   · 只有图标没有文字、没有竖分隔线 —— 五个键等宽铺满（CarPlay dock 就是纯图标）；
+ *   · 图标是白色细线几何：统一线宽 ~7%、圆头圆角，深浅主题都不换色
+ *     （CarPlay 恒深色，浅色主题下这条深底栏同样成立）；
+ *   · 选中态 = 纯白 + iOS 式小圆点，未选中 = 55% 白。
  *
- * 导航栏不随页面切换消失：三页共用同一条，这正是参考里「导航栏不变」的落地方式。
+ * 图标语义（对齐 CarPlay/苹果的既有认知）：
+ *   首页 = 圆环（CarPlay 左下角 home 键就是这个白圈）；地图 = 导航箭头（实心）；
+ *   音乐 = 连尾双音符 ♫（Apple Music 字形）；其他 = 四圆角方格（iOS 主屏网格）；
+ *   退出 = 电源（弧 + 竖线）。
  */
 public class DockBar extends LinearLayout {
 
@@ -35,65 +40,49 @@ public class DockBar extends LinearLayout {
     }
 
     private static final int[] ICONS = {HOME, MAP, MUSIC, APPS, EXIT};
-    private static final String[] NAMES = {"首页", "地图", "音乐", "其他", "退出"};
+
+    /** CarPlay 恒深色：底条 94% 近黑，图标纯白 / 未选中 55% 白 / 圆点 60% 白。 */
+    private static final int BAR_BG = 0xF0121214;
+    private static final int BAR_EDGE = 0x26FFFFFF;   // 顶部玻璃上沿高光
+    private static final int INK_ON = 0xFFFFFFFF;
+    private static final int INK_OFF = 0x8CFFFFFF;
+    private static final int DOT = 0x99FFFFFF;
 
     private final DockIconView[] icons = new DockIconView[ICONS.length];
-    private final View[] indicators = new View[ICONS.length];
-    private final TextView[] labels = new TextView[ICONS.length];
+    private final View[] dots = new View[ICONS.length];
     private int active = HOME;
 
     public DockBar(Context c, final Listener listener) {
         super(c);
         setOrientation(HORIZONTAL);
         setGravity(Gravity.CENTER_VERTICAL);
-        // 参考 card_corner_radius_dock = 18dp：导航栏是一条浮起来的圆角条，不是通栏底色块
-        setBackground(Skin.round(Skin.c(R.color.panel), 18f));
-        setPadding(dp(10), dp(4), dp(10), dp(4));
+        setBackground(new BarDrawable());
+        setPadding(dp(6), 0, dp(6), 0);
 
         for (int i = 0; i < ICONS.length; i++) {
-            // 参考 carmode_dock_view 的 2dp×22dp 竖分隔：首页 ｜ 地图/音乐/其他 ｜ 退出
-            if (i == 1 || i == 4) addView(divider(c));
             final int which = ICONS[i];
             LinearLayout item = new LinearLayout(c);
             item.setOrientation(VERTICAL);
-            item.setGravity(Gravity.CENTER_HORIZONTAL);
-            item.setPadding(dp(8), dp(3), dp(8), dp(1));
+            item.setGravity(Gravity.CENTER);
 
             DockIconView icon = new DockIconView(c, which);
             icons[i] = icon;
-            item.addView(icon, new LinearLayout.LayoutParams(dp(38), dp(38)));
+            item.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
 
-            TextView label = new TextView(c);
-            label.setText(NAMES[i]);
-            label.setTextSize(12);
-            label.setGravity(Gravity.CENTER);
-            label.setSingleLine(true);
-            labels[i] = label;
-            item.addView(label, new LinearLayout.LayoutParams(-2, -2));
+            // iOS 式选中圆点：不认识的图标也能看出「现在在哪一页」
+            View dot = new View(c);
+            dot.setBackground(Skin.round(DOT, 2f));
+            dot.setVisibility(INVISIBLE);
+            dots[i] = dot;
+            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(dp(4), dp(4));
+            dl.topMargin = dp(4);
+            item.addView(dot, dl);
 
-            View ind = new View(c);
-            ind.setBackground(Skin.round(Skin.c(R.color.leaf), 1.5f));
-            ind.setVisibility(INVISIBLE);
-            indicators[i] = ind;
-            LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(dp(20), dp(3));
-            ilp.topMargin = dp(1);
-            item.addView(ind, ilp);
-
+            item.setPadding(dp(4), dp(4), dp(4), dp(2));
             item.setOnClickListener(v -> { if (listener != null) listener.onDock(which); });
             addView(item, new LinearLayout.LayoutParams(0, -2, 1f));
         }
         syncActive();
-    }
-
-    /** 参考里的 2dp×22dp 竖分隔。 */
-    private View divider(Context c) {
-        View v = new View(c);
-        v.setBackground(Skin.round(0x1FFFFFFF, 1f));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(2), dp(22));
-        lp.leftMargin = dp(6);
-        lp.rightMargin = dp(6);
-        v.setLayoutParams(lp);
-        return v;
     }
 
     /** 高亮某一项（由页面切换 / 点击驱动）。 */
@@ -102,13 +91,8 @@ public class DockBar extends LinearLayout {
         syncActive();
     }
 
-    /** 换肤后重刷配色（Skin.apply 之后再调）。 */
+    /** 换肤后调用：CarPlay 风格恒深色，不跟主题换色，只需重算选中态。 */
     public void applySkin() {
-        setBackground(Skin.round(Skin.c(R.color.panel), 18f));
-        for (DockIconView ic : icons) if (ic != null) ic.refresh();
-        for (View ind : indicators) if (ind != null) {
-            ind.setBackground(Skin.round(Skin.c(R.color.leaf), 1.5f));
-        }
         syncActive();
     }
 
@@ -116,12 +100,7 @@ public class DockBar extends LinearLayout {
         for (int i = 0; i < ICONS.length; i++) {
             boolean on = ICONS[i] == active;
             if (icons[i] != null) icons[i].setActive(on);
-            if (indicators[i] != null) indicators[i].setVisibility(on ? VISIBLE : INVISIBLE);
-            if (labels[i] != null) {
-                labels[i].setTextColor(Skin.c(on ? R.color.leaf : R.color.text_dim));
-                labels[i].setTypeface(labels[i].getTypeface(),
-                        on ? Typeface.BOLD : Typeface.NORMAL);
-            }
+            if (dots[i] != null) dots[i].setVisibility(on ? VISIBLE : INVISIBLE);
         }
     }
 
@@ -130,7 +109,33 @@ public class DockBar extends LinearLayout {
                 getResources().getDisplayMetrics()));
     }
 
-    /** 单个矢量图标：线宽统一、圆头圆角，深浅主题共用一套几何。 */
+    /**
+     * 底条背景：94% 近黑 + 顶部 1px 高光。画成 Drawable 而不是叠 View，
+     * 收起/唤出的位移动画不会把高光留在屏外。
+     */
+    private static final class BarDrawable extends android.graphics.drawable.Drawable {
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        BarDrawable() {
+            fill.setColor(BAR_BG);
+            edge.setColor(BAR_EDGE);
+            edge.setStrokeWidth(2f);
+        }
+
+        @Override public void draw(Canvas cv) {
+            cv.drawRect(0, 0, getBounds().width(), getBounds().height(), fill);
+            cv.drawLine(0, 1f, getBounds().width(), 1f, edge);
+        }
+
+        @Override public void setAlpha(int a) { fill.setAlpha(a); invalidateSelf(); }
+        @Override public void setColorFilter(android.graphics.ColorFilter cf) {
+            fill.setColorFilter(cf); invalidateSelf();
+        }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    /** 单个矢量图标：白色细线几何，线宽统一 ~7%、圆头圆角；选中纯白、未选中 55% 白。 */
     static final class DockIconView extends View {
         private final int kind;
         private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -149,10 +154,10 @@ public class DockBar extends LinearLayout {
             refresh();
         }
 
-        void setActive(boolean on) { active = on; invalidate(); }
+        void setActive(boolean on) { active = on; refresh(); }
 
         void refresh() {
-            int col = active ? Skin.c(R.color.leaf) : Skin.c(R.color.text_dim);
+            int col = active ? INK_ON : INK_OFF;
             stroke.setColor(col);
             fill.setColor(col);
             invalidate();
@@ -163,54 +168,46 @@ public class DockBar extends LinearLayout {
             if (w <= 0 || h <= 0) return;
             float s = Math.min(w, h);
             float cx = w / 2f, cy = h / 2f;
-            stroke.setStrokeWidth(s * 0.075f);
+            stroke.setStrokeWidth(s * 0.07f);
             path.reset();
 
             switch (kind) {
                 case HOME: {
-                    float bw = s * 0.60f, bh = s * 0.46f;
-                    path.moveTo(cx - bw / 2f, cy - bh * 0.10f);
-                    path.lineTo(cx, cy - bh * 0.72f);
-                    path.lineTo(cx + bw / 2f, cy - bh * 0.10f);
-                    path.moveTo(cx - bw * 0.36f, cy - bh * 0.18f);
-                    path.lineTo(cx - bw * 0.36f, cy + bh * 0.58f);
-                    path.lineTo(cx + bw * 0.36f, cy + bh * 0.58f);
-                    path.lineTo(cx + bw * 0.36f, cy - bh * 0.18f);
-                    cv.drawPath(path, stroke);
+                    // CarPlay home 键：一枚白圈，圈内留空
+                    float r = s * 0.36f;
+                    cv.drawCircle(cx, cy, r, stroke);
                     break;
                 }
                 case MAP: {
-                    float r = s * 0.22f;
-                    path.addCircle(cx, cy - r * 0.55f, r, Path.Direction.CW);
-                    path.moveTo(cx - r * 0.80f, cy - r * 0.05f);
-                    path.lineTo(cx, cy + s * 0.40f);
-                    path.lineTo(cx + r * 0.80f, cy - r * 0.05f);
-                    cv.drawPath(path, stroke);
-                    fill.setStyle(Paint.Style.FILL);
-                    cv.drawCircle(cx, cy - r * 0.55f, r * 0.34f, fill);
+                    // 导航箭头（实心，指向上）：tip / 右翼 / 底部凹口 / 左翼
+                    float k = s * 0.04f;
+                    path.moveTo(cx, cy - 9f * k);
+                    path.lineTo(cx + 8.3f * k, cy + 8.3f * k);
+                    path.lineTo(cx, cy + 4.6f * k);
+                    path.lineTo(cx - 8.3f * k, cy + 8.3f * k);
+                    path.close();
+                    cv.drawPath(path, fill);
                     break;
                 }
                 case MUSIC: {
-                    float x1 = cx - s * 0.14f, x2 = cx + s * 0.20f;
-                    float top = cy - s * 0.40f, bot = cy + s * 0.18f;
-                    path.moveTo(x1, top);
-                    path.lineTo(x1, bot);
-                    path.moveTo(x2, top - s * 0.10f);
-                    path.lineTo(x2, bot - s * 0.10f);
-                    path.moveTo(x1, top);
-                    path.lineTo(x2, top - s * 0.10f);
-                    cv.drawPath(path, stroke);
+                    // 连尾双音符 ♫：斜置粗横梁 + 两根竖干 + 两个实心符头
+                    float bx1 = cx - s * 0.20f, by1 = cy - s * 0.30f;
+                    float bx2 = cx + s * 0.28f, by2 = cy - s * 0.38f;
+                    stroke.setStrokeWidth(s * 0.11f);
+                    cv.drawLine(bx1, by1, bx2, by2, stroke);
+                    stroke.setStrokeWidth(s * 0.07f);
+                    cv.drawLine(bx1, by1 + s * 0.02f, bx1, cy + s * 0.22f, stroke);
+                    cv.drawLine(bx2, by2 + s * 0.02f, bx2, cy + s * 0.14f, stroke);
                     float hr = s * 0.105f;
-                    fill.setStyle(Paint.Style.FILL);
                     path.reset();
-                    path.addCircle(x1 - hr, bot, hr, Path.Direction.CW);
-                    path.addCircle(x2 - hr, bot - s * 0.10f, hr, Path.Direction.CW);
+                    path.addCircle(bx1 - hr * 0.6f, cy + s * 0.235f, hr, Path.Direction.CW);
+                    path.addCircle(bx2 - hr * 0.6f, cy + s * 0.155f, hr, Path.Direction.CW);
                     cv.drawPath(path, fill);
                     break;
                 }
                 case APPS: {
-                    float half = s * 0.15f, off = s * 0.245f, rad = s * 0.05f;
-                    fill.setStyle(Paint.Style.FILL);
+                    // iOS 主屏网格：四枚圆角方格（实心）
+                    float half = s * 0.125f, off = s * 0.21f, rad = s * 0.06f;
                     path.reset();
                     for (int sx = -1; sx <= 1; sx += 2) {
                         for (int sy = -1; sy <= 1; sy += 2) {
@@ -224,12 +221,13 @@ public class DockBar extends LinearLayout {
                 }
                 case EXIT:
                 default: {
-                    float r = s * 0.32f;
-                    tmp.set(cx - r, cy - r * 0.85f, cx + r, cy + r * 1.15f);
+                    // 电源：缺口圆弧 + 顶部竖线
+                    float r = s * 0.30f;
+                    tmp.set(cx - r, cy - r * 0.9f, cx + r, cy + r * 1.1f);
                     path.addArc(tmp, -55f, 290f);
                     cv.drawPath(path, stroke);
                     path.reset();
-                    path.moveTo(cx, cy - s * 0.48f);
+                    path.moveTo(cx, cy - s * 0.46f);
                     path.lineTo(cx, cy - s * 0.04f);
                     cv.drawPath(path, stroke);
                     break;

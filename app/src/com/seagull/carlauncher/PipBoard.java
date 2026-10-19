@@ -153,6 +153,30 @@ public final class PipBoard extends LinearLayout {
     /** 单焦点：只有它能收触摸。初始槽 1。 */
     private int focusSlot = 1;
 
+    /* ---------------- 批次 CG：槽 2「点击才进入」闸门 ---------------- */
+
+    /**
+     * 用户原话「把第二个画中画弄成点击下方图标才进入软件」。进程级总闸：
+     * 上电（进程新建）后槽 2 只显示占位卡（见 buildGate），**不自动部署应用**；
+     * 点占位卡或点导航栏「音乐」（deploySlotPublic(2)）才真正部署进入。
+     * 进程级而非页面级：换肤重建页面时若用户已经进过（本进程内），回桌面
+     * 仍显示实时预览而不是把播放中的应用重新盖一层占位卡；车机每次上电
+     * 进程新建 → 闸门自动回到「未进入」，符合「点火后才点一下」的车机直觉。
+     */
+    private static boolean s2Entered;
+
+    /** 显式进入（导航栏音乐键 / 占位卡 / 选择器选定 / 桌面指定投屏）解除闸门。 */
+    public static void markEntered(int which) {
+        if (which == 2) {
+            s2Entered = true;
+            Log.i(TAG, "槽 2 闸门解除（用户显式进入）");
+        }
+    }
+
+    private FrameLayout gateB;            // 槽 2 占位卡（绑定但未进入时盖在画布上）
+    private ImageView gateIcon;
+    private TextView gateName;
+
     /* ---------------- 批次 CF：不可缩放应用的快照预览 ---------------- */
 
     /**
@@ -377,6 +401,13 @@ public final class PipBoard extends LinearLayout {
         if (which == 1) maskA = mask; else maskB = mask;
         box.addView(mask, new FrameLayout.LayoutParams(-1, -1));
 
+        // 批次 CG：槽 2 占位卡盖在最上层 —— 绑定但未进入时遮住空画布
+        if (which == 2) {
+            gateB = buildGate();
+            gateB.setVisibility(View.GONE);
+            box.addView(gateB, new FrameLayout.LayoutParams(-1, -1));
+        }
+
         LinearLayout keybar = buildKeybar(which);
         if (which == 1) barA = keybar; else barB = keybar;
         card.addView(box, new FrameLayout.LayoutParams(-1, -1));
@@ -429,7 +460,10 @@ public final class PipBoard extends LinearLayout {
             }
             gd.onTouchEvent(e);
             if (a == MotionEvent.ACTION_UP && !longFired[w]) {
-                if (s == null || !s.ready() || pkgOf(w).isEmpty()) openPick(w);
+                if (pkgOf(w).isEmpty()) openPick(w);
+                // 批次 CG：占位态点画布 = 进入（与点占位卡/导航栏音乐键同路）
+                else if (w == 2 && !s2Entered) enterSlot(w);
+                else if (s == null || !s.ready()) openPick(w);
                 else enterSlot(w);
             }
             if (a == MotionEvent.ACTION_CANCEL) longFired[w] = false;
@@ -924,6 +958,76 @@ public final class PipBoard extends LinearLayout {
         return b;
     }
 
+    /* ---------------- 批次 CG：槽 2 占位卡 ---------------- */
+
+    /**
+     * 槽 2 的「点击进入」占位卡：CarPlay 风格 —— 深底 + 白圆角图标卡（内嵌应用
+     * 图标）+ 应用名 + 一行提示。点击 = 与导航栏「音乐」同一条路（enterSlot →
+     * HomeActivity.expandSlot → 部署进单应用）；长按 = 换应用（与空画布一致）。
+     */
+    private FrameLayout buildGate() {
+        FrameLayout gate = new FrameLayout(act);
+        gate.setBackgroundColor(0xEE101012);
+        gate.setClickable(true);   // 吃掉点击，别穿透到卡容器（容器 UP 会走 enterSlot 双触发）
+
+        LinearLayout col = new LinearLayout(act);
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setGravity(Gravity.CENTER);
+
+        // 图标卡：56dp 白底圆角，内嵌应用图标（CarPlay dock 的 app icon 观感）
+        FrameLayout iconCard = new FrameLayout(act);
+        GradientDrawable cardBg = new GradientDrawable();
+        cardBg.setColor(0xFFFFFFFF);
+        cardBg.setCornerRadius(dp(13));
+        iconCard.setBackground(cardBg);
+        int pad = dp(6);
+        iconCard.setPadding(pad, pad, pad, pad);
+        iconCard.setClickable(false);
+        gateIcon = new ImageView(act);
+        gateIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        iconCard.addView(gateIcon, new FrameLayout.LayoutParams(-1, -1));
+        col.addView(iconCard, new LinearLayout.LayoutParams(dp(56), dp(56)));
+
+        gateName = new TextView(act);
+        gateName.setTextColor(0xF0FFFFFF);
+        gateName.setTextSize(16);
+        gateName.setGravity(Gravity.CENTER);
+        gateName.setSingleLine(true);
+        LinearLayout.LayoutParams nl = new LinearLayout.LayoutParams(-2, -2);
+        nl.topMargin = dp(12);
+        col.addView(gateName, nl);
+
+        TextView hint = new TextView(act);
+        hint.setText("点击进入 · 长按更换");
+        hint.setTextColor(0x8CFFFFFF);
+        hint.setTextSize(12);
+        hint.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(-2, -2);
+        hl.topMargin = dp(4);
+        col.addView(hint, hl);
+
+        gate.addView(col, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        gate.setOnClickListener(v -> enterSlot(2));
+        gate.setOnLongClickListener(v -> { openPick(2); return true; });
+        return gate;
+    }
+
+    /** 占位卡内容刷新：显示当前绑定应用的图标与名称。 */
+    private void refreshGate() {
+        if (gateIcon == null) return;
+        String pkg = pkgOf(2);
+        if (pkg == null || pkg.isEmpty()) return;
+        try {
+            PackageManager pm = act.getPackageManager();
+            gateIcon.setImageDrawable(pm.getApplicationIcon(pkg));
+            gateName.setText(String.valueOf(pm.getApplicationLabel(
+                    pm.getApplicationInfo(pkg, 0))));
+        } catch (Throwable t) {
+            gateIcon.setImageDrawable(null);
+            gateName.setText(pkg);
+        }
+    }
+
     /* ------------------------- 单焦点 ------------------------- */
 
     /**
@@ -998,6 +1102,17 @@ public final class PipBoard extends LinearLayout {
         View empty = which == 1 ? emptyA : emptyB;
         if (hint == null) return;
         String pkg = pkgOf(which);
+        // 批次 CG：槽 2 绑定了应用但还没被显式进入 → 占位卡接管，其余状态全藏
+        if (which == 2 && gateB != null) {
+            boolean gated = !s2Entered && pkg != null && !pkg.isEmpty();
+            if (gated) refreshGate();
+            gateB.setVisibility(gated ? View.VISIBLE : View.GONE);
+            if (gated) {
+                hint.setVisibility(View.GONE);
+                if (empty != null) empty.setVisibility(View.GONE);
+                return;
+            }
+        }
         if (pkg == null || pkg.isEmpty()) {
             // 空态：大按钮占位，状态行藏起
             hint.setVisibility(View.GONE);
@@ -1100,6 +1215,8 @@ public final class PipBoard extends LinearLayout {
     }
 
     private void deploySlot(int which) {
+        // 批次 CG：槽 2 未被显式进入 → 只显示占位卡，绝不自动部署
+        if (which == 2 && !s2Entered) { setHint(2, slotOf(2)); return; }
         MirrorSlot slot = slotOf(which);
         if (slot == null) return;
         String pkg = pkgOf(which);
@@ -1210,6 +1327,8 @@ public final class PipBoard extends LinearLayout {
 
     /** 给外部（选了新应用后）调：部署指定槽。 */
     public void deploySlotPublic(int which) {
+        // 批次 CG：显式部署 = 用户主动进入（导航栏音乐键 / 选择器选定）→ 解除闸门
+        if (which == 2) s2Entered = true;
         deploySlot(which);
         // 批次 CF：新应用可能是 frozen（快照）也可能不是 —— 落地后重新对齐
         ui.postDelayed(this::applySnapshotMode, 400);
@@ -1218,6 +1337,9 @@ public final class PipBoard extends LinearLayout {
     private void attachTo(MirrorSlot slot, Surface surface, int w, int h) {
         if (surface == null || !surface.isValid()) return;
         final int which = slot == slotA ? 1 : 2;
+        // 批次 CG：surfaceChanged 驱动的自动挂载同样吃闸门 —— 不拦的话
+        // 槽 2 的画布一布局就会把应用部署起来，「点击才进入」形同虚设
+        if (which == 2 && !s2Entered) { setHint(2, slot); return; }
         final String pkg = pkgOf(which);
         if (pkg == null || pkg.isEmpty()) { setHint(which, slot); return; }
         final MirrorSlot s = slot;

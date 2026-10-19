@@ -196,10 +196,10 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                 getResources().getDisplayMetrics()));
     }
 
-    /** 底部导航栏尺寸对齐参考 carmode_dock_height：74dp 条 + 10dp 离屏留白（浮动圆角条）。 */
+    /** 底部导航栏（批次 CG 起 CarPlay 风格）：通栏贴底，无侧边距/离屏留白，74dp 条高。 */
     private static final int DOCK_H = 74;
-    private static final int DOCK_SIDE = 20;
-    private static final int DOCK_BOTTOM = 10;
+    private static final int DOCK_SIDE = 0;
+    private static final int DOCK_BOTTOM = 0;
 
     private int dockH() { return dp(DOCK_H + DOCK_BOTTOM); }
 
@@ -226,7 +226,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         plp.bottomMargin = dockH();   // 常驻导航栏不被翻页内容盖住
         root.addView(pager, plp);
 
-        // 常驻底部导航栏（复刻 carmode_dock_view：首页｜地图/音乐/其他｜退出）
+        // 常驻底部导航栏（批次 CG：CarPlay 风格通栏深色条，纯图标 + iOS 式选中圆点）
         dock = new DockBar(this, this::onDock);
         FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(-1, dp(DOCK_H), Gravity.BOTTOM);
         dlp.leftMargin = dp(DOCK_SIDE);
