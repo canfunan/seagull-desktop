@@ -31,6 +31,15 @@ Entries discovered by the Agent during task execution should follow this format:
 
 ## Entries
 
+[User Instruction Summary]
+- Date: 2026-10-19
+- Context: 用户在功能开发批次开工前定的开发纪律（适用后续所有功能批次）
+- Instructions:
+  - 实现功能前严禁拍脑袋试手：先搜全网资料、开源项目实现、官方文档，找到具体实现方法再动手
+  - 功能开发先出开发清单；清单拆成小功能逐步实现，每实现一个功能复盘一次代码
+  - 全部做完后做功能清单对齐，并对所有代码做三次大复盘，修复复盘发现的全部问题
+  - 所有问题和清单完成后 git 推送构建，并持续监控 CI 出包
+
 [统一签名：以后都用一个签名文件]
 - Date: 2026-10-01
 - Context: 用户要求"弄个签名密钥把统一一下签名，以后都用一个签名文件，写md文档"
