@@ -63,6 +63,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     private WallpaperVideoView videoLayer;   // 批次 CI：动态壁纸层（root 最底层）
     private AppGridPage appsPage;
     private NegScreenView negPage;
+    private android.content.BroadcastReceiver pkgReceiver;
     private PipBoard pip;
     private IslandView island;
     private NavCard navCard;
@@ -82,12 +83,13 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         pf.addAction(Intent.ACTION_PACKAGE_REMOVED);
         pf.addAction(Intent.ACTION_PACKAGE_REPLACED);
         pf.addDataScheme("package");
+        pkgReceiver = new android.content.BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) {
+                invalidateAppsCache();
+            }
+        };
         try {
-            registerReceiver(new android.content.BroadcastReceiver() {
-                @Override public void onReceive(Context c, Intent i) {
-                    invalidateAppsCache();
-                }
-            }, pf);
+            registerReceiver(pkgReceiver, pf);
         } catch (Throwable t) {
             android.util.Log.w("SeagullHome", "包广播注册失败", t);
         }
@@ -133,13 +135,16 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             lastSkin = sig;
             Skin.apply(model);
             model.loadApps();
-            // 旧 pip 的待跑 redeploy/selfHeal 摘掉：setContentView 会造新的
-            // PipBoard，旧的没人 onDestroy，回调会对已废弃的树自愈
-            if (pip != null) pip.cancelPending();
+            // 旧 pip 的待跑 redeploy/selfHeal 摘掉 + 退订 root 事件订阅：
+            // setContentView 会造新的 PipBoard，旧订阅不摘的话新板 startWatch
+            // 见 subscribed()=true 就挂空转，BUMP 事件全进旧板（持死旧树）
+            if (pip != null) pip.detachWatch();
             // 旧 NavCard 的订阅摘掉：AmapNavClient 单例活得比页面久，
             // 不摘的话 buildUi 造的新卡片会跟废弃实例并存（双份回调、持死旧树）
             if (navCard != null) { navCard.detach(); navCard = null; }
             setContentView(buildUi());
+            if (pip != null) pip.onResume();   // 新板接线（redeploy/selfHeal/repin/watch）
+            syncWallVideo();   // 新视图树没有视频层：按当前 key 重建
         } else {
             if (pip != null) pip.onResume();
             if (appsPage != null) appsPage.setApps(loadApps(this));
@@ -163,7 +168,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }
         Weather.arm(this);          // 20 分钟一次；数据过期时立刻取
-        Weather.onUpdated = this::syncWallVideo;
+        // Weather 的定时刷新写的是它自己的模型实例，桌面这份 model 得重读 JSON
+        // 才能拿到新 weatherCode/summary（否则壁纸联动/负一屏天气卡一直旧数据）
+        Weather.onUpdated = () -> { model.load(); syncWallVideo(); };
         // L1 导航通知横幅：岛内容随解析结果即时刷新
         NavNotiParser.setListener(() -> {
             if (island != null && model != null) island.bind(model);
@@ -194,16 +201,19 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         return model.themeId + "|" + model.customAccent + "|" + model.dayNight
                 + "|" + model.wallDay + "|" + model.wallNight + "|" + model.wallDim
                 + "|" + model.fontScale + "|" + model.pipWeightA + ":" + model.pipWeightB
+                + "|R" + model.themeRadius + "G" + model.themeGlass + "O" + (model.themeOutline ? 1 : 0)
                 + "|" + SysOps.clockHHmm().substring(0, 2);
     }
 
     @Override protected void onDestroy() {
         ui.removeCallbacksAndMessages(null);
+        if (negPage != null) negPage.setActive(false);   // 2s root 轮询别带进坟墓
         if (pip != null) pip.onDestroy();   // 只断 Surface，VD 留给 MirrorHost 常驻
         if (navCard != null) navCard.detach();   // 摘导航订阅（AmapNavClient 单例存活）
         Lyrics.removeSink(islandSink);      // sink 保活纪律：Activity 走了一定摘掉
         Weather.onUpdated = null;           // K1：静态钩子别持死旧桌面
         NavNotiParser.setListener(null);    // L1：同上
+        try { if (pkgReceiver != null) unregisterReceiver(pkgReceiver); } catch (Throwable ignore) {}
         super.onDestroy();
     }
 
@@ -411,6 +421,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                 wallWxKey = key;
                 wallWxDone = false;
                 WeatherWall.resolve(getApplicationContext(), model, hit -> {
+                    // key 变了说明期间又发起了新一轮解析：旧回调的旧包别落层，
+                    // 免得短暂显示旧天气视频（新回调回来才该动）
+                    if (!key.equals(wallWxKey) || isDestroyed() || isFinishing()) return;
                     wallWxPath = hit;
                     wallWxDone = true;
                     syncWallVideo();       // 回主线程后重新对齐
@@ -424,6 +437,8 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     /** videoLayer 幂等对齐（批次 CI 原逻辑抽平）：空源摘层，非空挂层/换源。 */
     private void alignVideoLayer(String want) {
+        // 桌面已销毁/重建中：别再往已拆的根上挂解码器（Weather 回调可能在死后才到）
+        if (isDestroyed() || isFinishing()) return;
         if (want.isEmpty()) {
             if (videoLayer != null) {
                 FrameLayout p = (FrameLayout) videoLayer.getParent();
@@ -572,7 +587,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
      *  单指快速上滑 = 进画中画分屏（PipBoard 长按拖拽调分屏已有，见 PipBoard 触摸区）
      *  只在壁纸页生效：主界面画布是应用自己领地，手势不掺和。 */
 
-    private float gsX0, gsY0, gsX1, gsY1;   // 双指起点
+    private float gsX0, gsY0, gsX1, gsY1;   // 双指起点（按 pointerId 配对，防先抬一根错位）
+    private int gsId0 = -1, gsId1 = -1;
+    private float gsPinch0 = -1f;           // 双指初始间距：捏合缩放（间距大变）不触发熄屏
     private float gsSx, gsSy;               // 单指起点
     private long gsSt;
     private boolean gsTwoFired, gsUpFired;
@@ -587,21 +604,36 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         switch (ev.getActionMasked()) {
             case MotionEvent.ACTION_POINTER_DOWN:
                 if (ev.getPointerCount() >= 2) {
-                    gsX0 = ev.getX(0); gsY0 = ev.getY(0);
-                    gsX1 = ev.getX(1); gsY1 = ev.getY(1);
+                    gsId0 = ev.getPointerId(0);
+                    gsId1 = ev.getPointerId(1);
+                    int i0 = ev.findPointerIndex(gsId0), i1 = ev.findPointerIndex(gsId1);
+                    if (i0 >= 0 && i1 >= 0) {
+                        gsX0 = ev.getX(i0); gsY0 = ev.getY(i0);
+                        gsX1 = ev.getX(i1); gsY1 = ev.getY(i1);
+                        gsPinch0 = (float) Math.hypot(gsX1 - gsX0, gsY1 - gsY0);
+                    }
                     gsTwoFired = false;
                 }
                 break;
             case MotionEvent.ACTION_MOVE:
-                if (!gsTwoFired && ev.getPointerCount() >= 2) {
-                    // 两根手指都下滑超过 130px 才算：单指误触第二指点一下不算
-                    if (ev.getY(0) - gsY0 > 130f && ev.getY(1) - gsY1 > 130f) {
-                        gsTwoFired = true;
-                        lockScreen();
+                if (!gsTwoFired && gsId0 >= 0 && gsId1 >= 0) {
+                    int i0 = ev.findPointerIndex(gsId0), i1 = ev.findPointerIndex(gsId1);
+                    if (i0 >= 0 && i1 >= 0 && ev.getPointerCount() >= 2) {
+                        // 两根手指都下滑超过 130px 才算：单指误触第二指点一下不算
+                        // 捏合缩放时手指常整体下坠：间距变化大就当捏合，不熄屏
+                        float d0 = ev.getY(i0) - gsY0, d1 = ev.getY(i1) - gsY1;
+                        float pinch = (float) Math.hypot(
+                                ev.getX(i1) - ev.getX(i0), ev.getY(i1) - ev.getY(i0));
+                        boolean pinching = Math.abs(pinch - gsPinch0) > 60f;
+                        if (d0 > 130f && d1 > 130f && !pinching) {
+                            gsTwoFired = true;
+                            lockScreen();
+                        }
                     }
                 }
                 break;
             case MotionEvent.ACTION_DOWN:
+                gsId0 = -1; gsId1 = -1; gsPinch0 = -1f;
                 gsSx = ev.getX(); gsSy = ev.getY();
                 gsSt = SystemClock.elapsedRealtime();
                 gsUpFired = false;

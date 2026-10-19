@@ -263,7 +263,7 @@ public final class WallpaperPage extends FrameLayout {
                 () -> getContext().startActivity(new android.content.Intent(
                         getContext(), MusicActivity.class)
                         .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)),
-                this::showMonMenu,
+                this::showMusMenu,
                 () -> saveBlockPos(musBox, pos -> {
                     model.wallMusX = pos[0]; model.wallMusY = pos[1];
                 }),
@@ -784,6 +784,23 @@ public final class WallpaperPage extends FrameLayout {
 
     private boolean musScanned;
 
+    /** 音乐块自己的菜单：字号 + 隐藏（长按此前错挂 showMonMenu，改的是监控块）。 */
+    private void showMusMenu() {
+        new AlertDialog.Builder(getContext())
+                .setTitle("本地音乐（按住拖动可移位置）")
+                .setItems(new String[]{"小", "标准", "大", "特大", "隐藏"}, (d, w) -> {
+                    if (w <= 3) {
+                        model.wallMusScale = w == 0 ? 0.7f : w == 1 ? 1f : w == 2 ? 1.3f : 1.6f;
+                        applyMusScale(model.wallMusScale);
+                    } else {
+                        model.wallMusEnabled = false;
+                        refreshMusBlock();
+                    }
+                    model.save();
+                })
+                .show();
+    }
+
     /* ---------------- N3 G值表块（加速度计，零权限） ---------------- */
 
     private void applyG() {
@@ -797,7 +814,12 @@ public final class WallpaperPage extends FrameLayout {
     }
 
     public void refreshGBlock() {
-        if (!model.wallGEnabled) { gBox.setVisibility(GONE); return; }
+        if (!model.wallGEnabled) {
+            gBox.setVisibility(GONE);
+            // 传感器只有 G 块/行车块两个消费方：都不需要了就摘，别空转耗电
+            if (!model.wallGpsEnabled || !LocationHelper.hasPermission(getContext())) stopSensors();
+            return;
+        }
         gBox.setVisibility(VISIBLE);
         startSensors();
         gBig.setText(gNow < 0 ? "-- G" : String.format(java.util.Locale.US, "%.2f G", gNow));
@@ -1223,6 +1245,8 @@ public final class WallpaperPage extends FrameLayout {
         refreshGpsBlock();
         refreshCdBlock();
         refreshMonBlock();
+        refreshMusBlock();
+        refreshGBlock();
         if (model.wallGpsEnabled && LocationHelper.hasPermission(getContext())) startSensors();
     }
 
@@ -1506,6 +1530,10 @@ public final class WallpaperPage extends FrameLayout {
         if (monL1 != null) monL1.setTextColor(Skin.c(R.color.text_dim));
         if (monL2 != null) monL2.setTextColor(Skin.c(R.color.text_dim));
         if (monL3 != null) monL3.setTextColor(Skin.c(R.color.text_dim));
+        if (musL0 != null) musL0.setTextColor(Skin.c(R.color.leaf));
+        if (musL1 != null) musL1.setTextColor(Skin.c(R.color.text_dim));
+        if (musL2 != null) musL2.setTextColor(Skin.c(R.color.text_dim));
+        if (musL3 != null) musL3.setTextColor(Skin.c(R.color.text_dim));
         if (gBig != null) gBig.setTextColor(Skin.c(R.color.leaf));
         if (gSub != null) gSub.setTextColor(Skin.c(R.color.text_dim));
     }

@@ -2547,3 +2547,55 @@ MusicLib.lrcFor(title,artist) 在 Lyrics 解析链里兜底（扫描缓存线性
 
 **复盘**
 ① 手势选在 dispatchTouchEvent 而非 pager OnTouchListener：窗口级先于子 View 消费，PipBoard 的 SurfaceView 和壁纸页的 Drag 都拦不住它，但副作用是块上快甩也会翻页（块会被带一下）——阈值 160px+420ms 已把误触压到可接受，真机再调；② 上滑手势只在壁纸页开、主界面画布不掺和：地图应用自己的滚动是它的领地，桌面手势跨界会打架；③ startSensors 的「加速度计+磁力计都到位才注册」原来是为了指南针，N3 把 G 块也压进来后必须拆开——旧逻辑会让 G 块在无磁力计车机上直接哑火；④ 熄屏方案选 root input 而非 DevicePolicyManager.lockNow：后者要设备管理员激活弹窗，车机场景一次性 root 前提下前者零交互。真机待验：input POWER 在目标 ROM 是否 toggles 熄屏（有的 ROM 灭屏后按 POWER 又点亮）、双指手势与壁纸页 widget 长按的冲突、玻璃 alpha 在亮色主题下卡片文字对比度。javac --release 11 绿。
+
+## 终局 — 三次大复盘与修复（三组并行精读 → 亲自复核 → 自检交叉验证）
+
+**第一轮（并行分组精读）**：三组 explore 子代理分别精读数据/服务层、UI 层、集成链，报回 30+ 条发现。P0 崩溃级：无。
+
+**第二轮（逐条亲自复核）+ 修复（19 处）**
+
+媒体链：
+- MusicService prepare 竞态（快速连点切歌互踩静态 instance → 双路出声/泄漏/状态污染）：单线程 Executor 串行化切歌与续播的 prepare
+- MusicService 焦点形同虚设（AudioFocusRequest 没挂监听器，导航播报被音乐盖住）：挂 OnAudioFocusChangeListener，LOSS/LOSS_TRANSIENT/CAN_DUCK 一律 pause
+- MusicService 暂停态 PlaybackState 带 speed=1.0（AVRCP/仪表按速度外推会漂移）：暂停时 0f
+- MusicService 起播失败仍占媒体会话（把其他已暂停播放器顶下去）：失败路径 setActive(false)
+- MusicActivity 进度轮询从未启动（poll 只自续没人 post，播放头整页冻结）：onResume 起播 + onPause 摘除
+- Lyrics.getActiveSessions(null)（无 MEDIA_CONTENT_CONTROL 必抛 SecurityException 被 catch 吞掉 → 歌词管线整体静默失效，M4 的 lrcFor 兜底成死代码）：传 MediaListenerService 的 ComponentName，与 MediaListenerService.refresh 同口径
+- MusicLib.scan 并发（tick 与列表页可同时触发三来源扫描 + root exec）：进行中并入，回调登记集合统一回发；异常路径 finally 复位防止永久卡死
+
+通知链：
+- NavNotiParser 非 ongoing 通知误清横幅（导航应用推广通知一到达/一撤回就打断导航横幅）：liveKey 记录展示中的那条通知，feed 非 ongoing 忽略、retract 只认 liveKey
+
+天气链：
+- Weather 定时刷新写自己的模型实例，桌面 model 不重读（壁纸联动/负一屏天气卡永远旧数据，K1 钩子白接）：onUpdated 处理里先 model.load()
+- syncWallVideo 解析回调乱序（两次天气更新间隔短时旧包短暂落层）：回调捕获发起时 key，不匹配丢弃
+- alignVideoLayer 销毁后回调（死后往已拆的根挂解码器）：入口 isDestroyed/isFinishing 守卫
+
+UI/生命周期：
+- WallpaperPage onAttachedToWindow 漏 refreshGBlock/refreshMusBlock（换肤重建后两块永久消失且菜单找不回）：补齐
+- NegScreenView 2s root 轮询泄漏（换肤重建后旧实例永久空转 + 树被 Handler 持死）：onDetachedFromWindow 自摘 + HomeActivity.onDestroy 补 setActive(false)
+- NegScreenView.setActive(true) 漏 refreshDests（设置页改完目的地负一屏显示旧数据）：补齐
+- musBox 长按错挂 showMonMenu（改的是监控块，复制粘贴串位）：补 showMusMenu（字号+隐藏音乐块）
+- applySkin 漏 musL0-L3 补色（换主题音乐块保持旧色）：补齐
+- G 块隐藏不摘传感器（行车块也关时 60Hz 空转）：refreshGBlock 隐藏路径按需 stopSensors
+- 主题三旋钮不进 skinSignature（设置完回桌面不生效，要等下次重建）：themeRadius/Glass/Outline 拼进签名
+- HomeActivity 包广播 receiver 不注销（匿名实例持死 Activity）：存字段 + onDestroy 注销
+- 换肤路径旧 PipBoard 的 PrivClient 静态订阅不摘（新板 startWatch 见 subscribed()=true 挂空转，事件全进旧板持死旧树）：PipBoard.detachWatch()（cancelPending+退订）+ startWatch 改为无条件重订（subscribe 幂等换回调）；换肤分支补新板 onResume 接线 + syncWallVideo 重建视频层
+
+手势：
+- gestureWatch 按指针下标跟踪（先抬一根手指 getY(0) 错位可误熄屏）：pointerId 配对 + findPointerIndex
+- 双指捏合缩放带下坠误触发熄屏：记初始间距，变化 >60px 判为捏合不熄屏
+
+Manifest/杂项：
+- 缺 FOREGROUND_SERVICE_MEDIA_PLAYBACK（Android 14+ 起音乐前台服务起不来）：补
+- ACCESS_FINE/COARSE_LOCATION 重复声明：去重
+- LOCKED_BOOT_COMPLETED 死条目（receiver 非 directBootAware 永远收不到）：删
+- LocationHelper 开机时定位服务全关则整段会话永不重试：onProviderEnabled 补起订（appContext 持有防泄漏）
+- SettingsSectionActivity 目的地改名称后不重绘：补 render()
+
+**自检交叉验证（第三轮）**：javac --release 11 全量绿 + 8 项 selfcheck 全绿（DumpParse 14 / Lrc 15 / PrivCodec 39 / Quickbar 7 / StackList 30 / Transform 54 / TrustedFlags 10 / LunarCheck 30）。QuickbarCheck 的历史 Stub! 问题（DEVLOG :151 记录待修）本次顺手修掉：app/selfcheck/shim/android/util/LruCache.java 纯 JVM 垫片，运行时置于 classpath 最前覆盖桩实现，API 面按 LauncherModel/DockBar 实际用量实现。
+
+**记录在案未修（P2，理由）**：
+- MusicLib rootFind 走 Caps.exec 固定 3s 超时：U 盘曲目极多时第三来源可能静默为空——放宽超时要动 Caps 全局契约（其他 exec 调用方共用），列为真机验收项（表格 #9）实测定夺
+- 新增 AlertDialog 未做统一生命周期解绑：与全项目既有弹窗同模式（换肤重建路径 WindowLeaked 风险），全局改造风险大于收益，维持现状
+- addDest 坐标步骤取消时整条丢弃：UX 瑕疵，交互流程改动留真机验收后定

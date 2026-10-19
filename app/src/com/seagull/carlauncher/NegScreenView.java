@@ -394,11 +394,18 @@ public final class NegScreenView extends FrameLayout {
             refreshSwitchState();
             refreshRestrict();
             refreshWeather();
+            refreshDests();   // 设置页改完目的地回来：model 已 load，按最新配置重排
             ui.postDelayed(tick, 2000L);
         } else if (!on) {
             tickOn = false;
             ui.removeCallbacks(tick);
         }
+    }
+
+    /** 换肤重建/页面销毁后旧实例收不到 setActive(false)：自摘，别让 2s root 轮询空转。 */
+    @Override protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        setActive(false);
     }
 
     private void uiPost(Runnable r) { ui.post(r); }

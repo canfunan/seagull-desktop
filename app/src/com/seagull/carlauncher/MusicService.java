@@ -91,6 +91,20 @@ public class MusicService extends Service {
 
     private static volatile MediaPlayer instance;
 
+    /** 切歌/续播 prepare 串行化：快速连点 next/prev 时两条线程交错会互踩静态
+     *  instance（release 掉对方刚赋值的播放器 → 双路出声/泄漏/状态污染）。 */
+    private static final java.util.concurrent.ExecutorService PREP =
+            java.util.concurrent.Executors.newSingleThreadExecutor();
+
+    /** 抢焦点让行：导航播报/来电/其他媒体拿到焦点时本地音乐暂停。 */
+    private final AudioManager.OnAudioFocusChangeListener focusL = change -> {
+        if (change == AudioManager.AUDIOFOCUS_LOSS
+                || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
+            ui.post(this::pause);
+        }
+    };
+
     /* ---------------- 生命周期 ---------------- */
 
     @Override public void onCreate() {
@@ -112,6 +126,7 @@ public class MusicService extends Service {
                     .setAudioAttributes(new AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
                             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                    .setOnAudioFocusChangeListener(focusL, new Handler(Looper.getMainLooper()))
                     .build();
         } catch (Throwable ignore) { }
     }
@@ -161,7 +176,8 @@ public class MusicService extends Service {
         idx = at;
         MusicLib.Track t = queue.get(idx);
         updateNotif(t.title, t.artist, true);
-        new Thread(() -> prepare(t), "seagull-music-prep").start();
+        final MusicLib.Track ft = t;
+        PREP.execute(() -> prepare(ft));
     }
 
     private void prepare(MusicLib.Track t) {
@@ -186,7 +202,11 @@ public class MusicService extends Service {
         } catch (Throwable e) {
             android.util.Log.w(TAG, "起播失败: " + e);
             playing = false;
-            ui.post(() -> publishState(t, 0, false));
+            ui.post(() -> {
+                publishState(t, 0, false);
+                // 失败态不占媒体会话：免得把其他已暂停的真实播放器顶下去
+                try { if (session != null) session.setActive(false); } catch (Throwable ignore) {}
+            });
         }
     };
 
@@ -200,7 +220,8 @@ public class MusicService extends Service {
         if (idx < 0 || idx >= queue.size()) return;
         try {
             if (instance == null) {
-                new Thread(() -> prepare(queue.get(idx)), "seagull-music-prep").start();
+                final MusicLib.Track t = queue.get(idx);
+                PREP.execute(() -> prepare(t));
             } else {
                 instance.start();
             }
@@ -239,7 +260,7 @@ public class MusicService extends Service {
                         | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS
                         | PlaybackState.ACTION_SEEK_TO)
                 .setState(nowPlaying && playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
-                        position(), 1f)
+                        position(), nowPlaying && playing ? 1f : 0f)
                 .build();
         try { session.setPlaybackState(pb); } catch (Throwable ignore) {}
         session.setActive(true);

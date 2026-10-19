@@ -282,6 +282,17 @@ public final class PipBoard extends LinearLayout {
      */
     public void cancelPending() { ui.removeCallbacksAndMessages(null); }
 
+    /**
+     * 宿主换肤重建（本实例整体废弃）时调：在 cancelPending 基础上把 root 事件
+     * 订阅也退掉——静态订阅还挂着的话，新板 startWatch 见 subscribed()=true
+     * 就只置 watching 不重订，BUMP 事件全进旧板（新板自愈失效+旧树被持死）。
+     */
+    public void detachWatch() {
+        ui.removeCallbacksAndMessages(null);
+        watching = false;
+        new Thread(PrivClient::unsubscribe, "pip-unwatch").start();
+    }
+
     /** 退出只断 Surface —— 屏与应用留给 MirrorHost 常驻；没有活跃屏才收 token。 */
     public void onDestroy() {
         // postDelayed(redeployIfPossible/selfHeal/pumpSnapshots) 必须摘：300ms 内
@@ -1553,7 +1564,9 @@ public final class PipBoard extends LinearLayout {
      * 一律 ui.post 回主线程。空气开关关闭 = 整段跳过（行为与 AJ 一致）。
      */
     public void startWatch() {
-        if (PrivClient.subscribed()) { watching = true; return; }
+        // 已订阅也重走 subscribe：subscribe 是"换 listener 连接复用"的幂等语义，
+        // 换肤重建后旧板的回调可能还挂着（detachWatch 的退订是异步线程，可能
+        // 抢不过新板），重订一次保证 BUMP 事件进的是当前这块板
         new Thread(() -> {
             // rootBridgeOn 未命中缓存时 exec getprop（fork，秒级）—— 不能在 onResume
             // 主线程读，整段判断随订阅线程走

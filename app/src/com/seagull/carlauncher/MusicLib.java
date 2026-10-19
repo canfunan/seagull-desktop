@@ -53,21 +53,40 @@ public final class MusicLib {
 
     private MusicLib() {}
 
+    private static volatile boolean scanRunning;
+
     /** 后台扫描；done 回主线程。扫描中重复调用直接并掉（都有各自回调）。 */
     public static void scan(Context c, java.util.function.Consumer<List<Track>> done) {
         final Context app = c.getApplicationContext();
+        if (scanRunning) {   // 进行中并入：新回调登记到本次结果上，别再起一份三来源扫描
+            synchronized (pendingCbs) { pendingCbs.add(done); }
+            return;
+        }
+        scanRunning = true;
+        synchronized (pendingCbs) { pendingCbs.add(done); }
         new Thread(() -> {
-            LinkedHashSet<String> seen = new LinkedHashSet<>();
-            List<Track> out = new ArrayList<>();
-            for (File root : publicRoots()) walk(root, 0, seen, out);
-            for (File root : removableRoots(app, seen, out)) walk(root, 0, seen, out);
-            rootFill(seen, out);
-            last = out;
-            final List<Track> frozen = out;
-            android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
-            h.post(() -> done.accept(frozen));
+            java.util.List<java.util.function.Consumer<List<Track>>> cbs;
+            try {
+                LinkedHashSet<String> seen = new LinkedHashSet<>();
+                List<Track> out = new ArrayList<>();
+                for (File root : publicRoots()) walk(root, 0, seen, out);
+                for (File root : removableRoots(app, seen, out)) walk(root, 0, seen, out);
+                rootFill(seen, out);
+                last = out;
+                synchronized (pendingCbs) { cbs = new ArrayList<>(pendingCbs); pendingCbs.clear(); }
+                final List<Track> frozen = out;
+                android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+                h.post(() -> { for (java.util.function.Consumer<List<Track>> cb : cbs) cb.accept(frozen); });
+            } catch (Throwable t) {
+                synchronized (pendingCbs) { pendingCbs.clear(); }
+            } finally {
+                scanRunning = false;
+            }
         }, "seagull-music-scan").start();
     }
+
+    private static final java.util.List<java.util.function.Consumer<List<Track>>> pendingCbs =
+            new ArrayList<>();
 
     /* ---------------- 来源 1：公开音乐目录 ---------------- */
 

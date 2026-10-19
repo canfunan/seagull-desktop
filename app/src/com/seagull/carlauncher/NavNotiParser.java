@@ -42,6 +42,9 @@ public final class NavNotiParser {
 
     /** 当前解析结果：[0]=横幅主行，[1]=副行；null = 当前没有可用导航信息。 */
     private static volatile String[] now;
+    /** 正在展示横幅的那条通知（导航应用会同时挂推广/地图更新等非 ongoing 通知，
+     *  那类通知到达或撤回都别动横幅，否则导航中横幅闪断）。 */
+    private static volatile String liveKey;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
     /** 宿主（桌面）监听：通知驱动的导航信息有变时回调（主线程）。 */
@@ -59,16 +62,24 @@ public final class NavNotiParser {
         if (sbn == null || !isNavPkg(sbn.getPackageName())) return;
         if (sbn.isOngoing()) {
             String[] hit = parse(sbn.getNotification());
-            if (hit != null) { post(hit); return; }
-            post(null);      // ongoing 但模板没匹配上：静默隐藏
-        } else {
-            post(null);      // 导航应用的非 ongoing 通知当导航结束处理
+            if (hit != null) {
+                liveKey = sbn.getKey();
+                post(hit);
+                return;
+            }
+            // ongoing 但模板没匹配上：只有当展示中的就是这条时才静默隐藏
+            if (sbn.getKey() != null && sbn.getKey().equals(liveKey)) post(null);
         }
+        // 非 ongoing：导航应用的推广/更新通知，忽略（不当导航结束处理）
     }
 
-    /** 通知被撤（用户划掉/应用撤回）→ 清态。 */
+    /** 通知被撤（用户划掉/应用撤回）→ 只有撤的是展示中那条才清态。 */
     public static void retract(StatusBarNotification sbn) {
-        if (sbn != null && isNavPkg(sbn.getPackageName())) post(null);
+        if (sbn == null || !isNavPkg(sbn.getPackageName())) return;
+        if (sbn.getKey() != null && sbn.getKey().equals(liveKey)) {
+            liveKey = null;
+            post(null);
+        }
     }
 
     private static boolean isNavPkg(String pkg) {

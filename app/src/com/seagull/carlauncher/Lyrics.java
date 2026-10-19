@@ -484,7 +484,11 @@ public final class Lyrics {
         try {
             MediaSessionManager msm = (MediaSessionManager) ctx.getSystemService(Context.MEDIA_SESSION_SERVICE);
             if (msm == null) return null;
-            List<MediaController> list = msm.getActiveSessions(null);
+            // 必须传本通知监听服务的 ComponentName：传 null 无
+            // MEDIA_CONTENT_CONTROL 权限时直接 SecurityException（被 catch 吞成无会话，
+            // 歌词整条管线静默失效），与 MediaListenerService.refresh 同口径
+            List<MediaController> list = msm.getActiveSessions(
+                    new android.content.ComponentName(ctx, MediaListenerService.class));
             for (MediaController c : list) {
                 PlaybackState ps = c.getPlaybackState();
                 if (ps != null && ps.getState() == PlaybackState.STATE_PLAYING) return c;

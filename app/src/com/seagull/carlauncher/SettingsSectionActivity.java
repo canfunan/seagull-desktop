@@ -1187,6 +1187,7 @@ public class SettingsSectionActivity extends BaseActivity {
                         inputDialog("改名称", d.name, s -> {
                             d.name = s;
                             model.setDests(model.dests());
+                            render();   // 列表行文本即时更新（此前只有存档没有重绘）
                         });
                     } else if (which == 1) {
                         editCoord(d);

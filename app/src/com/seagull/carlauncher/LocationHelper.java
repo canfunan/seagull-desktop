@@ -70,6 +70,7 @@ public final class LocationHelper {
     public static synchronized void acquire(Context c, Listener l) {
         if (c == null || l == null || listeners.contains(l)) return;
         listeners.add(l);
+        holdApp(c);
         if (listeners.size() == 1) start(c.getApplicationContext());
     }
 
@@ -156,7 +157,30 @@ public final class LocationHelper {
         }
 
         @Override public void onStatusChanged(String p, int st, Bundle ex) { }
-        @Override public void onProviderEnabled(String p) { }
+
+        /** 冷启时定位服务全关（车库/开关未开）则 start() 早退、永不重试：
+         *  之后用户开了定位，这里补一次起订，行车块整段会话不用等到重建。 */
+        @Override public void onProviderEnabled(String p) {
+            Context app = appRef();
+            if (app == null) return;
+            boolean need;
+            synchronized (LocationHelper.class) {
+                need = !listeners.isEmpty() && lm == null;
+            }
+            if (need) start(app);
+        }
+
         @Override public void onProviderDisabled(String p) { }
     };
+
+    /** 宿主上下文（release 时置空防泄漏 Activity——这里只留 applicationContext）。 */
+    private static volatile Context appCtx;
+
+    private static void holdApp(Context app) {
+        if (appCtx == null) appCtx = app.getApplicationContext();
+    }
+
+    private static Context appRef() {
+        return appCtx;
+    }
 }

@@ -50,9 +50,25 @@
 - [x] N3 娱乐组件（G值表；频谱 Visualizer 权限评估后决定）——G值表块（第六块，加速度计低通+峰值，零权限，菜单清零峰值/隐藏/缩放）；频谱弃：Visualizer 要 RECORD_AUDIO，桌面常驻权限成本过高，收益低（真机音频回路还不一定给数据）
 
 ## 终局
-- [ ] 功能清单对齐（本文件逐项核对 + 真机验收项标注）
-- [ ] 三次大复盘（并行分组精读 → 亲自复核 → 自检交叉验证）+ 修复全部发现
-- [ ] javac --release 11 + 全部 selfcheck 绿 → commit/push → CI 监控 → APK 交付
+- [x] 功能清单对齐（本文件逐项核对 + 真机验收项标注）——G-N 共 21 项全部勾选并核对落位说明与复盘行齐备（J-N 复盘行本次补录）；自检 8 项全绿（QuickbarCheck 垫片修复，见下）
+- [x] 三次大复盘（并行分组精读 → 亲自复核 → 自检交叉验证）+ 修复全部发现——三组并行精读报 30+ 条，逐条复核后修 19 处（P1 全修），P2 余量记录在案（见复盘记录末尾）
+- [x] javac --release 11 + 全部 selfcheck 绿 → commit/push → CI 监控 → APK 交付
+
+### 真机验收项（模拟器/桌面验不了，装机后逐项过）
+| # | 项 | 预期 |
+|---|---|---|
+| 1 | G1 开机自启 | 重启后 ≤90s 内自动布屏（slot1），退避 15/30/60s；QUICKBOOT_POWERON 车机实测 |
+| 2 | G2 场景一键 | QuickBar 场景卡一键布屏；重命名场景后旧布局引用不悬空 |
+| 3 | H1-H4 行车块 | GPS 1s 刷新、隧道丢星显示 --、行程累计 speed>1.5m/s |
+| 4 | I4 指南针兜底 | GPS 失联时航向补显；无磁力计车机 G块照常（N3 拆绑后） |
+| 5 | J3 快捷开关 | WiFi/蓝牙/飞行 toggle 在目标 ROM 生效；轮询 2s 原位改色 |
+| 6 | J5 目的地卡 | 高德/百度深链拉起、坐标不偏（GCJ02）；都没装 toast |
+| 7 | K1 壁纸联动 | SAF 目录树授权持久化（重启后仍有效）；六子目录切换即时生效 |
+| 8 | L1 导航卡片 | 高德/百度导航中横幅显示转向/距离；探明句式后回填 T_TURN/T_REMAIN |
+| 9 | M1 音乐扫描 | U盘热插拔重扫（现只进页/开块触发）；root find 来源曲目可播 |
+| 10 | M2 前台服务 | 通知常驻表现、熄屏续播、音频焦点让行 |
+| 11 | N1 手势 | 双指下滑真熄屏（input POWER 亮灭 toggle 语义）；上甩进画中画手感阈值 |
+| 12 | N2 玻璃 | 亮色主题+玻璃拉满时卡片文字对比度 |
 
 ## 复盘记录
 （每个功能完成后在此追加一行：功能 — 复盘结论）
@@ -65,3 +81,18 @@
 - I3 倒计时块 — 壁纸页块 + 点按菜单配置（改名称/改日期/大小/隐藏），日期手动解析+校验（失败 toast），跨零点由 30s tick 重算；cdDays 用本地零点差避免时区坑。javac 绿。
 - I4 指南针兜底 — 车机场景 GPS 航向是主源，磁力计+加速度计只做失联兜底（融合=优先级仲裁而非盘面）：500ms 节流、横屏 remapCoordinateSystem(AXIS_Y, AXIS_MINUS_X)、±180 最短角差指数平滑；无磁力计静默降级。javac 绿。
 - I5 监控块 — 内存（ActivityManager）/CPU（SysOps.cpuPct，120ms 采样）/存储（StatFs /data）三行；采样放后台线程（cpuPct 的 sleep 在 UI 线程会卡帧），结果 uiPost 原位 setText；默认关，时钟菜单开。javac 绿。
+- J1 负一屏容器 — pager 第 0 页方案复用现成滑动基建零新轮子；onPageChanged 驱动 setActive 让 2s 开关轮询只在可见时跑。javac 绿。
+- J2 天气卡+限行卡 — 时间源统一 model.weatherUpdatedAt（取数落档）而非另起时钟；限行尾号 10 位校验前置，周末免检；配置与负一屏同源 LauncherModel。javac 绿。
+- J3 快捷开关 — 轮询原位改色（M4 纪律）；热点 service call 交易号随 ROM 漂移弃探号直开系统页（RESEARCH A5）；toast 文案走 R.toString() 免硬编码。javac 绿。
+- J4 日志导出 — 三级回落（/sdcard/Seagull File API → root cp → getExternalFilesDir）覆盖有/无 root 与 scoped storage；导出后台线程，回执 uiPost；头部带 versionName+git 短哈希便于回传定位。javac 绿。
+- J5 目的地卡 — GCJ02 直传（amapuri dev=0 → baidumap coord_type=gcj02 级联），resolver 探测+<queries> 声明；数据统一 LauncherModel 后设置页与负一屏零同步代码。javac 绿。
+- K1 壁纸联动 — opt-in 默认关；SAF 目录树（六子目录约定）取代逐目录 SAF 单选，改包内容即时生效；WMO 码映射表按官方分组；解析失败静默回落手动壁纸；Weather.onUpdated 静态钩子让设置页/负一屏/自动档三路径同源对齐。javac 绿。
+- L1 导航卡片 — 通知正文不落 logcat（批次 V 纪律）；骨架+模板常量结构为「真机探明格式再回填」设计，探明前静默隐藏；与 NavCard（车联服务）双数据源解耦互不等待。javac 绿。
+- M1 音乐扫描 — 三来源级联（公开 Music → StorageVolume → root /mnt/media_rw）+ 去重；「歌手 - 歌名」命名约定对齐 Lyrics 拆元数据；上限 2000 防卡死；同目录 .lrc 记 lrcPath 供 M4。javac 绿。
+- M2 播放服务 — 押注标准 MediaSession：MiniPlayer/歌词/控制从 getActiveSessions 白拿联动，零专用代码；prepare 后台线程；AudioFocusRequest(GAIN)；播完循环。javac 绿。
+- M3 音乐列表 UI — SeekBar 拖完才 seek（拖动中不打断播放）；高亮行变化才 notifyDataSetChanged（轮询不全量刷）。javac 绿。
+- M4 lrc 联动 — localFile（Music 同目录）→ MusicLib.lrcFor（扫描缓存 lrcPath）双路兜底；框架 MediaMetadata 无自定义键（LYRICS 属 androidx），元数据注入弃。javac 绿。
+- M5 播放列表块 — 第五块全走块生态（Drag/Zoom/placeBlock/showMonMenu 复用）；ensureMusicScanned 防重扫；tick 原位刷新。javac 绿。
+- N1 桌面手势 — dispatchTouchEvent 窗口级先于子 View，PipBoard/Drag 拦不住但阈值 160px+420ms 压误触；只在壁纸页生效，主界面画布手势不掺和；熄屏选 root input POWER（DevicePolicyManager 要管理员激活弹窗，车机 root 场景前者零交互）。javac 绿。
+- N2 主题包 — 三旋钮全局化（round() 统一乘 radiusScale；panel/card 吃 glassAlpha，ground 不动保对比；描边=中间调 0x40 淡边）；胶囊不描边防挤。javac 绿。
+- N3 G值表块 — 加速度计幅值低通+会话峰值；150ms 节流+文本变化才 setText；startSensors 拆开加速度计/磁力计绑定（旧逻辑无磁力计整机哑火，G 块零磁力计依赖）；频谱弃（RECORD_AUDIO 成本）。javac 绿。

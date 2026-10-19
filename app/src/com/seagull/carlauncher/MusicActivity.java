@@ -45,6 +45,18 @@ public class MusicActivity extends Activity {
         }
     };
 
+    @Override protected void onResume() {
+        super.onResume();
+        refreshHead();
+        ui.removeCallbacks(poll);
+        ui.postDelayed(poll, 500L);   // 播放头 500ms 轮询（onCreate 里没人起过它，全页冻结）
+    }
+
+    @Override protected void onPause() {
+        super.onPause();
+        ui.removeCallbacks(poll);
+    }
+
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
 
