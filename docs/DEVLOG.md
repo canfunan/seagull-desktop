@@ -2536,3 +2536,14 @@ MusicLib.lrcFor(title,artist) 在 Lyrics 解析链里兜底（扫描缓存线性
 成为 M3/M5/M4 三处共用数据源，一次扫描全桌面受益。真机待验：U盘热插拔
 后的重扫（现只在进页/开块时扫，插拔事件未监听）、前台通知在目标 ROM 的
 常驻表现、ROOT find 的 2>/dev/null 在 toybox 的兼容性。javac --release 11 绿。
+
+## 批次 N 手感（N1 桌面手势 / N2 主题包 / N3 G值表块）
+
+**做了什么**
+- N1：HomeActivity.dispatchTouchEvent 挂桌面手势，只在壁纸页（PAGE_POSTER）生效——双指各下滑 130px 熄屏（root `input keyevent KEYCODE_POWER`，线程跑，无 root 静默无效+toast 提示）；单指 420ms 内上甩 160px（横漂 < 竖程一半）进画中画分屏页。长按拖拽调分屏 PipBoard 触摸区已有，不重复造。
+- N2：主题包三旋钮全局化——Skin.radiusScale（round() 统一乘，胶囊不描边防挤）、Skin.glassAlpha（panel/card 吃额外 alpha 压壁纸=毛玻璃观感，ground 不动保对比）、Skin.outline（描边=文字/底色中间调 alpha 0x40）；设置页「主题包」区三个控件（圆角 50~150% / 玻璃 0~80% / 描边开关）；模型 themeRadius/themeGlass/themeOutline 落 JSON，出厂重置归位。
+- N3：G值表块（第六块，musBox 同款 Drag/placeBlock/saveBlockPos 生态）——加速度计幅值 /9.80665 低通 0.2 得当前 G，会话内峰值跟踪；点按菜单（大小/清零峰值/隐藏）、长按总菜单找回；时钟块菜单加「显示G值块」；150ms 节流+文本变化才 setText（审计纪律）。频谱弃决策落档：Visualizer 要 RECORD_AUDIO，桌面常驻权限成本过高。
+- 传感器改造：startSensors 拆开加速度计与磁力计的绑定——原来两个都拿到才注册，现在加速度计单独够用（G 块零磁力计依赖），磁力计缺失时指南针兜底照旧静默失效（accOk&&magOk 门）。模型 wallGx/Y/Scale/Enabled JSON 三处（save/load）齐。
+
+**复盘**
+① 手势选在 dispatchTouchEvent 而非 pager OnTouchListener：窗口级先于子 View 消费，PipBoard 的 SurfaceView 和壁纸页的 Drag 都拦不住它，但副作用是块上快甩也会翻页（块会被带一下）——阈值 160px+420ms 已把误触压到可接受，真机再调；② 上滑手势只在壁纸页开、主界面画布不掺和：地图应用自己的滚动是它的领地，桌面手势跨界会打架；③ startSensors 的「加速度计+磁力计都到位才注册」原来是为了指南针，N3 把 G 块也压进来后必须拆开——旧逻辑会让 G 块在无磁力计车机上直接哑火；④ 熄屏方案选 root input 而非 DevicePolicyManager.lockNow：后者要设备管理员激活弹窗，车机场景一次性 root 前提下前者零交互。真机待验：input POWER 在目标 ROM 是否 toggles 熄屏（有的 ROM 灭屏后按 POWER 又点亮）、双指手势与壁纸页 widget 长按的冲突、玻璃 alpha 在亮色主题下卡片文字对比度。javac --release 11 绿。

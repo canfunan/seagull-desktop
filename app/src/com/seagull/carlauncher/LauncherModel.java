@@ -288,6 +288,9 @@ public final class LauncherModel {
 
     public String themeId = Theme.DEFAULT_ID;   // 见 Theme（默认「苹果互联」）
     public String customAccent = "";           // 自定义主题色 #RRGGBB
+    public int themeRadius = 100;              // N2 主题包：圆角全局系数 50~150%
+    public int themeGlass = 0;                 // N2：卡片玻璃 0~80（额外透明度）
+    public boolean themeOutline = false;       // N2：全局描边
     public DayNight dayNight = DayNight.DARK;
     public String wallDay = "";                // 白天壁纸路径
     public String wallNight = "";              // 夜间壁纸路径
@@ -325,6 +328,11 @@ public final class LauncherModel {
     public float wallMusY = 0.13f;
     public float wallMusScale = 1f;
     public boolean wallMusEnabled = false;
+    /* N3 G值表块：默认右上（x=84%，y=28%），跟监控块错开 */
+    public float wallGx = 0.84f;
+    public float wallGy = 0.28f;
+    public float wallGScale = 1f;
+    public boolean wallGEnabled = false;
 
     /** J2 限行卡：城市名 + 周一..周五尾号（"1,6,2,7,3,8,4,9,5,0"）。 */
     public boolean restrictEnabled = false;
@@ -1049,6 +1057,9 @@ public final class LauncherModel {
             /* 外观 */
             o.put("theme", themeId);
             o.put("accent", customAccent);
+            o.put("themeRadius", themeRadius);
+            o.put("themeGlass", themeGlass);
+            o.put("themeOutline", themeOutline);
             o.put("dayNight", dayNight.name());
             o.put("wallDay", wallDay);
             o.put("wallNight", wallNight);
@@ -1085,6 +1096,10 @@ public final class LauncherModel {
             wmu.put("x", wallMusX); wmu.put("y", wallMusY); wmu.put("s", wallMusScale);
             wmu.put("on", wallMusEnabled);
             o.put("wallMus", wmu);
+            JSONObject wg = new JSONObject();
+            wg.put("x", wallGx); wg.put("y", wallGy); wg.put("s", wallGScale);
+            wg.put("on", wallGEnabled);
+            o.put("wallG", wg);
             o.put("restrictOn", restrictEnabled);
             o.put("restrictCity", restrictCity);
             o.put("restrictTails", restrictTails);
@@ -1302,6 +1317,9 @@ public final class LauncherModel {
 
             themeId = o.optString("theme", "leaf_shadow");
             customAccent = o.optString("accent", "");
+            themeRadius = o.optInt("themeRadius", 100);
+            themeGlass = o.optInt("themeGlass", 0);
+            themeOutline = o.optBoolean("themeOutline", false);
             dayNight = optEnum(o, "dayNight", DayNight.class, dayNight);
             wallDay = o.optString("wallDay", "");
             wallNight = o.optString("wallNight", "");
@@ -1345,6 +1363,13 @@ public final class LauncherModel {
                 wallMusY = (float) wmu2.optDouble("y", 0.13);
                 wallMusScale = (float) wmu2.optDouble("s", 1.0);
                 wallMusEnabled = wmu2.optBoolean("on", false);
+            }
+            JSONObject wg2 = o.optJSONObject("wallG");
+            if (wg2 != null) {
+                wallGx = (float) wg2.optDouble("x", 0.84);
+                wallGy = (float) wg2.optDouble("y", 0.28);
+                wallGScale = (float) wg2.optDouble("s", 1.0);
+                wallGEnabled = wg2.optBoolean("on", false);
             }
             restrictEnabled = o.optBoolean("restrictOn", false);
             restrictCity = o.optString("restrictCity", "");
@@ -1583,6 +1608,9 @@ public final class LauncherModel {
         /* 外观 */
         themeId = Theme.DEFAULT_ID;
         customAccent = "";
+        themeRadius = 100;
+        themeGlass = 0;
+        themeOutline = false;
         dayNight = DayNight.DARK;
         wallDay = "";
         wallNight = "";

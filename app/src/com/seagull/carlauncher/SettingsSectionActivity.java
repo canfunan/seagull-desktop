@@ -459,6 +459,16 @@ public class SettingsSectionActivity extends BaseActivity {
                     toast("格式不对，要 #RRGGBB");
                 }));
 
+        sectionLabel("主题包（N2）");
+        sliderRow("圆角系数", 50, 150, model.themeRadius, " %", v -> { model.themeRadius = v; });
+        sliderRow("卡片玻璃", 0, 80, model.themeGlass, " %", v -> { model.themeGlass = v; });
+        toggleRow("全局描边", model.themeOutline, () -> {
+            model.themeOutline = !model.themeOutline;
+            model.save(); render();
+        });
+        note("圆角系数整体放大缩小所有卡片圆角；玻璃让卡片半透明压出壁纸（车机白墙很配）；"
+                + "描边给卡片加一圈淡边。回桌面立即生效，跟主题一起记。");
+
         sectionLabel("日夜与文字");
         choiceRow("日夜模式", model.dayNight.label, () -> {
             LauncherModel.DayNight[] vals = LauncherModel.DayNight.values();

@@ -45,9 +45,9 @@
 - [x] M5 播放列表组件（桌面点歌/切歌） — 壁纸页第五块 musBox（同 Drag/Zoom/placeBlock 生态）：当前曲+队列两行+提示行，点按开 MusicActivity 选歌、长按块菜单（缩放/隐藏）；时钟块菜单加「显示音乐块」，tick 原位刷新（M4 审计纪律）
 
 ## 批次 N 手感
-- [ ] N1 桌面手势（双指下滑锁屏[lockNow/input POWER 真机试]、上滑进画中画、长按拖拽分屏）
-- [ ] N2 主题包（色板/圆角/玻璃 alpha/描边整体切换）
-- [ ] N3 娱乐组件（G值表；频谱 Visualizer 权限评估后决定）
+- [x] N1 桌面手势（双指下滑锁屏[lockNow/input POWER 真机试]、上滑进画中画、长按拖拽分屏）——HomeActivity.dispatchTouchEvent 只在壁纸页生效：双指各滑 130px 熄屏（root input KEYCODE_POWER，无 root 静默）；单指 420ms 内上甩 160px 进画中画分屏；长按拖拽分屏 PipBoard 触摸区本来就有（onLongPress+onTouch）
+- [x] N2 主题包（色板/圆角/玻璃 alpha/描边整体切换）——色板已有 15 预设+自定义；新增 Skin.radiusScale/glassAlpha/outline 三旋钮 + 设置页「主题包」滑条区（圆角 50~150%/玻璃 0~80%/描边开关），模型 themeRadius/themeGlass/themeOutline 持久化，回桌面即时生效
+- [x] N3 娱乐组件（G值表；频谱 Visualizer 权限评估后决定）——G值表块（第六块，加速度计低通+峰值，零权限，菜单清零峰值/隐藏/缩放）；频谱弃：Visualizer 要 RECORD_AUDIO，桌面常驻权限成本过高，收益低（真机音频回路还不一定给数据）
 
 ## 终局
 - [ ] 功能清单对齐（本文件逐项核对 + 真机验收项标注）

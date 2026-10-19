@@ -14,8 +14,10 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.TextView;
@@ -564,6 +566,69 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     private void enableSwipe(boolean on) {
         if (pager != null) pager.setSwipeEnabled(on);
     }
+
+    /* ---------------- N1 桌面手势（壁纸页） ----------------
+     *  双指下滑 = 熄屏（root input POWER；无 root 静默无效）
+     *  单指快速上滑 = 进画中画分屏（PipBoard 长按拖拽调分屏已有，见 PipBoard 触摸区）
+     *  只在壁纸页生效：主界面画布是应用自己领地，手势不掺和。 */
+
+    private float gsX0, gsY0, gsX1, gsY1;   // 双指起点
+    private float gsSx, gsSy;               // 单指起点
+    private long gsSt;
+    private boolean gsTwoFired, gsUpFired;
+
+    @Override public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (pager != null && pager.getCurrentItem() == PAGE_POSTER) gestureWatch(ev);
+        else { gsTwoFired = false; gsUpFired = false; }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    private void gestureWatch(MotionEvent ev) {
+        switch (ev.getActionMasked()) {
+            case MotionEvent.ACTION_POINTER_DOWN:
+                if (ev.getPointerCount() >= 2) {
+                    gsX0 = ev.getX(0); gsY0 = ev.getY(0);
+                    gsX1 = ev.getX(1); gsY1 = ev.getY(1);
+                    gsTwoFired = false;
+                }
+                break;
+            case MotionEvent.ACTION_MOVE:
+                if (!gsTwoFired && ev.getPointerCount() >= 2) {
+                    // 两根手指都下滑超过 130px 才算：单指误触第二指点一下不算
+                    if (ev.getY(0) - gsY0 > 130f && ev.getY(1) - gsY1 > 130f) {
+                        gsTwoFired = true;
+                        lockScreen();
+                    }
+                }
+                break;
+            case MotionEvent.ACTION_DOWN:
+                gsSx = ev.getX(); gsSy = ev.getY();
+                gsSt = SystemClock.elapsedRealtime();
+                gsUpFired = false;
+                break;
+            case MotionEvent.ACTION_UP:
+                if (!gsUpFired && SystemClock.elapsedRealtime() - gsSt < 420) {
+                    float dy = ev.getY() - gsSy, dx = ev.getX() - gsSx;
+                    // 快速上甩：竖向 160px+ 且横漂不超过竖程一半
+                    if (dy < -160f && Math.abs(dx) < Math.abs(dy) * 0.5f) {
+                        gsUpFired = true;
+                        setPage(PAGE_MAIN, true);
+                    }
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    /** 双指下滑熄屏：root input 按 POWER（屏幕亮→灭）。失败静默（无 root 车机）。 */
+    private void lockScreen() {
+        Toast.makeText(this, "熄屏", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try { Caps.exec("input keyevent KEYCODE_POWER"); } catch (Throwable ignore) { }
+        }, "SeagullLock").start();
+    }
+
 
     /** 翻页回调：单应用模式锁了翻页，万一被程序切走，这里兜底退回分屏。 */
     private void onPageChanged(int index) {

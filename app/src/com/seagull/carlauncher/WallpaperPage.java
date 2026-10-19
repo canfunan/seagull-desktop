@@ -91,8 +91,10 @@ public final class WallpaperPage extends FrameLayout {
     /** I5 监控块：内存/CPU/存储三行小字，后台线程采样。 */
     private final LinearLayout monBox;
     private final LinearLayout musBox;
+    private final LinearLayout gBox;
     private final TextView musL0, musL1, musL2, musL3;
     private final TextView monL1, monL2, monL3;
+    private final TextView gBig, gSub;
 
     /** I4 指南针兜底：GPS 航向失联时用加速度计+磁力计方位角补显。 */
     private SensorManager sm;
@@ -274,6 +276,32 @@ public final class WallpaperPage extends FrameLayout {
                 },
                 () -> model.save()));
 
+        // N3 G值表块：当前 G（低通）+ 峰值；点按菜单，长按总菜单
+        gBox = new LinearLayout(c);
+        gBox.setOrientation(LinearLayout.VERTICAL);
+        gBox.setGravity(Gravity.CENTER_HORIZONTAL);
+        gBig = tv(c, 26, R.color.leaf, true);
+        gSub = tv(c, 13, R.color.text_dim, false);
+        gBox.addView(gBig);
+        gBox.addView(gSub, topMargin(c, 3));
+        gBox.setVisibility(GONE);
+        addView(gBox, new LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT));
+        gBox.setOnTouchListener(new Drag(gBox,
+                (dx, dy) -> nudgeBlock(gBox, dx, dy),
+                this::showGMenu,
+                this::showMonMenu,
+                () -> saveBlockPos(gBox, pos -> {
+                    model.wallGx = pos[0]; model.wallGy = pos[1];
+                }),
+                null,
+                () -> zoomBase = model.wallGScale <= 0 ? 1f : model.wallGScale,
+                f -> {
+                    float s = clampf(zoomBase * f, 0.5f, 2.4f);
+                    applyGScale(s);
+                    model.wallGScale = s;
+                },
+                () -> model.save()));
+
         // 点空白处取消组件选中（长按空白仍是添加小组件）
         setOnClickListener(v -> deselectWidget());
         setOnLongClickListener(v -> { showAddWidget(); return true; });
@@ -282,6 +310,7 @@ public final class WallpaperPage extends FrameLayout {
         applyCd();
         applyMon();
         applyMus();
+        applyG();
         loadWidgets();
         tick();
     }
@@ -359,6 +388,7 @@ public final class WallpaperPage extends FrameLayout {
         if (!model.wallCdEnabled) show.add("显示倒数块");
         if (!model.wallMonEnabled) show.add("显示监控块");
         if (!model.wallMusEnabled) show.add("显示音乐块");
+        if (!model.wallGEnabled) show.add("显示G值块");
         String[] sizes = {"小", "标准", "大", "特大"};
         String[] opts = show.isEmpty() ? sizes
                 : java.util.Arrays.copyOf(sizes, sizes.length + show.size());
@@ -375,10 +405,12 @@ public final class WallpaperPage extends FrameLayout {
                         else if (cmd.equals("显示倒数块")) model.wallCdEnabled = true;
                         else if (cmd.equals("显示监控块")) model.wallMonEnabled = true;
                         else if (cmd.equals("显示音乐块")) { model.wallMusEnabled = true; ensureMusicScanned(); }
+                        else if (cmd.equals("显示G值块")) model.wallGEnabled = true;
                         refreshGpsBlock();
                         refreshCdBlock();
                         refreshMonBlock();
                         refreshMusBlock();
+                        refreshGBlock();
                     }
                     model.save();
                 })
@@ -752,6 +784,63 @@ public final class WallpaperPage extends FrameLayout {
 
     private boolean musScanned;
 
+    /* ---------------- N3 G值表块（加速度计，零权限） ---------------- */
+
+    private void applyG() {
+        applyGScale(model.wallGScale <= 0 ? 1f : model.wallGScale);
+    }
+
+    private void applyGScale(float s) {
+        gBig.setTextSize(26 * s);
+        gSub.setTextSize(13 * s);
+        gBox.post(() -> placeBlock(gBox, model.wallGx, model.wallGy));
+    }
+
+    public void refreshGBlock() {
+        if (!model.wallGEnabled) { gBox.setVisibility(GONE); return; }
+        gBox.setVisibility(VISIBLE);
+        startSensors();
+        gBig.setText(gNow < 0 ? "-- G" : String.format(java.util.Locale.US, "%.2f G", gNow));
+        gSub.setText(gPeak < 0 ? "等待数据 · 点按菜单" : String.format(java.util.Locale.US, "峰值 %.2f G · 点按菜单", gPeak));
+    }
+
+    private void showGMenu() {
+        new AlertDialog.Builder(getContext())
+                .setTitle("G值表（按住拖动可移位置）")
+                .setItems(new String[]{"小", "标准", "大", "特大", "清零峰值", "隐藏"}, (d, w) -> {
+                    if (w <= 3) {
+                        model.wallGScale = w == 0 ? 0.7f : w == 1 ? 1f : w == 2 ? 1.3f : 1.6f;
+                        applyGScale(model.wallGScale);
+                    } else if (w == 4) {
+                        gPeak = -1f;
+                        refreshGBlock();
+                    } else {
+                        model.wallGEnabled = false;
+                        refreshGBlock();
+                    }
+                    model.save();
+                })
+                .show();
+    }
+
+    /** 加速度计事件驱动（SENS 延迟 ~60Hz）；低通后写行，150ms 节流。 */
+    private void updateG(float[] v, long now) {
+        if (gBox.getVisibility() != VISIBLE) return;
+        if (now - lastGAt < 150) return;
+        lastGAt = now;
+        float mag = (float) Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) / 9.80665f;
+        gNow = gNow < 0 ? mag : gNow + (mag - gNow) * 0.2f;
+        if (gNow > gPeak) gPeak = gNow;
+        String big = String.format(java.util.Locale.US, "%.2f G", gNow);
+        if (!big.equals(gBig.getText().toString())) gBig.setText(big);
+        String sub = String.format(java.util.Locale.US, "峰值 %.2f G · 点按菜单", gPeak);
+        if (!sub.equals(gSub.getText().toString())) gSub.setText(sub);
+    }
+
+    private float gNow = -1f;      // 低通后的当前 G，-1 = 尚无数据
+    private float gPeak = -1f;     // 本次会话峰值
+    private long lastGAt;
+
     /**
      * 采样走后台线程：cpuPct 内部有 120ms sleep（SysOps L2 注释明确提示
      * 调用方放后台线程），tick 在 UI 线程上，直接调会卡帧。
@@ -793,11 +882,12 @@ public final class WallpaperPage extends FrameLayout {
             SensorManager m = (SensorManager) getContext()
                     .getSystemService(Context.SENSOR_SERVICE);
             Sensor a = m.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
-            Sensor g = m.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
-            if (a == null || g == null) return;   // 车机无磁力计很常见：静默降级
+            if (a == null) return;   // N3 起加速度计单独够用；没有就整组静默降级
             sm = m;
             sm.registerListener(sensL, a, SensorManager.SENSOR_DELAY_UI);
-            sm.registerListener(sensL, g, SensorManager.SENSOR_DELAY_UI);
+            Sensor g = m.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+            if (g != null) sm.registerListener(sensL, g, SensorManager.SENSOR_DELAY_UI);
+            // 车机无磁力计很常见：指南针兜底自动失效（accOk&&magOk 门），G值块照常工作
         } catch (Throwable t) {
             sm = null;
         }
@@ -818,6 +908,7 @@ public final class WallpaperPage extends FrameLayout {
             if (e.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
                 System.arraycopy(e.values, 0, accV, 0, 3);
                 accOk = true;
+                updateG(e.values, SystemClock.elapsedRealtime());
             } else if (e.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
                 System.arraycopy(e.values, 0, magV, 0, 3);
                 magOk = true;
@@ -882,6 +973,7 @@ public final class WallpaperPage extends FrameLayout {
         cdBox.post(() -> placeBlock(cdBox, model.wallCdX, model.wallCdY));
         monBox.post(() -> placeBlock(monBox, model.wallMonX, model.wallMonY));
         musBox.post(() -> placeBlock(musBox, model.wallMusX, model.wallMusY));
+        gBox.post(() -> placeBlock(gBox, model.wallGx, model.wallGy));
         for (Integer wid : new ArrayList<>(widgetPos.keySet())) refitWidget(wid);
     }
 
@@ -1414,6 +1506,8 @@ public final class WallpaperPage extends FrameLayout {
         if (monL1 != null) monL1.setTextColor(Skin.c(R.color.text_dim));
         if (monL2 != null) monL2.setTextColor(Skin.c(R.color.text_dim));
         if (monL3 != null) monL3.setTextColor(Skin.c(R.color.text_dim));
+        if (gBig != null) gBig.setTextColor(Skin.c(R.color.leaf));
+        if (gSub != null) gSub.setTextColor(Skin.c(R.color.text_dim));
     }
 
     private static TextView tv(Context c, float size, int colorRes, boolean bold) {

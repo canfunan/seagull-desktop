@@ -19,6 +19,11 @@ public final class Skin {
     /** 顶/底栏在亮壁纸上用半透明底（自动字底）。 */
     public static int barAlpha = 0xFF;
 
+    /** N2 主题包三旋钮：圆角全局系数（50~150%）、玻璃透明度（卡片额外 alpha）、描边开关。 */
+    public static float radiusScale = 1f;
+    public static int glassAlpha = 0xFF;
+    public static boolean outline = false;
+
     static {
         reset();
     }
@@ -54,11 +59,16 @@ public final class Skin {
     /** 屏幕密度：apply 时刷新，造形 helpers 直接换算 px，调用点不必传 Context。 */
     public static float density = 3f;
 
-    /** 圆角矩形底：传已取好的色值 + 圆角 dp。 */
+    /** 圆角矩形底：传已取好的色值 + 圆角 dp（受主题圆角系数缩放）。 */
     public static GradientDrawable round(int color, float dp) {
         GradientDrawable g = new GradientDrawable();
         g.setColor(color);
-        g.setCornerRadius(Math.max(0f, dp) * density);
+        g.setCornerRadius(Math.max(0f, dp) * radiusScale * density);
+        if (outline && dp < 900f) {
+            // N2 描边：文字/底色的中间调，淡到不抢内容；胶囊不描（太挤）
+            g.setStroke(Math.max(1, Math.round(density)),
+                    (0x40 << 24) | (mix(text, ground, 0.5f) & 0x00FFFFFF));
+        }
         return g;
     }
 
@@ -124,6 +134,16 @@ public final class Skin {
             textDim = mix(text, 0xFFFFFFFF, 0.35f);
         }
         barAlpha = wallBright ? 0xB0 : 0xFF;
+
+        // N2 主题包旋钮：卡片玻璃（panel/card 吃额外透明度，压壁纸=毛玻璃观感）
+        radiusScale = Math.max(0.4f, Math.min(2f, m.themeRadius / 100f));
+        int ga = Math.max(0, Math.min(80, m.themeGlass));
+        glassAlpha = 0xFF - (ga * 0xFF / 100);
+        if (ga > 0) {
+            panel = (glassAlpha << 24) | (panel & 0x00FFFFFF);
+            card = (glassAlpha << 24) | (card & 0x00FFFFFF);
+        }
+        outline = m.themeOutline;
     }
 
     private static String currentWall(LauncherModel m) {
