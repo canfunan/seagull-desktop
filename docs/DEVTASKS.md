@@ -49,6 +49,19 @@
 - [x] N2 主题包（色板/圆角/玻璃 alpha/描边整体切换）——色板已有 15 预设+自定义；新增 Skin.radiusScale/glassAlpha/outline 三旋钮 + 设置页「主题包」滑条区（圆角 50~150%/玻璃 0~80%/描边开关），模型 themeRadius/themeGlass/themeOutline 持久化，回桌面即时生效
 - [x] N3 娱乐组件（G值表；频谱 Visualizer 权限评估后决定）——G值表块（第六块，加速度计低通+峰值，零权限，菜单清零峰值/隐藏/缩放）；频谱弃：Visualizer 要 RECORD_AUDIO，桌面常驻权限成本过高，收益低（真机音频回路还不一定给数据）
 
+## 批次 O 日常可用度（2026-10-19 拍板，spec: .monkeycode/specs/daily-essential-batch）
+- [ ] O1 方控媒体键兜底——HomeActivity.dispatchKeyEvent 拦 KEYCODE_MEDIA_* → MediaKeyRouter（本地会话优先→最近活跃→无会话走默认路由），getActiveSessions 复用通知监听器身份
+- [ ] O2 专辑封面——CoverCache（单线程解码+256px 采样+LRU2）；本地曲 MediaMetadataRetriever 懒提取内嵌封面进 metadata；音乐块背景压暗遮罩+迷你播放器封面位；同键 60s 负缓存
+- [ ] O3 配置导出/导入——prefs 全键 JSON+meta 包壳落 files/export/（留 5 份轮转），SeagullFileProvider 分享；导入 SAF 限 5MB 先校验后批写，失败零污染；bumpCfg+提示重启桌面
+- [ ] O4 崩溃自恢复——uncaught 包装器记 RootLog+files/crash/（10 份轮转），同签名 24h 内 3 次置标记；下次启动清标记+画布回落默认布局+一次性提示；负一屏日志导出并入 crash 文件
+- [ ] 自检：ConfigCheck（导出→导入 round-trip 30+ 键+2 拒绝用例）、CrashSigCheck（签名/窗口/阈值 12+ 用例）
+
+## 批次 P OBD2 车辆数据（2026-10-19 拍板，spec: .monkeycode/specs/obd2-vehicle-data）
+- [ ] P1 ObdEngine——SPP 连接（SPP_UUID，bonded 过滤）+AT 初始化（ATZ/ATE0/ATL0/ATS0/ATH0/ATSP0/0100 逐条等 '>'）+单命令轮询（010D/010C/0105/0142/012F，0142 失效补 ATRV）+断线 5s 重连+连续 10 轮全失效判离线；ObdParser 纯静态（SAE J1979 公式+错误 token）
+- [ ] P2 设置分区 obd——开关/适配器选择（bonded 列表存 obdMac）/间隔 1s2s5s/电压阈值 11.5-12-12.5；BLUETOOTH_CONNECT 运行时权限（REQ_OBD=0x5A15）；Manifest 权限（CONNECT + 旧蓝牙 maxSdk30）
+- [ ] P3 块接入——行车块 OBD 车速优先（OBD 角标）+转速/水温行（失效 --，离线收起回落 GPS）；监控块电压行；亏电提醒（低于阈值 60s 本地通知，会话一次，恢复复位）
+- [ ] 自检：ObdCheck（parse 12+ 用例：各 PID 正常值/多 ECU 行/SEARCHING 过渡/NO DATA/?/空串/012F 满格/0142 13.48V/ATRV；isError 全 token）
+
 ## 终局
 - [x] 功能清单对齐（本文件逐项核对 + 真机验收项标注）——G-N 共 21 项全部勾选并核对落位说明与复盘行齐备（J-N 复盘行本次补录）；自检 8 项全绿（QuickbarCheck 垫片修复，见下）
 - [x] 三次大复盘（并行分组精读 → 亲自复核 → 自检交叉验证）+ 修复全部发现——三组并行精读报 30+ 条，逐条复核后修 19 处（P1 全修），P2 余量记录在案（见复盘记录末尾）
@@ -69,6 +82,11 @@
 | 10 | M2 前台服务 | 通知常驻表现、熄屏续播、音频焦点让行 |
 | 11 | N1 手势 | 双指下滑真熄屏（input POWER 亮灭 toggle 语义）；上甩进画中画手感阈值 |
 | 12 | N2 玻璃 | 亮色主题+玻璃拉满时卡片文字对比度 |
+| 13 | O1 方控键 | 方控播放/上下曲控本地曲与蓝牙曲；无会话时按键行为与改前一致 |
+| 14 | O2 封面 | 本地曲/蓝牙曲封面显示；无封面回落纯色不报错 |
+| 15 | O3 配置 | 导出→新机导入→重启桌面后布局/主题/目的地齐全；破损文件拒绝且旧配置无恙 |
+| 16 | O4 崩溃 | 连续崩溃后重启画布回落默认布局+一次性提示；日志导出含 crash 文件 |
+| 17 | P OBD | 配对连接、熄火重连；OBD 车速 vs GPS 真值对比；转速/水温/电压显示；亏电提醒触发 |
 
 ## 复盘记录
 （每个功能完成后在此追加一行：功能 — 复盘结论）

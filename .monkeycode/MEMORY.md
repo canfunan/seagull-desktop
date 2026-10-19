@@ -147,7 +147,7 @@ Entries discovered by the Agent during task execution should follow this format:
 - Context: Discovered by Agent while delivering audit-fix batch APK (commit efec5fa)
 - Category: Operations & Deployment
 - Instructions:
-  - CI 出包交付全流程：push 后 `curl -s -H "Authorization: Bearer <PAT>" https://api.github.com/repos/caogenfunan123/seagull-desktop/actions/runs?per_page=2` 查状态（GitHub 免费池 queued 可等 10-20 分钟，轮询用后台 terminal）；completed success 后取 runs/<id>/artifacts 拿 artifact id，下载 `.../actions/artifacts/<id>/zip`（需 -L），python zipfile 解包 cp 到 /workspace/SeagullLauncher.apk
+  - CI 出包交付全流程：push 后 `curl -s -H "Authorization: Bearer <PAT>" https://api.github.com/repos/caogenfunan123/seagull-desktop/actions/runs?per_page=2` 查状态（GitHub 免费池 queued 可等 10-20 分钟，轮询用后台 terminal）；completed success 后取 runs/<id>/artifacts 拿 artifact id，下载必须用 api.github.com 的 archive_download_url（`https://api.github.com/repos/.../actions/artifacts/<id>/zip`，github.com 同路径会 404），需 -L，python zipfile 解包 cp 到 /workspace/SeagullLauncher.apk
   - api.github.com 用 curl + Bearer token 实测可用（2026-10-19 连续 20+ 次成功）；此前记录的 SSL_ERROR_SYSCALL 已不复现，只有无超时的长 curl 才会被 shell 超时杀掉——curl 必须带 -m
   - 编辑工具做多行 oldString 替换时按首尾锚做块匹配，锚点之间的中间代码会被静默吞掉（本批次吞过 save() 中段、maskAlpha、构造器）：大段改动必须小锚点或 python 精确替换，改完必跑 javac 检查点 + git diff 删除行核对
 
