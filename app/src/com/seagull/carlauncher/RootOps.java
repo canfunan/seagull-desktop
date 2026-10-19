@@ -106,6 +106,18 @@ public final class RootOps {
         //   · 已有运行中的任务 → 只把它的任务搬到锚点栈（moveToAnchorRoot），
         //     进程与运行状态（导航中 / 播放中）不被打断，绝不 force-stop；
         //   · 确实没有任务 → 冷启动，本就没有进程，更不需要 force-stop。
+        // 【批次 Z】兼容位必须在「起进程之前」写。am compat enable 只对之后新起的进程生效；
+        // 旧顺序是「先起、起成功后才 relaxCompat」，于是当前这次部署根本不读新设置 ——
+        // 高德照旧按 manifest 的 PORTRAIT 建窗，塞进横屏画布就是竖版 + 左右黑边，
+        // 要等下一次部署才吃到配置（用户看到的"改了没用"正是这一条）。
+        //
+        // 【批次 BB】搬屏路径同样必须写。旧实现把 relaxCompat 放在 exists 判断之后，
+        // 「已有任务 → moveToAnchorRoot」这条路整个跳过 —— 网易云带着主屏上的旧兼容态
+        // 被 move-task 进画布，FORCE_RESIZE_APP 从来没写到它头上，letterbox 黑边
+        // 一直在（用户截图：窗口只有 ~82% 宽，左右各 ~9% 黑边，对称居中 = 标准
+        // size-compat letterbox 形态）。写完 override 对运行中的任务也会即时重算
+        // （ActivityRecord onOverrideChanged → 重排），搬屏前写同样有效。
+        relaxCompat(pkg);
         String stackOut = Caps.exec("am stack list");
         boolean exists = stackOut != null && StackScan.findTaskAnywhere(stackOut, pkg) != null;
         if (exists) {
@@ -117,11 +129,6 @@ public final class RootOps {
         } else {
             Log.i(TAG, "launchOnDisplay[" + pkg + "] 无已存在任务 → 冷启动");
         }
-        // 【批次 Z】兼容位必须在「起进程之前」写。am compat enable 只对之后新起的进程生效；
-        // 旧顺序是「先起、起成功后才 relaxCompat」，于是当前这次部署根本不读新设置 ——
-        // 高德照旧按 manifest 的 PORTRAIT 建窗，塞进横屏画布就是竖版 + 左右黑边，
-        // 要等下一次部署才吃到配置（用户看到的"改了没用"正是这一条）。
-        relaxCompat(pkg);
         PrivClient.init(ctx);
         if (PrivClient.launch(displayId, comp, LAUNCH_FLAGS_INT)) {
             Log.i(TAG, "launchOnDisplay[" + pkg + "] 走守护进程成功 -> display " + displayId);

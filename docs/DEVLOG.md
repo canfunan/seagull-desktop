@@ -12,6 +12,51 @@
 
 ---
 
+## 批次 BB — 截图坐实两件事：网易云搬屏路径漏写兼容位（黑边真因）+ 进应用自动收起导航栏
+
+### 目标
+
+用户发两张真机截图：① 网易云在画布里**左右对称黑边各 ~9%、窗口只有 ~82% 宽**（标准
+size-compat letterbox 形态，不是竖版、不是错位）；② 底部 Dock 导航栏希望进应用时能收起来。
+
+### 复盘（黑边真因终于闭环）
+
+- 批次 Z 把 `relaxCompat` 提到「起进程之前」，但只覆盖**冷启动**路径；`launchOnDisplay`
+  的「已有任务 → moveToAnchorRoot 搬屏」路径**整个跳过** relaxCompat —— 网易云带着主屏上的
+  旧兼容态被 move-task 进画布，`FORCE_RESIZE_APP` 从来没写到它头上。这与用户截图严丝合缝：
+  每次部署网易云都「搬屏成功（不杀进程）」，兼容位从未生效，letterbox 一直在。
+- 批次 AH 曾在「搬任务路补兼容位」，但补的是 `moveToAnchorRoot` 内部一处；从 deploy/
+  healSlotSoon/巡检进入的其他 `launchOnDisplay` 路径仍然漏。这次把 relaxCompat 提为
+  `launchOnDisplay` 入口第一条，**所有路径无差别先写兼容位**。
+
+### 改了什么
+
+1. `RootOps.launchOnDisplay`：`relaxCompat(pkg)` 提到 exists 判断之前（批次 Z 注释迁移保留）。
+   写完 override 对运行中任务也会即时重算（ActivityRecord onOverrideChanged → 重排），
+   搬屏前写同样有效；即使某 ROM 不即时生效，+8s 的 ensureFilled 巡检也会用已写好的
+   兼容位冷启动修复，两条路都通。
+2. **进应用自动收起导航栏**（`HomeActivity`）：`setDockCollapsed(true)` 收起 = Dock 滑出屏外
+   + pager 底边距（dockH）归零 → 画布长高 → surfaceChanged → VD resize，应用窗口拿到
+   整屏高度。回桌面（首页/其他/翻页兜底/键条「桌面」）一律 `setDockCollapsed(false)` 展开回原位。
+   不依赖 `pip.isSingle()` 时序（expandSlot 里先收栏后 showSingle）。
+3. **键条第三键「导航栏」**（`PipBoard.buildKeybar`）：单应用里手动唤出/收起 Dock ——
+   `toggleDock()` 只动 translationY 不改边距（浮层，不触发 VD resize，应用不闪一帧）。
+   键条从 [返回|桌面] 变 [返回|桌面|导航栏]。
+
+### 验证
+
+- javac 类型检查过；自检全过。
+- 真机口径：装新包（版本 `1.0.<短哈希>`）→ 进网易云 → 导航栏应收起、画布满屏 →
+  若仍 letterbox，8s 后应看到「未铺满 → 已冷启动修复」并铺满；键条点「导航栏」唤出 Dock。
+
+### 遗留
+
+- 若网易云黑边在冷启动修复后仍在，则是应用内部固定宽高比（自带黑底舞台），WM 层
+  无解 —— 只能让画布比例贴近应用设计比例，留真机验证后再定。
+- Dock 收起状态不落盘（会话内有效），回桌面必展开，符合「进应用收、回桌面出」直觉。
+
+---
+
 ## 批次 AK — K1：常驻 root 守护扩展（直注触摸 + 实时任务监听 + 事件订阅）
 
 ### 目标

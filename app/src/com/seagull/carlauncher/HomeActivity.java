@@ -203,6 +203,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     private int dockH() { return dp(DOCK_H + DOCK_BOTTOM); }
 
+    /** 批次 BB：true = 底部导航栏已收起（单应用模式自动收，回桌面自动展开）。 */
+    private boolean dockCollapsed;
+
     /* ------------------------- UI 构建 ------------------------- */
 
     private View buildUi() {
@@ -277,8 +280,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         pip.setOnExitSlot(which -> {
             pip.showSplit();
             enableSwipe(true);
+            setDockCollapsed(false);     // 回桌面 = 导航栏必须回来
             syncDock(DockBar.HOME);
         });
+        // 批次 BB：键条「导航栏」键 = 收起/唤出 Dock 导航栏
+        pip.setOnToggleDock(this::toggleDock);
         // 批次 AD：画布直接铺到内容区底部（与底栏零缝隙）；只有媒体条显形时才让出 36dp
         page.addView(pip, new FrameLayout.LayoutParams(-1, -1));
 
@@ -365,6 +371,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                 if (pip != null) pip.showSplit();
                 setPage(PAGE_MAIN, true);
                 enableSwipe(true);
+                setDockCollapsed(false);
                 syncDock(DockBar.HOME);
                 break;
             case DockBar.MAP:
@@ -377,6 +384,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                 if (pip != null) pip.showSplit();
                 setPage(PAGE_APPS, true);
                 enableSwipe(true);
+                setDockCollapsed(false);
                 syncDock(DockBar.APPS);
                 break;
             case DockBar.EXIT:
@@ -397,6 +405,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (pip == null) return;
         setPage(PAGE_MAIN, true);
         enableSwipe(false);              // 单应用模式锁住左右翻页，免得手一划把应用划走
+        setDockCollapsed(true);          // 批次 BB：进应用自动收起导航栏，应用拿满整屏
         pip.showSingle(which);
         String pkg = PipBoard.loadPkg(this, which);
         if (pkg == null || pkg.isEmpty()) {
@@ -426,6 +435,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (index != PAGE_MAIN && pip != null && pip.isSingle()) {
             pip.showSplit();
             enableSwipe(true);
+            setDockCollapsed(false);
         }
         if (index == PAGE_APPS) syncDock(DockBar.APPS);
         else syncDock(DockBar.HOME);
@@ -433,6 +443,47 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     private void syncDock(int which) {
         if (dock != null) dock.setActive(which);
+    }
+
+    /* ---------------- 批次 BB：导航栏收起 / 唤出 ---------------- */
+
+    /**
+     * 收起 / 唤出底部导航栏（完整形态：边距 + 滑动）。
+     *
+     * 收起 = 两件事：① 导航栏滑出屏外；② pager 的底边距（dockH）归零 ——
+     * 画布跟着长高 → surfaceChanged → VD resize，应用窗口拿到整屏高度，
+     * 这正是「进应用要满屏」的落点。回桌面（首页/其他）时反向展开。
+     * 不依赖 pip.isSingle()：expandSlot 里先收导航栏后 showSingle，时序无关。
+     */
+    private void setDockCollapsed(boolean hide) {
+        if (dock == null || pager == null) return;
+        dockCollapsed = hide;
+        FrameLayout.LayoutParams plp = (FrameLayout.LayoutParams) pager.getLayoutParams();
+        int want = hide ? 0 : dockH();
+        if (plp.bottomMargin != want) {
+            plp.bottomMargin = want;
+            pager.setLayoutParams(plp);   // 画布变高/回落 → VD resize，应用跟着重排
+        }
+        dock.setVisibility(View.VISIBLE);
+        float ty = hide ? dockH() + dp(12) : 0f;
+        if (Math.abs(dock.getTranslationY() - ty) > 1f) {
+            dock.animate().translationY(ty).setDuration(180).start();
+        }
+    }
+
+    /**
+     * 键条「导航栏」键：在单应用里浮层唤出 / 收起 Dock —— 只动 translationY，
+     * 不改 pager 边距（不触发 VD resize，应用不会闪一帧重排）。
+     */
+    private void toggleDock() {
+        if (dock == null) return;
+        if (pip != null && pip.isSingle()) {
+            boolean show = dock.getTranslationY() > 1f;
+            dock.setVisibility(View.VISIBLE);
+            dock.animate().translationY(show ? 0f : dockH() + dp(12)).setDuration(180).start();
+            return;
+        }
+        setDockCollapsed(!dockCollapsed);
     }
 
     /** 退出桌面：把桌面退到后台，回到系统上一屏。 */
@@ -453,8 +504,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         setPage(PAGE_MAIN, true);
         enableSwipe(false);
         if (pip != null) {
-            // 铺满内容区 = 「切到具体软件界面」，底部导航栏留在原位；应用进程不重启
+            // 铺满内容区 = 「切到具体软件界面」；批次 BB：导航栏自动收起，应用拿满整屏
             pip.showSingle(s);
+            setDockCollapsed(true);
             pip.deploySlotPublic(s);
             pip.focusSlot(s);
         }

@@ -132,6 +132,12 @@ public final class PipBoard extends LinearLayout {
     private ExitListener exitListener;
 
     public void setOnExitSlot(ExitListener l) { this.exitListener = l; }
+
+    /** 批次 BB：键条「导航栏」键 = 收起/唤出底部 Dock 导航栏（动作由宿主注入）。 */
+    public interface DockToggleListener { void onToggleDock(); }
+    private DockToggleListener dockToggleListener;
+
+    public void setOnToggleDock(DockToggleListener l) { this.dockToggleListener = l; }
     private final boolean[] longFired = {false, false, false};
     /** armed[i] = 本手势（从 DOWN 起）发生在这块画布已是焦点的时候，才允许外注入。 */
     private final boolean[] armed = {false, false, false};
@@ -592,9 +598,22 @@ public final class PipBoard extends LinearLayout {
             else showSplit();
         });
 
+        // 批次 BB：第三个键「导航栏」—— 收起/唤出底部 Dock 导航栏。
+        // 单应用模式进来自动收起（应用拿满整屏），想用 Dock 点它唤出，再点收起。
+        View sep2 = new View(act);
+        LinearLayout.LayoutParams seplp2 = new LinearLayout.LayoutParams(dp(1), -1);
+        seplp2.setMargins(dp(2), vpad, dp(2), vpad);
+        sep2.setBackgroundColor(0x33FFFFFF);
+        TextView dockKey = keyButton("导航栏");
+        dockKey.setOnClickListener(v -> {
+            if (dockToggleListener != null) dockToggleListener.onToggleDock();
+        });
+
         bar.addView(back, new LinearLayout.LayoutParams(0, -1, 1f));
         bar.addView(sep, seplp);
         bar.addView(home, new LinearLayout.LayoutParams(0, -1, 1f));
+        bar.addView(sep2, seplp2);
+        bar.addView(dockKey, new LinearLayout.LayoutParams(0, -1, 1f));
         return bar;
     }
 
