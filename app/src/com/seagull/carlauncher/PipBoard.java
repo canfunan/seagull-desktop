@@ -944,11 +944,11 @@ public final class PipBoard extends LinearLayout {
         //     屏和任务都诞生在真实尺寸上。旧逻辑在这里用 designW 估的假尺寸 +
         //     null surface 建屏，正是「黑屏 + 应用被反复冷启动」的源头。
         if (surf == null) { setHint(which, slot); return; }
-        int w = svView != null && svView.getWidth() > 0 ? svView.getWidth() : designW(which);
-        int h = svView != null && svView.getHeight() > 0 ? svView.getHeight()
-                : Math.max(1, act.getResources().getDisplayMetrics().heightPixels - dp(150));
         final Surface f = surf;
-        final int fw = w, fh = h;
+        // 批次 CE：建屏用固定屏尺寸（单应用画布尺寸），不用当前分屏画布尺寸 ——
+        // VD 尺寸终身不变，见 fixedVdSize() 注释。
+        final int[] fs = fixedVdSize();
+        final int fw = fs[0], fh = fs[1];
         final MirrorSlot s = slot;
         final MediaProjection mp = projFor(which);
         setHint(which, slot);
@@ -1020,6 +1020,26 @@ public final class PipBoard extends LinearLayout {
     /** 给外部（选了新应用后）调：部署指定槽。 */
     public void deploySlotPublic(int which) { deploySlot(which); }
 
+    /**
+     * 批次 CE：固定屏尺寸 —— 单应用模式的画布尺寸（本容器全宽 × 高-键条）。
+     * VD 建屏用这个尺寸，之后**终身不 resize**；分屏预览靠 SurfaceView 缩放显示，
+     * 进单应用正好 1:1。依据（网易云 3.1.0 反编译坐实）：
+     *   · manifest resizeableActivity="false" —— 系统把每次 VD resize 当"应用不支持
+     *     的配置变化"处理；
+     *   · IotPlayerActivity（播放/歌词页）没声明任何 configChanges → resize 即重建；
+     *   · MainActivity.onCreate 主动 remove("android:support:fragments") → 重建必回首页。
+     * 旧架构 VD 跟画布走（分屏↔单应用↔键条挤压全在 resize），每次「桌面」往返都是
+     * 一场 Activity 重建风暴，歌词页必丢。车联助手同款不变量：屏尺寸终身不变。
+     */
+    private int[] fixedVdSize() {
+        int w = getWidth() > 0 ? getWidth()
+                : designW(1) + designW(2) + dp(SPLIT_W);
+        int h = getHeight() > 0 ? getHeight() - dp(KEYBAR_DP)
+                : Math.max(1, act.getResources().getDisplayMetrics().heightPixels
+                        - dp(150) - dp(KEYBAR_DP));
+        return new int[]{Math.max(1, w), Math.max(1, h)};
+    }
+
     private void attachTo(MirrorSlot slot, Surface surface, int w, int h) {
         if (surface == null || !surface.isValid()) return;
         final int which = slot == slotA ? 1 : 2;
@@ -1027,12 +1047,15 @@ public final class PipBoard extends LinearLayout {
         if (pkg == null || pkg.isEmpty()) { setHint(which, slot); return; }
         final MirrorSlot s = slot;
         final MediaProjection mp = projFor(which);
-        final int dpi = dpiFit(w, h);
+        final int[] fs = fixedVdSize();
+        final int fw = fs[0], fh = fs[1];
+        final int dpi = dpiFit(fw, fh);
         new Thread(() -> {
             // 同槽串行，理由见 deploySlot
             synchronized (s) {
-                boolean ok = s.attachSurface(surface, w, h, dpi);
-                if (!ok) ok = s.deploy(mp, pkg, surface, w, h, dpi);
+                // 批次 CE：传固定屏尺寸（fw/fh），不是当前画布尺寸 —— VD 建屏后终身不变
+                boolean ok = s.attachSurface(surface, fw, fh, dpi);
+                if (!ok) ok = s.deploy(mp, pkg, surface, fw, fh, dpi);
                 final boolean needProj = s.needsProjection();
                 final boolean fOk = ok;
                 ui.post(() -> {
@@ -1044,7 +1067,8 @@ public final class PipBoard extends LinearLayout {
                     }
                     setHint(w2, s);
                     Log.i(TAG, "槽 " + w2 + " → " + s.describe()
-                            + " 画布 " + w + "x" + h + "@" + dpi + "dpi");
+                            + " 固定屏 " + fw + "x" + fh + "@" + dpi + "dpi"
+                            + "（画布 " + w + "x" + h + "，缩放显示）");
                     if (needProj && mp == null) requestConsent();
                 });
             }
@@ -1107,7 +1131,8 @@ public final class PipBoard extends LinearLayout {
         new Thread(() -> {
             String out = RootOps.ensureOnDisplay(act, pkg, d);
             if (out != null && !out.isEmpty()) Log.i(TAG, "点后自愈 槽 " + slotNo + ": " + out);
-            if (out != null && out.contains("已搬回")) ui.post(s::nudgeLayout);
+            // 批次 CE：搬回后不再 nudgeLayout —— 抖动=触发重建，网易云正在看的
+            // 页面（歌词页）会当场归零。铺满交给系统按 VD 固定尺寸重配。
         }, "pip-tap-heal" + which).start();
     }
 
@@ -1135,10 +1160,11 @@ public final class PipBoard extends LinearLayout {
                         String out = RootOps.ensureOnDisplay(act, pkg, s.displayId());
                         if (out != null && out.contains("已搬回")) {
                             Log.i(TAG, "巡检搬回 槽 " + i + ": " + out);
-                            ui.post(() -> {
-                                s.nudgeLayout();          // 批次 AH：搬回后强制重排铺满
-                                redeployIfPossible();
-                            });
+                            // 批次 CE：搬回后不再 nudgeLayout（批次 AH 遗留）—— 抖动
+                            // 会触发重建，网易云正在看的页面（歌词页）当场归零，正是
+                            // 「桌面往返回首页」bug 的帮凶。铺满交给系统按 VD 固定
+                            // 尺寸重配 + SurfaceView 缩放显示；只补挂面（redeploy）。
+                            ui.post(() -> redeployIfPossible());
                         }
                     } catch (Throwable t) {
                         Log.w(TAG, "巡检 槽 " + i + " 异常: " + t);
