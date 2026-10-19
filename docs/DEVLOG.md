@@ -12,6 +12,248 @@
 
 ---
 
+## 批次 AK — K1：常驻 root 守护扩展（直注触摸 + 实时任务监听 + 事件订阅）
+
+### 目标
+
+OneStep4 §A/§B/§E 思路落地：把"每条 root 命令 fork 一次 su"升级为常驻守护进程统一承接，
+任务自愈从 2.5s 轮询升级为事件触发。**只借思路，实现全部自写**（依据 `ONESTEP-BORROWING.md`）。
+
+### 改了什么
+
+- **协议层 `PrivCodec`**：新增 8 个 op —— `CREATE/RESIZE/SURFACE/RELEASE`（AL 建屏用）、
+  `ARM/CTRL`（AM 拦截用）、`WATCH/STATE`（事件订阅/快照）；新增 `EVT` 推送行与
+  BUMP/ROUTED/WATCH 三类事件。`PrivCodecCheck` 扩到 39 项全过。
+- **守护进程 `RootMain`**：`WATCH on` 把当前连接转为事件订阅（一连接一订阅者，
+  EOF 自动摘）；有订阅者才挂 `TaskWatcher`，空订阅自动注销监听；`doMotion` 注入前
+  `LaunchController.touchAt(displayId)` 刷新武装 TTL（AM 的触摸证据链）；
+  `doState` 一行快照（watch/held/subs/ctrl/armed）。
+- **客户端 `PrivClient`**：新增 create/resize/surface/release/arm/ctrl/state 封装；
+  独立订阅通道 `subscribe/unsubscribe`（watch 线程只读 EVT 行，应答行丢弃）。
+- **`TaskWatcher`（新）**：root 进程反射注册系统 `ITaskStackListener`。**刻意不解析
+  RunningTaskInfo 载荷**——各 ROM 事务号与字段漂移，解析错一个字段就可能把"对槽的
+  实例"当目标任务（m12 红线）。一切事件 300ms 节流后推 `EVT BUMP`，自愈决策全在
+  桌面既有护栏（ensureOnDisplay：只搬不拉、对槽绝不动）。
+- **`PipBoard`**：onResume `startWatch()`、onDestroy 退订；订阅在线巡检降为 8s 兜底拍，
+  离线保持 2.5s；BUMP 触发 `selfHeal()`（毫秒级自愈），ROUTED 刷新提示。
+- **`Caps`**：空气开关 `persist.seagull.rootbridge`（`rootBridgeOn` 10s 缓存 / `setRootBridge`
+  / `rootBridgeLabel` 只读缓存——设置页 UI 线程不能 fork getprop）。
+
+### 复盘
+
+- **做对**：没另起 ServiceManager.addService 服务。计划里是 OneStep 式 Binder 服务，
+  复盘时确认现有 PrivClient/RootMain 本来就是常驻服务雏形（真机验证过拉起链路），
+  折叠进同一守护进程 = 复用 60s 自退出、uid 白名单、setsid 拉起三件套，风险最小。
+  LocalSocket EOF 感知等效 linkToDeath。
+- **做对**：TaskWatcher 的"只触发不解析"取舍。OneStep 把任务详情推给桌面自己决策；
+  我们的任务拓扑更险（双槽 + 对槽任务同名），BUMP + 既有护栏是唯一不踩 m12 的路。
+- **修正**：`PipBoard.startWatch` 最初把 `Caps.rootBridgeOn()` 判断留在主线程——
+  缓存未命中时 getprop 会 fork 进程，onResume 直接卡 UI。整段挪进订阅后台线程。
+- **主线程纪律（本批立规）**：`PrivClient.ensureForTouch()` 主线程只接受"已连接"
+  （掉线立即 false，手势余量退回 `input -d` 通道）；launch/move 等只许后台线程走完整
+  `ensure()`。任何"可能 fork su"的调用都不许出现在主线程调用图里。
+
+### 验证
+
+javac 编译过；PrivCodecCheck 39 项全过。真机验收项见 `UPDATE-CHECKLIST.md` K1（🟡）。
+
+### 遗留
+
+订阅连接上其余 op 照常受理（无害：客户端不会在订阅连接上发请求）——协议上留了口子，
+真机验收后若要用再收紧。
+
+---
+
+## 批次 AL — K2：root 上下文 TRUSTED+PUBLIC 虚拟屏（跳主屏根治）
+
+### 目标
+
+OneStep4 §C 思路落地：私有屏"别的应用不许往里放东西"是跳主屏类问题的根源；
+TRUSTED 位只有 root 上下文拿得到。屏由守护进程（uid 0）建，任务"生在画布"。
+
+### 改了什么
+
+- **`RootMain`**：`doCreate/doResize/doSurface/doRelease`。建屏用
+  `ActivityThread.getSystemContext()`（app_process 里拿系统级 Context 的唯一正路，
+  DisplayManager 注册在它上面）拿 DisplayManager；flags 走 `TrustedFlags.candidateFlags()+
+  normalize` 候选降级（与本地 TRUSTED 路同一套序列），建后校验 Display flags TRUSTED 位，
+  `HELD` 表持有（守护进程退出 = 屏全拆）。
+- **surface 跨进程**：`Surface.writeToParcel` + `Base64(NO_WRAP)` 过行协议
+  （NO_WRAP 无空白，行协议天然装得下），守护进程 `Surface.CREATOR.createFromParcel`
+  还原挂载；空 blob `-` = 摘面（画布离场但屏与任务都留着）。
+- **`MirrorSlot`**：`deploy` 加 root 优先路——`Caps.rootBridgeOn() && PrivClient.ensure()`
+  先试 `PrivClient.create`，成则 `rootBased=true` 走 `finishDeploy` 公共段，失败回落
+  本地三路（私有屏→TRUSTED→投影），行为与 AJ 一致；已有 root 屏时只 resize+挂面。
+  `finishDeploy` 抽出公共段（relaxCompat→搬任务→冷启动→自愈→武装），root/本地同款。
+- **root 分支全覆盖**：`syncSize`（本地簿记先行，触摸换算立即用新值，真实 resize 排队）、
+  `nudgeLayout`（两拍抖动整段走守护进程 resize，专用线程 sleep 不占别人的路）、
+  `detachSurface`（摘面不拆屏）、`teardownVd`（拆屏幂等 + **不无条件 disarm**——
+  武装是全局单源，拆 A 槽不能解掉 B 槽的武装，过期由 5s TTL 自然失效）。
+
+### 复盘
+
+- **做对**：CREATE 不在时传 surface，单独走 SURFACE 事务——建屏（慢、可能降级重试）
+  与挂面（画布每次 surfaceChanged 都来）解耦，画布重建不用重 建 屏。
+- **做对**：跨槽武装保护。最初 teardownVd 里无条件 disarm 会误杀另一槽的武装路由，
+  改为不在这里 disarm。
+- **实测待验**：TRUSTED+PUBLIC 组合在 Android 14 上 PUBLIC×SHOW_WHEN_LOCKED_INSECURE
+  冲突规避、IME 能否弹进画布——都是真机验收项（R7/R8 🟡）。
+- **取舍**：密度策略（OneStep §F）不引入，280dp 基准已实测有效。
+
+### 验证
+
+javac 编译过。真机验收项见 `UPDATE-CHECKLIST.md` K2（🟡：dumpsys display 查 trusted/public、
+点歌词不跳主屏、网易云 8s 铺满、IME 实测）。
+
+### 遗留
+
+无（本批范围）。
+
+---
+
+## 批次 AM — K3：IActivityController 全局启动拦截（不依赖 LSPosed）
+
+### 目标
+
+OneStep4 §D 思路落地：system_server 把全系统每次 Activity 启动先问控制器——
+一条通道管全部应用，LSPosed C0 总闸漏勾的作用域（QQ 音乐/百度地图）一并覆盖。
+
+### 改了什么
+
+- **`LaunchController`（新，root 侧）**：
+  - 安装：反射 `setActivityController(controller, false)`，优先 2 参重载回落 1 参；
+    uid 0 直接过 SET_ACTIVITY_CONTROLLER 权限。
+  - 决策（**宁放行不误拦**）：武装有效（ARM 登记的 displayId↔嵌入应用 + 5s 内有注入
+    触摸）+ 目标≠嵌入应用自身 + 非 HOME/SECONDARY_HOME + 无 FLAG_FORWARD_RESULT
+    + 不在 bypass 窗口（3s，防改道自锁）才拦；**解析/决策任何异常一律放行**。
+  - 动作：先记 bypass，独立线程 `startActivityAsUser` 原意图原 flags 换落点屏
+    （控制器回调在 system_server 启动关键路径上，重启动的 binder 往返绝不串行在里面），
+    推 `EVT ROUTED pkg displayId`。
+  - **回复字节纪律**（最初三目表达式写混过，改为显式分支）：activityStarting
+    写 0(拦)/1(放)、activityResuming 恒 1（拦恢复=卡死应用）、
+    appCrashed/appANR/systemNotResponding 恒 0（走系统默认，写 1 误杀应用、写 -1 卡死系统）。
+  - `readInterfaceToken` 是隐藏 API，SDK jar 没有——反射调用。
+- **`RootMain`**：`doArm`（displayId≤0 或 pkg="-" = 解除）、`doCtrl`、`doState`。
+- **`MirrorSlot.finishDeploy`**：部署成功即 `arm(displayId,pkg)+ctrl(true)`（空气开关
+  关闭时跳过——行为与 AJ 一致）。
+
+### 复盘
+
+- **做对**：豁免清单照思路不抄码。OneStep 的豁免集（HOME/result 回传/短 bypass/
+  异常放行）是踩过坑的产物，语义全部吸收，实现自写。
+- **做对**：拦截改道与 C0 hook 并存不冲突（C0 在应用进程 execStartActivity、控制器在
+  system_server AMS 入口，控制器先到且覆盖面更大）——原计划的 `persist.seagull.c0`
+  降级开关没有实际场景，未加（清单 AM-R6 已记偏差）。
+- **风险认知**：IActivityController 全系统唯一，注册会顶掉 Monkey 等；system_server
+  持有控制器 binder，守护进程死亡 = system_server 侧 binder 清理自动解除拦截，不留僵尸。
+- **红线意识**：控制器崩溃/卡死 = 全系统启动瘫痪。因此异常放行是第一原则，
+  拦截判定只用内存态、零 IO、改道走独立线程。
+
+### 验证
+
+javac 编译过。真机验收项见 `UPDATE-CHECKLIST.md` K3（🟡：零跳屏闪现、HOME 正常、
+分享/登录流不碎、未勾作用域应用改道、下线解除）。
+
+### 遗留
+
+armed 状态在守护进程重启后丢失（内存态）——桌面部署时会重 arm，可接受。
+
+---
+
+## 批次 AN — K4：高德导航信息卡片（官方车联服务接入）
+
+### 目标
+
+OneStep4 §H 的数据源是高德官方开放接口（不是 OneStep 私有物）——自写协议实现，
+桌面顶栏恢复导航播报卡片（旧导航信息区批次 R 前后已删）。
+
+### 改了什么
+
+- **`AmapNavClient`（新）**：bind `com.autonavi.minimap.service.NAVIGATION_SERVICE`
+  （包名可配 `LauncherModel.navPkg`）。构建链没有 aidl 工具 → **控制/回调两端 Binder
+  全部手写 transact**：控制端 ILinkSdkControl（1=authenticate/3=register/4=unregister），
+  回调端 ILinkSdkCallback（1=onEvent/2=onEvent+fd，fd 里是大包 JSON）。载荷明文与
+  AES-GCM 信封双解（`{encrypted,content}` → aad|key|nonce|密文，GCM tag 128）。
+  `datas[].type==4` 是导航状态，取 8 个字段进 `NavState`。
+- **数据保鲜**：8s 无更新判过期清空；onServiceDisconnected/onBindingDied/onNullBinding/
+  强杀高德四路全清；断连重绑由 `start()` 幂等承接。
+- **`NavCard`（新）**：半透明黑胶囊（转向黄 + 本段剩余/速度 + 路名 + 全程剩余）；
+  maneuverId→文本箭头映射（缺图给直行箭头并记日志补映射）；无导航 GONE 不占位；
+  `setEnabled` 打开时立即恢复上一次状态；`setForcedHidden` 给系统 PiP 模式用。
+- **接线**：`LauncherModel` 加 navEnabled/navPkg（save/load/factoryReset 三段同步）；
+  `HomeActivity` buildUi 挂卡、onResume 同步开关 + 起/停高德绑定、onDestroy/皮肤重画
+  前 detach 摘订阅（单例活得比页面久，不摘会双份回调持死旧树）；系统 PiP 模式
+  `setForcedHidden(true)`；设置页"系统"分区加「导航与增强」组（卡片开关 + rootbridge
+  开关 + root 桥接快照行）。
+
+### 复盘
+
+- **做对**：车机纪律——只有信息没有按钮，司机看的不是让司机点的。
+- **做对**：NavState 类限定符（`AmapNavClient.NavState`）——最初漏了限定符三处引用
+  编译失败，编译器兜住。
+- **协议事实**：事务号/datas[].type/字段名都是高德 LinkSDK 的公开互操作事实，
+  逐条写在 AmapNavClient 头注释，版本漂移时按注释对表。
+- **风险**：高德版本升级可能改字段名/加密策略——解析失败只丢数据不崩（Throwable 兜底），
+  8s 过期自然清空。
+
+### 验证
+
+javac 编译过。真机验收项见 `UPDATE-CHECKLIST.md` K4（🟡：开导航实时更新、结束 8s 消失、
+强杀清干净、画中画无回归）。
+
+### 遗留
+
+车机版高德（com.autonavi.amapauto）是否开放同一 action 待实测；不开放时 navPkg 配置
+留作切换口，通知监听兜底不在本系列范围。
+
+---
+
+## 批次 AK~AN 复盘（OneStep 借鉴系列总结）
+
+### 预期 vs 实现（三处有意偏差，全部记录在案）
+
+| 计划 | 实现 | 为什么 |
+|---|---|---|
+| K1-R2 ServiceManager.addService 注册 Binder 服务 | 沿用 LocalSocket 行协议守护进程 | 现有骨架已在真机验证；uid 白名单+私有协议同等安全边界；EOF 感知等效 linkToDeath |
+| K1-R7 新建 RootBridgeClient | 扩展 PrivClient | 同一进程同一连接池，两个客户端类只会双倍维护 |
+| K3-R6 `persist.seagull.c0` 降级开关 | 未加 | root 控制器与 C0 hook 叠加不互斥（一个 system_server 入口一个应用进程入口），无降级场景 |
+
+另有一处**刻意简化**：TaskWatcher 不解析任务详情只推 BUMP（防 ROM 字段漂移误动对槽任务），
+自愈决策全在桌面既有护栏。
+
+### 协议与开关的最终形态
+
+- 通道：abstract socket `seagull.privd`；主连接一请求一应答（seq 对账），订阅连接单向推 EVT。
+- 事务：`PING/LAUNCH/MOTION/MOVE/MOVE_ROOT/REMOVE/CREATE/RESIZE/SURFACE/RELEASE/ARM/CTRL/WATCH/STATE`。
+- 事件：`EVT BUMP`（任务栈变化）/`EVT ROUTED pkg displayId`（拦截改道）/`EVT WATCH on`。
+- 开关：`persist.seagull.rootbridge`（1=新链路，0/缺省=AJ 行为），设置页可切，
+  getprop/setprop 均子线程 + 10s 缓存。
+- 生命周期：守护进程 60s 无客户端自退出；订阅在线即不退；守护死 = root 屏全拆 +
+  system_server 侧控制器/监听 binder 自动清理；桌面断线 = 订阅自动摘。
+
+### 风险清单（现状 / 触发条件 / 缓解）
+
+| 风险 | 现状 | 触发条件 | 缓解 |
+|---|---|---|---|
+| IActivityController 被 ROM 限制/裁剪 | install() 失败返回 false | ROM 删除重载或权限收紧 | ctrl(false) 照旧；跳主屏类问题回落 C0 hook + 轮询自愈（AJ 行为） |
+| 控制器顶掉 Monkey 等既有控制器 | 注册即独占 | 用户同时跑 Monkey/自动化工具 | 无解（系统语义）；rootbridge 关掉即恢复 |
+| TRUSTED flags 在不同 ROM 差异 | TrustedFlags 候选降级 + TRUSTED 位校验 | 某组 flags 被拒 | 逐候选降级；全被拒回落本地三路 |
+| root 屏上 IME 不弹（PUBLIC 未生效） | 未验证（🟡 R7） | 真机实测 | 输入仍可回主屏输入框或外接键盘；不阻塞部署链路 |
+| 守护进程被 LMK/用户杀死 | 屏全拆、拦截/监听自动解除 | 极端内存压力或手动 kill | 下一次操作 ensure() 重拉；PipBoard 巡检兜底拍一直在 |
+| 高德协议版本漂移 | 解析 Throwable 兜底 + 8s 过期 | 高德升级改字段/加密 | 卡片静默消失不崩；按头注释对表补字段 |
+| 拦截误伤（预测外的启动路径） | 豁免从宽 + 异常放行 | 用户反馈某应用启动被吞 | rootbridge 开关秒级关闭；armed TTL 5s 自愈；STATE 行定位 |
+
+### 做对的三件事（对后续批次的纪律）
+
+1. **主线程纪律**：一切可能 fork 的调用（ensure/getprop/subscribe）禁止出现在主线程
+   调用图；主线程只接受"已连接"快路径。本系列三次踩线三次当场修。
+2. **全局单源不互踩**：武装是全局单源——拆槽不 disarm（TTL 自然失效）、订阅是全局单源
+   ——页面销毁即退订、空订阅自动注销系统监听。
+3. **宁可降级不可卡死**：每条新链路都有"失败→旧路"的完整回落，且回落路径行为
+   严格等于 AJ（空气开关验证口径）。
+
+---
+
 ## 批次 AJ — 反编译网易云 iot 版：铺满问题的终极根因（PORTRAIT 烙印）+ 密度抖动强制重建
 
 用户要求反编译网易云看为什么不能铺满。反编译对象：`com.netease.cloudmusic.iot`

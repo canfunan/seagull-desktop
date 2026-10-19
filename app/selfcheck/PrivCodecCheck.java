@@ -92,6 +92,33 @@ public class PrivCodecCheck {
         }
         check(threw, "空格参数拒绝");
 
+        // 9) 批次 AK~AM 新事务（OneStep 思路落地的守护进程扩展）往返
+        String cr = PrivCodec.encodeRequest(12, PrivCodec.OP_CREATE, "800", "480", "160");
+        check(cr.equals("12 CREATE 800 480 160\n"), "CREATE 编码: " + cr.trim());
+        PrivCodec.Request crq = PrivCodec.decodeRequest(cr);
+        check(crq != null && crq.op.equals(PrivCodec.OP_CREATE) && crq.args.length == 3,
+                "CREATE 解码");
+        check(PrivCodec.decodeResponse("12 OK created 5 trusted=1\n")
+                .payload.equals("created 5 trusted=1"), "CREATE 应答");
+        String ar = PrivCodec.encodeRequest(13, PrivCodec.OP_ARM, "5", "com.netease.cloudmusic");
+        check(ar.equals("13 ARM 5 com.netease.cloudmusic\n"), "ARM 编码: " + ar.trim());
+        check(PrivCodec.encodeRequest(14, PrivCodec.OP_ARM, "-1", "-")
+                .equals("14 ARM -1 -\n"), "ARM 解除用 - 占位");
+        String sr = PrivCodec.encodeRequest(15, PrivCodec.OP_RESIZE, "5", "800", "480", "160");
+        PrivCodec.Request srq = PrivCodec.decodeRequest(sr);
+        check(srq != null && srq.args.length == 4 && srq.args[0].equals("5"), "RESIZE 解码");
+        // SURFACE 的 blob 是 Base64 NO_WRAP（无空白），行协议天然装得下
+        String surf = "SEf////+AAAA";   // 任意无空白样例，只验协议承载不验内容
+        check(PrivCodec.decodeRequest(
+                PrivCodec.encodeRequest(16, PrivCodec.OP_SURFACE, "5", surf))
+                .args[1].equals(surf), "SURFACE blob 原样往返");
+        // EVT 行：守护进程推送（无 seq），前缀固定 "EVT <TYPE> [args]"
+        check(PrivCodec.EVT.equals("EVT") && PrivCodec.EVT_BUMP.equals("BUMP")
+                && PrivCodec.EVT_ROUTED.equals("ROUTED") && PrivCodec.EVT_WATCH.equals("WATCH"),
+                "EVT 常量");
+        check((PrivCodec.EVT + " " + PrivCodec.EVT_ROUTED + " com.x.y 5")
+                .equals("EVT ROUTED com.x.y 5"), "EVT ROUTED 拼行");
+
         System.out.println("PrivCodecCheck OK (" + n + " 项)");
     }
 

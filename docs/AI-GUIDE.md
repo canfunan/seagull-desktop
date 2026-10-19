@@ -52,9 +52,9 @@ app/
     TaskEngine.java            自动化任务
     TaskMover.java             窗口搬运（root）
     TouchForward.java          触摸转发（双通道：守护中继 / input 命令）
-    MirrorSlot.java            虚拟屏镜像槽（两块；TRUSTED 优先 + 投影兜底 + 1:1）
+    MirrorSlot.java            虚拟屏镜像槽（两块；root TRUSTED 屏优先 → 私有屏直建 → TRUSTED 角色 → 投影兜底；1:1）
     MirrorHost.java            画中画槽进程级持有者：退出页面不断屏、桌面自愈、清空入口
-    PipBoard.java              画中画面板：单焦点/卡片化/空态大按钮/环境光遮罩 + 部署/授权/自愈（HomeActivity 与 MirrorActivity 共用）
+    PipBoard.java              画中画面板：单焦点/卡片化/空态大按钮/环境光遮罩 + 部署/授权/自愈（HomeActivity 与 MirrorActivity 共用）；事件订阅（BUMP 自愈/ROUTED 提示）
     MiniPlayer.java            36dp 媒体条（三键 + 热区外扩 + 会话不活跃隐藏）
     MediaListenerService.java  媒体会话快照 + transport control（MiniPlayer 数据源，通知监听器 getActiveSessions）
     CanvasSource.java          画布数据源接口（MirrorSlot 已实现；StreamCanvasSource 占位）
@@ -66,8 +66,13 @@ app/
     PrivCodec.java             守护进程线协议（纯 JVM，可自检）
     TaskScan.java              dumpsys 扫 task：display 归属看段头（纯 JVM，可自检）
     SelfTestL3.java / SelfTestMirror.java   L3 真机自检（⓪ TRUSTED 探测 + ①~⑩ 建屏/搬应用/触摸）
-    PrivClient.java            守护进程客户端（拉起/重连/降级）
-    RootMain.java              app_process 守护进程入口（反射隐藏 API）
+    PrivClient.java            守护进程客户端（拉起/重连/降级 + 建屏/拦截封装 + 事件订阅）
+    RootMain.java              app_process 守护进程入口（反射隐藏 API；root 建屏/注入/搬任务/拦截宿主）
+    TaskWatcher.java           root 侧 ITaskStackListener 桥（只推 BUMP 事件，不解析任务详情）
+    LaunchController.java      root 侧 IActivityController 全局启动拦截（武装路由 + 豁免 + 改道）
+    RootLog.java               root 侧落盘日志（/data/local/tmp/seagull-root.log，256KB 上限）
+    AmapNavClient.java         高德官方导航服务客户端（手写 transact + AES-GCM 载荷）
+    NavCard.java               顶栏导航信息卡片（无导航整条隐藏）
     Caps.java / SysOps.java / RootOps.java   能力探测 / 系统操作 / root 通道
 docs/
   ARCHITECTURE.md              分层、模块职责、关键流程、存档 JSON（先读这个）
@@ -243,6 +248,74 @@ gh api repos/caogenfunan123/seagull-desktop/actions/runs --jq '.workflow_runs[0]
 | 歌词不动 | 媒体会话是否在播；`SeagullLyric` 日志；歌词来源是否选了「只用本地」 |
 | 天气取不到 | 城市是否填了；`weatherError`；`SeagullWeather` 日志 |
 | 构建挂在某一步 | CI job log 里 `== N/7 ==`；先在本地跑类型检查 |
+| 守护进程连不上 | `PrivClient.status()`；`logcat -s SeagullPrivd SeagullPriv`；`cat /data/local/tmp/seagull-root.log`；`su -c` 手动拉起看报错（多半 SELinux 拦 socket） |
+| root 屏黑屏/任务没进画布 | 设置 → 系统 → root 桥接快照（`held=` 有没有屏）；`dumpsys display` 看 trusted/public；`SeagullMirror` 日志里建屏/降级记录 |
+| 某应用启动被吞（拦截误伤） | 先 `setprop persist.seagull.rootbridge 0` 秒级回滚；快照行看 `armed/routed`；`SeagullCtrl` 日志对决策 |
+| 跳主屏又出现 | 快照行 `ctrl=` 是否 on、`watch=` 是否 1；守护进程可能死了 → 下一次触摸会重拉 |
+| 导航卡片不出现 | 设置里「导航信息卡片」是否开；装没装高德、`SeagullNav` 日志（未提供服务=版本不开放）；导航结束 8s 后消失是正常保鲜 |
 
 日志 tag 一览：`SeagullDiag` / `SeagullCaps` / `SeagullMirror` / `SeagullTouch` /
-`SeagullTask` / `SeagullLyric` / `SeagullWeather` / `SeagullMover` / `SeagullBoot`。
+`SeagullTask` / `SeagullLyric` / `SeagullWeather` / `SeagullMover` / `SeagullBoot` /
+`SeagullPriv` / `SeagullPrivd` / `SeagullWatch` / `SeagullCtrl` / `SeagullNav` / `SeagullNavCard`。
+root 侧关键事件同时落盘 `/data/local/tmp/seagull-root.log`（256KB 上限，超限保留尾部）。
+
+---
+
+## 10. root 桥接（批次 AK~AN：OneStep 思路落地）
+
+总开关 `persist.seagull.rootbridge`（1=新链路，0/缺省=完全回退 AJ 行为）。
+设计依据 `docs/ONESTEP-BORROWING.md`，批次记录在 `docs/DEVLOG.md`，逐项验收在
+`docs/UPDATE-CHECKLIST.md`。**改这条链路之前先读完本节**——它挂在全系统关键路径上。
+
+### 10.1 拓扑
+
+```
+Launcher 进程（普通 uid）                    root 守护进程 RootMain（app_process，uid 0）
+┌──────────────────────────┐   su 拉起      ┌─────────────────────────────────────┐
+│ PrivClient ──主连接──────────────────────▶│ 行协议服务（abstract sock seagull.privd）│
+│  launch/motion/move/      │  一请求一应答  │  RootMain: 注入/搬任务/建屏/launch    │
+│  create/resize/surface/   │               │  TaskWatcher: ITaskStackListener     │
+│  release/arm/ctrl/state   │               │  LaunchController: IActivityController│
+│ PrivClient ──订阅连接─────▶ EVT BUMP/ROUTED│ RootLog: /data/local/tmp/…-root.log  │
+└──────────────────────────┘               └─────────────────────────────────────┘
+AmapNavClient ──bind──▶ 高德官方 NAVIGATION_SERVICE（独立于上链，只读数据 → NavCard）
+```
+
+### 10.2 事务表（PrivCodec，两端共用常量）
+
+| op | 参数 → 应答 | 用途 |
+|---|---|---|
+| PING | → pong | 握手/心跳（ensure 连上必 ping） |
+| LAUNCH | display comp flags → started | 守护进程内 startActivityAsUser（生在画布） |
+| MOTION | display action down ev n [x y]* → injected/rejected | 直注触摸（setDisplayId；失败拒绝=fail-closed；顺手刷武装 TTL） |
+| MOVE / MOVE_ROOT | taskId display / pkg display anchor → moved | 搬任务（按屏落点 / 锚点 root task） |
+| REMOVE | taskId → removed | 移除任务 |
+| CREATE / RESIZE | w h dpi → created id trusted=0/1 | root 建 TRUSTED+PUBLIC 屏 / 改尺寸 |
+| SURFACE | id base64 → surface set/cleared | 挂画布面（Parcel+Base64；"-"=摘面） |
+| RELEASE | id → released | 拆 root 屏（幂等） |
+| ARM | display pkg（"-"=解除）→ armed | 登记武装路由源（拦截的决策依据） |
+| CTRL | on/off → ctrl on/off | IActivityController 开关 |
+| WATCH | on/off → subscribed | 当前连接转事件订阅（EVT 行推送） |
+| STATE | → watch/held/subs/ctrl/armed 一行 | 快照（设置页自检） |
+
+### 10.3 降级树
+
+```
+root 建屏（rootbridge=1 且 PrivClient.ensure() 成功）
+├─ 成 → root TRUSTED 屏（"生在画布"，部署即 arm+ctrl）
+└─ 败 → 私有屏直建(flags=0) → TRUSTED 角色屏 → MediaProjection 投影
+守护进程不可用 → 旧 su 命令链路（RootOps），触摸退回 input -d
+事件订阅失败 → PipBoard 巡检保持 2.5s 轮询（在线时才降到 8s 兜底拍）
+拦截装不上/守护死 → system_server binder 自动清理，行为同 AJ
+任何一步失败都不卡 UI：主线程禁止一切可能 fork 的调用（ensure/getprop/subscribe）
+```
+
+### 10.4 改这条链路的三条铁律
+
+1. **拦截回调里绝不慢**：IActivityController 跑在 system_server 启动关键路径——
+   零磁盘 IO、零 binder 往返（改道放独立线程）、任何异常一律放行；
+   回复字节纪律见 LaunchController 头注释（写错一个字节 = 卡死系统或误杀应用）。
+2. **全局单源不互踩**：武装（arm）与订阅（watch）都是全局单源——拆槽不 disarm
+   （5s TTL 自然失效），页面销毁必退订，空订阅自动注销系统监听。
+3. **对槽任务红线**：任何新的任务操作必须过既有护栏（ensureOnDisplay 的"只搬不拉、
+   对槽绝不动"）；TaskWatcher 刻意不解析任务详情就是防 ROM 字段漂移踩这条线。

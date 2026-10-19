@@ -867,6 +867,26 @@ public class SettingsSectionActivity extends BaseActivity {
 
     private void systemBody() {
         toggleRow("开机自启", model.autoHome, () -> { model.autoHome = !model.autoHome; });
+
+        sectionLabel("导航与增强（批次 AN）");
+        toggleRow("导航信息卡片", model.navEnabled, () -> { model.navEnabled = !model.navEnabled; });
+        note("顶栏高德导航播报卡片：转向 + 剩余距离 + 路名。数据来自高德官方车联服务，"
+                + "只在高德导航进行中出现，无导航时整条隐藏。");
+        actionRow("root 增强链路（rootbridge）", "当前：" + Caps.rootBridgeLabel()
+                + " · persist.seagull.rootbridge", v -> {
+            toast("正在切换…");   // 读/设 prop 都走 exec，全部放子线程
+            new Thread(() -> {
+                boolean ok = Caps.setRootBridge(!Caps.rootBridgeOn());
+                runOnUiThread(() -> {
+                    toast(ok ? "已切换 root 增强链路，下次部署画中画生效"
+                            : "设置失败（需要 root）");
+                    render();
+                });
+            }).start();
+        });
+        note("root 建屏 / 启动拦截 / 事件订阅的总开关。出问题在这里一键回旧链路，"
+                + "等价于 setprop persist.seagull.rootbridge 0，秒级生效不用卸载。");
+
         sectionLabel("15.10 系统监控");
         actionRow("CPU / 温度 / 内存", SysOps.monitorLine(this), v -> {
             new Thread(() -> {
@@ -907,6 +927,12 @@ public class SettingsSectionActivity extends BaseActivity {
                 : "不可用 —— 需 uid=1000。root 侧方案：把本应用装进 /system/priv-app", null);
         actionRow("LSPosed 模块自检", "不用抓日志：查模块有没有注入高德 / 网易云 / SystemUI",
                 v -> runLspCheck());
+        actionRow("root 桥接快照", "守护进程 watch / 拦截 / 武装 / 持有屏（K1 R11 · K3 R7）", v -> {
+            new Thread(() -> {
+                final String s = PrivClient.state();   // 可能 fork su，后台线程跑
+                runOnUiThread(() -> msgDialog("root 桥接快照", s));
+            }).start();
+        });
         actionRow("画中画体检", "窗口帧 vs 虚拟屏尺寸，直接给「铺没铺满」的结论",
                 v -> runPipCheck(false));
         actionRow("画中画修复", "把画布里的应用冷启动到虚拟屏（铺满的最后手段）",

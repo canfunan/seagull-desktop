@@ -291,6 +291,11 @@ public final class LauncherModel {
     public int islandWidth = 320;
     public boolean islandLyric = false;
 
+    /* ==================== 状态：导航卡片（批次 AN） ==================== */
+
+    public boolean navEnabled = true;                  // 顶栏导航卡片开关
+    public String navPkg = "com.autonavi.minimap";     // 绑定哪一版高德（手机版/车机版实测后可换）
+
     /* ==================== 状态：天气 ==================== */
 
     public CitySource citySource = CitySource.MANUAL;
@@ -905,6 +910,9 @@ public final class LauncherModel {
             o.put("islandY", islandOffsetY);
             o.put("islandW", islandWidth);
             o.put("islandLyric", islandLyric);
+            /* 导航卡片（批次 AN） */
+            o.put("navOn", navEnabled);
+            o.put("navPkg", navPkg);
             /* 天气 */
             o.put("citySource", citySource.name());
             o.put("city", weatherCity);
@@ -1104,6 +1112,9 @@ public final class LauncherModel {
             islandOffsetY = o.optInt("islandY", 0);
             islandWidth = o.optInt("islandW", 320);
             islandLyric = o.optBoolean("islandLyric", false);
+
+            navEnabled = o.optBoolean("navOn", true);
+            navPkg = o.optString("navPkg", "com.autonavi.minimap");
 
             citySource = optEnum(o, "citySource", CitySource.class, citySource);
             weatherCity = o.optString("city", "");
@@ -1325,6 +1336,9 @@ public final class LauncherModel {
         islandOffsetY = 0;
         islandWidth = 320;
         islandLyric = false;
+        /* 导航卡片（批次 AN） */
+        navEnabled = true;
+        navPkg = "com.autonavi.minimap";
         /* 天气 */
         citySource = CitySource.MANUAL;
         weatherCity = "";

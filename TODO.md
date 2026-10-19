@@ -1,10 +1,42 @@
 # 后续开发清单
 
-> **进行中：OneStep 借鉴落地系列** —— 计划/验收/复盘全在 `docs/UPDATE-CHECKLIST.md`
-> （K1 root 常驻服务 → K2 TRUSTED 屏 → K3 启动拦截 → K4 高德导航卡片 → K5 对齐+复盘），
-> 思路依据 `docs/ONESTEP-BORROWING.md`。本文件保留既有 P0~P2 清单，P2-19 起的模块验收照旧有效。
+> **已完成：OneStep 借鉴落地系列（批次 AK~AN，2026-10-19）** —— 代码全部落地、javac 通过、
+> 自检 39 项全过；真机验收清单在 `docs/UPDATE-CHECKLIST.md`（逐项 🟡），
+> 批次记录与复盘（含风险清单）在 `docs/DEVLOG.md`，架构/排障在 `docs/AI-GUIDE.md` §10。
+> 总开关 `persist.seagull.rootbridge`（设置页可切，0 = 秒级回退 AJ 行为）。
 
-> 基线：`FEATURE-MATRIX.md`（205 条，5 组 / 17 分区）
+## K 系列 —— OneStep 借鉴落地（只借思路，实现全部自写）
+
+### 已落地（代码）
+- [x] K1/AK 守护进程扩展：PrivCodec 8 个新事务（CREATE/RESIZE/SURFACE/RELEASE/ARM/CTRL/WATCH/STATE）
+      + EVT 事件推送；TaskWatcher 实时任务监听（只推 BUMP，不解析任务详情）；
+      PrivClient 订阅通道；PipBoard 毫秒级自愈 + 巡检降频（在线 8s / 离线 2.5s）
+- [x] K2/AL root TRUSTED+PUBLIC 虚拟屏：RootMain 建屏四事务（systemContext +
+      TrustedFlags 候选降级）；Surface 过线（Parcel+Base64）；MirrorSlot root 优先路
+      + 失败回落旧三路；syncSize/nudge/detach/teardown 全加 root 分支
+- [x] K3/AM 全局启动拦截：LaunchController（武装路由 5s TTL + 豁免从宽 + 异常放行 +
+      回复字节纪律）；MirrorSlot 部署即武装；STATE 快照可见
+- [x] K4/AN 高德导航卡片：AmapNavClient（bind 官方 NAVIGATION_SERVICE，手写 transact，
+      明文/AES-GCM 双解，8s 保鲜四路全清）+ NavCard（无导航隐藏，PiP 强隐位）
+      + LauncherModel/HomeActivity/设置页接线
+- [x] K5 对齐与复盘：UPDATE-CHECKLIST 逐项打勾（3 处偏差记录在案）；DEVLOG 四批次
+      + 复盘章（协议最终形态、风险清单）；AI-GUIDE §10（拓扑/事务表/降级树/铁律）；
+      PrivCodecCheck 增补新事务用例
+
+### 待真机验收（🟡，容器做不了）
+- [ ] K1：守护进程 uid=0 启动日志、触摸延迟对比、rootbridge=0 回滚、BUMP 自愈毫秒级
+- [ ] K2：dumpsys display 查 trusted/public、**点歌词不跳主屏**（核心）、网易云 8s 铺满、
+      IME 能否弹进画布、密度抖动在 root 屏上依然成立
+- [ ] K3：零跳屏闪现、HOME 正常、分享/登录流不碎、QQ 音乐/百度地图改道、下线解除
+- [ ] K4：开导航实时更新、结束 8s 消失、强杀清干净、画中画无回归
+- [ ] 三次回归基线：AJ（模块链路）→ AK（守护链路）→ AL/AM/AN 后各一次
+
+### 遗留（本系列明确不做/待议）
+- [ ] 车机版高德（com.autonavi.amapauto）是否开放同一导航 action —— 实测后配 navPkg
+- [ ] Zygisk 模块（SECURE 黑屏等）——出现痛点再立项
+- [ ] 密度策略分设备分支 —— 280dp 基准已实测有效，不动
+
+> 基线：`FEATURE-MATRIX.md`(205 条，5 组 / 17 分区)
 > 顺序原则：先让「桌面」真的能用（纯公开 API），再加特色功能，最后做 root 增强层。
 >
 > **状态**：P0~P2 的代码全部落地（批次 A~I，见 `docs/DEVLOG.md`）。

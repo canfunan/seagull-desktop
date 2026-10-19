@@ -31,6 +31,36 @@ public final class PrivCodec {
      */
     public static final String OP_MOVE_ROOT = "MOVE_ROOT";
     public static final String OP_REMOVE = "REMOVE";
+    /*
+     * 批次 AK~AM 新增（OneStep4 思路落地，实现自写）：
+     *   CREATE  — 守护进程（root 上下文）建 TRUSTED+PUBLIC 虚拟屏，任务可以原生
+     *             落在这块屏（"生在画布"），不再受"私有屏不许放别人东西"限制；
+     *   RESIZE  — 守护进程持有的 VirtualDisplay.resize（root 屏没有本地 vd 对象）；
+     *   SURFACE — 画布 Surface 经 Parcel 序列化 + Base64 传给守护进程挂载；
+     *   RELEASE — 拆 root 屏；
+     *   ARM     — K3 启动拦截的"武装路由源"（displayId + 嵌入应用 + 触摸 TTL）；
+     *   CTRL    — IActivityController 全局启动拦截开/关；
+     *   WATCH   — 订阅事件推送（任务栈变化、拦截改道），守护进程在同一连接上
+     *             持续推 EVT 行（连接本身就是订阅，一连接一订阅者）；
+     *   STATE   — 自检页用：监听/拦截/武装/持有屏 的一行快照。
+     */
+    public static final String OP_CREATE = "CREATE";
+    public static final String OP_RESIZE = "RESIZE";
+    public static final String OP_SURFACE = "SURFACE";
+    public static final String OP_RELEASE = "RELEASE";
+    public static final String OP_ARM = "ARM";
+    public static final String OP_CTRL = "CTRL";
+    public static final String OP_WATCH = "WATCH";
+    public static final String OP_STATE = "STATE";
+
+    /** 守护进程主动推送的事件行前缀（无 seq，出现在订阅连接上）。 */
+    public static final String EVT = "EVT";
+    /** 事件类型：任务栈有任何变化（触发客户端走既有自愈搬回，不携带任务详情）。 */
+    public static final String EVT_BUMP = "BUMP";
+    /** 事件类型：拦截并改道了一次启动（pkg displayId）。 */
+    public static final String EVT_ROUTED = "ROUTED";
+    /** 事件类型：订阅连接上线/掉线（pkg 留空）。 */
+    public static final String EVT_WATCH = "WATCH";
 
     /** 线协议里 motion 的 action 用 MotionEvent 原始 action（含 pointer index 高位）。 */
     public static final int ACTION_DOWN = 0;

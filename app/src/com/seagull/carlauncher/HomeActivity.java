@@ -60,6 +60,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     private PipBoard pip;
     private MiniPlayer mini;
     private IslandView island;
+    private NavCard navCard;
     private TextView pipBox;
     private String lastSkin = "";
 
@@ -109,6 +110,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             // 旧 pip 的待跑 redeploy/selfHeal 摘掉：setContentView 会造新的
             // PipBoard，旧的没人 onDestroy，回调会对已废弃的树自愈
             if (pip != null) pip.cancelPending();
+            // 旧 NavCard 的订阅摘掉：AmapNavClient 单例活得比页面久，
+            // 不摘的话 buildUi 造的新卡片会跟废弃实例并存（双份回调、持死旧树）
+            if (navCard != null) { navCard.detach(); navCard = null; }
             setContentView(buildUi());
         } else {
             if (pip != null) pip.onResume();
@@ -120,6 +124,12 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             island.bind(model);
             island.setVisibility(model.islandEnabled ? View.VISIBLE : View.GONE);
         }
+        if (navCard != null) navCard.setEnabled(model.navEnabled);   // 设置页回来同步开关
+        // K4：绑/解绑高德导航服务（幂等；bindService 异步不卡主线程）。
+        // 绑定挂在进程级单例上（与 NavCard 同寿），桌面退后台仍保持连接 ——
+        // 回桌面卡片立即有数据；开销只有一条 binder 连接。
+        AmapNavClient nav = AmapNavClient.get(this);
+        if (model.navEnabled) nav.start(model.navPkg); else nav.stop();
         if (model != null && model.keepScreenOn) {
             getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         } else {
@@ -158,6 +168,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     @Override protected void onDestroy() {
         ui.removeCallbacksAndMessages(null);
         if (pip != null) pip.onDestroy();   // 只断 Surface，VD 留给 MirrorHost 常驻
+        if (navCard != null) navCard.detach();   // 摘导航订阅（AmapNavClient 单例存活）
         Lyrics.removeSink(islandSink);      // sink 保活纪律：Activity 走了一定摘掉
         super.onDestroy();
     }
@@ -227,6 +238,16 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         island.setVisibility(model != null && model.islandEnabled ? View.VISIBLE : View.GONE);
         root.addView(island, new FrameLayout.LayoutParams(dp(model == null ? 320 : model.islandWidth),
                 dp(40), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+
+        // 顶栏导航卡片（批次 AN）：高德在导航时才出现，压在画布上方；无导航 GONE 不占位。
+        // 位置放左上（岛在顶部居中），不拦截点击 —— 车机纪律：只有信息、没有按钮。
+        navCard = new NavCard(this);
+        navCard.setEnabled(model == null || model.navEnabled);
+        FrameLayout.LayoutParams nlp =
+                new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT);
+        nlp.leftMargin = dp(16);
+        nlp.topMargin = dp(52);
+        root.addView(navCard, nlp);
 
         // 系统画中画形态下的精简视图（系统 PiP 里只显示这一层）
         pipBox = new TextView(this);
@@ -487,6 +508,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             island.setVisibility(inPip || model == null || !model.islandEnabled
                     ? View.GONE : View.VISIBLE);
         }
+        if (navCard != null) navCard.setForcedHidden(inPip);
         if (pipBox != null) pipBox.setVisibility(inPip ? View.VISIBLE : View.GONE);
     }
 

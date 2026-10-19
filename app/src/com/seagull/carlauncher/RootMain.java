@@ -6,9 +6,11 @@ import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.util.Base64;
 import android.util.Log;
 import android.view.InputDevice;
 import android.view.MotionEvent;
+import android.view.Surface;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -30,7 +32,18 @@ import java.util.List;
  * 隐藏 API 在 app_process 里也没有 enforcement。
  *
  * 协议：见 PrivCodec。一请求一应答，坏报文丢事件不杀进程。
- * 生命周期：无客户端 60s 自退出，不宿留。
+ * WATCH 连接例外：发送 WATCH on 后连接转为事件订阅，守护进程在同一连接上持续推
+ * EVT 行（任务栈变化 BUMP / 拦截改道 ROUTED），直到断开或 WATCH off。
+ * 生命周期：无客户端 60s 自退出，不宿留（订阅连接算活跃客户端）。
+ *
+ * 批次 AK~AM（OneStep4 思路落地，实现自写）新增三块能力，全部在本进程（uid 0）：
+ *   · root 上下文建 TRUSTED+PUBLIC 虚拟屏（CREATE/RESIZE/SURFACE/RELEASE），
+ *     任务可以原生落进这块屏 —— "生在画布"，私有屏"别的应用不许放东西"的
+ *     限制从根上消失，PUBLIC 还让输入法能弹进画布；
+ *   · ITaskStackListener 实时任务监听（TaskWatcher）—— 事件触发自愈，替代轮询；
+ *   · IActivityController 全局启动拦截（LaunchController）—— 画布内点出来的
+ *     跨应用启动改道回画布，不依赖 LSPosed 勾作用域。
+ * 关键事件同步落盘 /data/local/tmp/seagull-root.log（RootLog，治"抓不到日志"）。
  */
 public final class RootMain {
 
@@ -40,6 +53,15 @@ public final class RootMain {
 
     private static volatile long lastActive = System.currentTimeMillis();
     private static volatile int clients;
+
+    /** 守护进程持有（root 建）的虚拟屏：displayId → VirtualDisplay。 */
+    private static final java.util.Map<Integer, android.hardware.display.VirtualDisplay> HELD =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    /** 事件订阅连接（WATCH on 的会话）。写入方：pushEvent（多线程）。 */
+    private static final java.util.List<BufferedWriter> SUBSCRIBERS =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+    /** ActivityThread.getSystemContext() 缓存：root 上下文（建屏/装控制器都要 Context）。 */
+    private static volatile android.content.Context sysCtx;
 
     /** 单行长度上限：私有 socket 的协议是一行一请求，超长行直接拒绝，别全接进内存。 */
     private static final int MAX_LINE = 64 * 1024;
@@ -64,6 +86,8 @@ public final class RootMain {
 
     public static void main(String[] args) {
         Log.i(TAG, "daemon start pid=" + android.os.Process.myPid()
+                + " uid=" + android.os.Process.myUid());
+        RootLog.i(TAG, "daemon start pid=" + android.os.Process.myPid()
                 + " uid=" + android.os.Process.myUid());
         LocalServerSocket server;
         try {
@@ -163,24 +187,46 @@ public final class RootMain {
     /* ---------------- 客户端会话 ---------------- */
 
     private static void serve(LocalSocket c) {
+        boolean subscribed = false;
+        BufferedWriter out = null;
         try (LocalSocket s = c;
              BufferedReader in = new BufferedReader(
-                     new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
-             BufferedWriter out = new BufferedWriter(
-                     new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8))) {
+                     new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8))) {
+            out = new BufferedWriter(
+                    new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8));
             String line;
             while ((line = readLineSafe(in)) != null) {
                 lastActive = System.currentTimeMillis();
                 PrivCodec.Request r = PrivCodec.decodeRequest(line);
-                String resp;
                 if (r == null) {
-                    resp = PrivCodec.encodeErr(0, "bad request");
-                } else {
-                    String payload = handle(r);
-                    resp = payload.startsWith("err:")
-                            ? PrivCodec.encodeErr(r.seq, payload.substring(4))
-                            : PrivCodec.encodeOk(r.seq, payload);
+                    out.write(PrivCodec.encodeErr(0, "bad request"));
+                    out.flush();
+                    continue;
                 }
+                // WATCH：连接转为事件订阅（此后守护进程会在同一连接上推 EVT 行）。
+                // 订阅连接上其余 op 照常受理（无害：客户端不会在订阅连接上发请求），
+                // 客户端主动断开 = 退订（finally 摘订阅）。
+                if (PrivCodec.OP_WATCH.equals(r.op)) {
+                    boolean on = r.args.length > 0 && "on".equals(r.args[0]);
+                    if (on && !subscribed) {
+                        SUBSCRIBERS.add(out);
+                        subscribed = true;
+                        // 有订阅者才挂监听：事件没人听就不白注册
+                        TaskWatcher.start();
+                        RootLog.i(TAG, "订阅连接上线（共 " + SUBSCRIBERS.size() + "）");
+                    } else if (!on && subscribed) {
+                        SUBSCRIBERS.remove(out);
+                        subscribed = false;
+                        if (SUBSCRIBERS.isEmpty()) TaskWatcher.stop();
+                    }
+                    out.write(PrivCodec.encodeOk(r.seq, subscribed ? "subscribed" : "unsubscribed"));
+                    out.flush();
+                    continue;
+                }
+                String payload = handle(r);
+                String resp = payload.startsWith("err:")
+                        ? PrivCodec.encodeErr(r.seq, payload.substring(4))
+                        : PrivCodec.encodeOk(r.seq, payload);
                 out.write(resp);
                 out.flush();
             }
@@ -190,7 +236,31 @@ public final class RootMain {
             Log.w(TAG, "client 会话异常: " + t);
         } finally {
             clients--;
+            // 订阅写手必须摘干净：残留的话 pushEvent 每轮都对死连接抛异常再摘一次
+            if (out != null) SUBSCRIBERS.remove(out);
+            if (subscribed && SUBSCRIBERS.isEmpty()) TaskWatcher.stop();
             lastActive = System.currentTimeMillis();
+        }
+    }
+
+    /**
+     * 事件推送（多线程调用：TaskWatcher / LaunchController）。
+     * 写坏一条不影响的：连接死掉就摘掉，其他订阅者照常。
+     */
+    public static void pushEvent(String line) {
+        synchronized (SUBSCRIBERS) {
+            for (int i = SUBSCRIBERS.size() - 1; i >= 0; i--) {
+                BufferedWriter w = SUBSCRIBERS.get(i);
+                try {
+                    synchronized (w) {
+                        w.write(line);
+                        w.write('\n');
+                        w.flush();
+                    }
+                } catch (Throwable dead) {
+                    SUBSCRIBERS.remove(i);
+                }
+            }
         }
     }
 
@@ -209,6 +279,21 @@ public final class RootMain {
                     return doMoveRoot(r.args);
                 case PrivCodec.OP_REMOVE:
                     return doRemove(r.args);
+                /* 批次 AK~AM（OneStep 思路，实现自写） */
+                case PrivCodec.OP_CREATE:
+                    return doCreate(r.args);
+                case PrivCodec.OP_RESIZE:
+                    return doResize(r.args);
+                case PrivCodec.OP_SURFACE:
+                    return doSurface(r.args);
+                case PrivCodec.OP_RELEASE:
+                    return doRelease(r.args);
+                case PrivCodec.OP_ARM:
+                    return doArm(r.args);
+                case PrivCodec.OP_CTRL:
+                    return doCtrl(r.args);
+                case PrivCodec.OP_STATE:
+                    return doState();
                 default:
                     return "err:unknown op " + r.op;
             }
@@ -240,7 +325,7 @@ public final class RootMain {
         return "started " + comp + " display=" + displayId + " result=" + res;
     }
 
-    private static Bundle launchOptions(int displayId) throws Exception {
+    static Bundle launchOptions(int displayId) throws Exception {
         Class<?> ao = Class.forName("android.app.ActivityOptions");
         Object opts = ao.getMethod("makeBasic").invoke(null);
         ao.getMethod("setLaunchDisplayId", int.class).invoke(opts, displayId);
@@ -252,7 +337,7 @@ public final class RootMain {
      * callingPackage 固定 com.android.shell —— 与 shell 命令行为对齐，
      * 各 ROM 对 shell 包的放开程度最高。
      */
-    private static Object startActivityAsUser(Intent intent, Bundle options,
+    static Object startActivityAsUser(Intent intent, Bundle options,
                                                int flags, int userId) throws Exception {
         IBinder b = service("activity");
         Class<?> iam = Class.forName("android.app.IActivityManager");
@@ -315,6 +400,8 @@ public final class RootMain {
     private static String doMotion(String[] args) throws Exception {
         PrivCodec.MotionSpec ms = PrivCodec.parseMotion(args);
         if (ms == null) return "err:bad motion args";
+        // K3：注入触摸 = 画布上的用户活动证据，刷新武装 TTL（拦截只信 5s 内摸过的屏）
+        LaunchController.touchAt(ms.displayId);
         IBinder b = service("input");
         Class<?> iim = Class.forName("android.hardware.input.IInputManager");
         Object svc = iim.getMethod("asInterface", IBinder.class).invoke(null, b);
@@ -487,6 +574,171 @@ public final class RootMain {
         return Boolean.TRUE.equals(res) ? "removed " + taskId : "removeTask 返回 " + res;
     }
 
+    /* ---------------- CREATE / RESIZE / SURFACE / RELEASE：root 虚拟屏（批次 AL） ----------------
+     *
+     * OneStep 思路、实现自写：屏由本进程（uid 0）建 —— TRUSTED 位在本进程直接拿得到
+     * （不需要应用进程授角色再借 DisplayManager），任务可以原生落进这块屏（"生在画布"），
+     * PRIVATE 屏"别的应用不许放东西"与 Android 14 拉回主屏两类问题从根上消失；
+     * PUBLIC 还让输入法能弹进画布。
+     *
+     * 与 MirrorSlot 本地建屏（私有屏/角色 TRUSTED/投影）的关系：本组事务是优先路，
+     * 失败（SELinux/ROM 拒绝）由客户端自动降回旧三路，行为与 AJ 一致。
+     *
+     * 生命周期：HELD 表持有 VirtualDisplay；守护进程退出 = 屏全拆（保活由桌面负责）。
+     * Surface 不在 CREATE 时传 —— 走 SURFACE（Parcel 序列化 + Base64，行协议传 blob）。
+     */
+
+    private static String doCreate(String[] a) throws Exception {
+        if (a.length < 3) return "err:args";
+        int w = Integer.parseInt(a[0]);
+        int h = Integer.parseInt(a[1]);
+        int dpi = Integer.parseInt(a[2]);
+        if (w <= 0 || h <= 0 || dpi <= 0) return "err:bad size " + w + "x" + h + "@" + dpi;
+        android.content.Context ctx = sysCtx();
+        android.hardware.display.DisplayManager dm =
+                (android.hardware.display.DisplayManager)
+                        ctx.getSystemService(android.content.Context.DISPLAY_SERVICE);
+        if (dm == null) return "err:DisplayManager 不可达";
+
+        // flag 候选复用 TrustedFlags（与本地 TRUSTED 路同一套降级序列），root 下命中率高：
+        // 首选组通常直接通过（uid 0 过 VIRTUAL_DISPLAY_FLAG_TRUSTED 权限检查）
+        Throwable last = null;
+        for (int raw : TrustedFlags.candidateFlags()) {
+            int flags = TrustedFlags.normalize(raw, android.os.Build.VERSION.SDK_INT);
+            android.hardware.display.VirtualDisplay vd;
+            try {
+                vd = dm.createVirtualDisplay("seagull-root", w, h, dpi, null, flags, null, null);
+            } catch (Throwable t) {
+                last = t;
+                RootLog.w(TAG, "root 建屏 flags=0x" + Integer.toHexString(flags) + " 被拒", t);
+                continue;
+            }
+            if (vd == null) continue;
+            int df = -1;
+            try {
+                df = vd.getDisplay() != null ? vd.getDisplay().getFlags() : -1;
+            } catch (Throwable ignore) {}
+            boolean trusted = TrustedFlags.hasTrusted(df);
+            int id = vd.getDisplay() != null ? vd.getDisplay().getDisplayId() : -1;
+            if (id <= 0) {
+                try { vd.release(); } catch (Throwable ignore) {}
+                continue;
+            }
+            HELD.put(id, vd);
+            RootLog.i(TAG, "root 屏建成 id=" + id + " " + w + "x" + h + "@" + dpi
+                    + " trusted=" + trusted + " flags=" + TrustedFlags.describe(flags));
+            return "created " + id + " trusted=" + (trusted ? 1 : 0);
+        }
+        return "err:全部 flag 候选被拒" + (last != null ? "（末次: " + last + "）" : "");
+    }
+
+    private static String doResize(String[] a) throws Exception {
+        if (a.length < 4) return "err:args";
+        int id = Integer.parseInt(a[0]);
+        int w = Integer.parseInt(a[1]);
+        int h = Integer.parseInt(a[2]);
+        int dpi = Integer.parseInt(a[3]);
+        android.hardware.display.VirtualDisplay vd = HELD.get(id);
+        if (vd == null) return "err:no display " + id;
+        vd.resize(w, h, dpi);
+        return "resized " + id + " " + w + "x" + h + "@" + dpi;
+    }
+
+    private static String doSurface(String[] a) throws Exception {
+        if (a.length < 2) return "err:args";
+        int id = Integer.parseInt(a[0]);
+        android.hardware.display.VirtualDisplay vd = HELD.get(id);
+        if (vd == null) return "err:no display " + id;
+        String blob = a[1];
+        if (blob.isEmpty() || "-".equals(blob)) {
+            vd.setSurface(null);
+            RootLog.i(TAG, "root 屏 " + id + " surface 摘除（画布暂时离场）");
+            return "surface cleared " + id;
+        }
+        byte[] raw;
+        try {
+            raw = Base64.decode(blob, Base64.NO_WRAP);
+        } catch (IllegalArgumentException bad) {
+            return "err:bad base64";
+        }
+        android.os.Parcel p = null;
+        try {
+            p = android.os.Parcel.obtain();
+            p.unmarshall(raw, 0, raw.length);
+            p.setDataPosition(0);
+            Surface sf = Surface.CREATOR.createFromParcel(p);
+            if (sf == null || !sf.isValid()) return "err:surface 无效";
+            vd.setSurface(sf);
+            RootLog.i(TAG, "root 屏 " + id + " surface 已挂载");
+            return "surface set " + id;
+        } finally {
+            if (p != null) p.recycle();
+        }
+    }
+
+    private static String doRelease(String[] a) throws Exception {
+        if (a.length < 1) return "err:args";
+        int id = Integer.parseInt(a[0]);
+        android.hardware.display.VirtualDisplay vd = HELD.remove(id);
+        if (vd == null) return "no display " + id + "（已不在持有表，幂等成功）";
+        try { vd.release(); } catch (Throwable t) {
+            RootLog.w(TAG, "root 屏 " + id + " release 异常", t);
+        }
+        RootLog.i(TAG, "root 屏 " + id + " 已拆除，剩 " + HELD.size());
+        return "released " + id;
+    }
+
+    /* ---------------- ARM / CTRL：全局启动拦截（批次 AM） ---------------- */
+
+    private static String doArm(String[] a) {
+        if (a.length < 2) return "err:args";
+        int id;
+        try {
+            id = Integer.parseInt(a[0]);
+        } catch (NumberFormatException e) {
+            return "err:bad displayId " + a[0];
+        }
+        String pkg = a[1];
+        if (id <= 0 || "-".equals(pkg)) {
+            LaunchController.arm(-1, "");
+            return "disarmed";
+        }
+        LaunchController.arm(id, pkg);
+        return "armed " + pkg + "@" + id;
+    }
+
+    private static String doCtrl(String[] a) {
+        boolean on = a.length > 0 && "on".equals(a[0]);
+        boolean ok = LaunchController.install(on);
+        if (!ok) return "err:controller " + (on ? "install" : "remove") + " 失败（见日志）";
+        return "ctrl " + (on ? "on" : "off");
+    }
+
+    private static String doState() {
+        return "watch=" + (TaskWatcher.isRegistered() ? 1 : 0)
+                + " held=" + HELD.keySet()
+                + " subs=" + SUBSCRIBERS.size()
+                + " " + LaunchController.stateLine();
+    }
+
+    /* ---------------- root 系统上下文（建屏要用） ---------------- */
+
+    /**
+     * ActivityThread.getSystemContext()：app_process 进程里拿"系统级"Context 的唯一正路。
+     * DisplayManager 注册在这个 Context 上（application context 不行 —— 没有 app 装配流程）。
+     * 失败抛给调用方转 err（客户端自动降级旧链路）。
+     */
+    private static synchronized android.content.Context sysCtx() throws Exception {
+        if (sysCtx != null) return sysCtx;
+        Class<?> at = Class.forName("android.app.ActivityThread");
+        Object thread = at.getMethod("systemMain").invoke(null);
+        sysCtx = (android.content.Context) thread.getClass()
+                .getMethod("getSystemContext").invoke(thread);
+        if (sysCtx == null) throw new IllegalStateException("getSystemContext 返回 null");
+        RootLog.i(TAG, "systemContext 就绪 pkg=" + sysCtx.getPackageName());
+        return sysCtx;
+    }
+
     /* ---------------- 基础设施 ---------------- */
 
     /**
@@ -508,7 +760,7 @@ public final class RootMain {
         }
     }
 
-    private static IBinder service(String name) throws Exception {
+    static IBinder service(String name) throws Exception {
         Class<?> sm = Class.forName("android.os.ServiceManager");
         IBinder b = (IBinder) sm.getMethod("getService", String.class).invoke(null, name);
         if (b == null) throw new IllegalStateException("ServiceManager.getService(" + name + ") 为 null");

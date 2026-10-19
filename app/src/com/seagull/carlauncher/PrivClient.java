@@ -240,6 +240,202 @@ public final class PrivClient {
         return r != null && r.ok;
     }
 
+    /* ---------------- 批次 AK~AM：建屏 / 拦截 / 监听 / 订阅 ---------------- */
+
+    /** CREATE 应答载体：displayId + 是否真拿到 TRUSTED 位。 */
+    public static final class Created {
+        public final int displayId;
+        public final boolean trusted;
+        Created(int id, boolean trusted) { this.displayId = id; this.trusted = trusted; }
+    }
+
+    /**
+     * K2：root 建 TRUSTED+PUBLIC 屏（surface 后挂）。只可在后台线程调用（会 fork su）。
+     * 失败返回 null —— 调用方自动降回本地建屏三路（行为与 AJ 一致）。
+     */
+    public static synchronized Created create(int w, int h, int dpi) {
+        if (!ensure()) return null;
+        PrivCodec.Response r = roundTrip(PrivCodec.encodeRequest(nextSeq(),
+                PrivCodec.OP_CREATE, Integer.toString(w), Integer.toString(h),
+                Integer.toString(dpi)));
+        if (r == null || !r.ok) {
+            Log.w(TAG, "CREATE 失败: " + (r == null ? "无应答" : r.payload));
+            return null;
+        }
+        // 应答格式：created <id> trusted=1|0
+        try {
+            String[] p = r.payload.trim().split(" ");
+            int id = Integer.parseInt(p[1]);
+            boolean trusted = p.length > 2 && p[2].endsWith("1");
+            Log.i(TAG, "CREATE root 屏 id=" + id + " trusted=" + trusted);
+            return new Created(id, trusted);
+        } catch (Throwable t) {
+            Log.w(TAG, "CREATE 应答解析失败: " + r.payload);
+            return null;
+        }
+    }
+
+    /** K2：root 屏改尺寸。后台线程调用。 */
+    public static synchronized boolean resize(int displayId, int w, int h, int dpi) {
+        if (!available() && !ensure()) return false;
+        PrivCodec.Response r = roundTrip(PrivCodec.encodeRequest(nextSeq(),
+                PrivCodec.OP_RESIZE, Integer.toString(displayId), Integer.toString(w),
+                Integer.toString(h), Integer.toString(dpi)));
+        return r != null && r.ok;
+    }
+
+    /**
+     * K2：把画布 Surface 挂到 root 屏上。Surface 经 Parcel.marshal + Base64 过线协议
+     *（Base64 NO_WRAP 无空白字符，行协议天然装得下）。s 为 null/无效 = 摘 surface
+     *（对应本地路径的 setSurface(null)，画布离场但屏与任务都留着）。
+     */
+    public static synchronized boolean surface(int displayId, android.view.Surface s) {
+        if (!available() && !ensure()) return false;
+        String blob;
+        if (s != null && s.isValid()) {
+            android.os.Parcel p = android.os.Parcel.obtain();
+            try {
+                s.writeToParcel(p, 0);
+                blob = android.util.Base64.encodeToString(p.marshall(),
+                        android.util.Base64.NO_WRAP);
+            } catch (Throwable t) {
+                Log.w(TAG, "surface 序列化失败: " + t);
+                return false;
+            } finally {
+                p.recycle();
+            }
+        } else {
+            blob = "-";
+        }
+        PrivCodec.Response r = roundTrip(PrivCodec.encodeRequest(nextSeq(),
+                PrivCodec.OP_SURFACE, Integer.toString(displayId), blob));
+        return r != null && r.ok;
+    }
+
+    /** K2：拆 root 屏。幂等（屏已在守护进程退出时全拆 = 成功）。 */
+    public static synchronized boolean release(int displayId) {
+        if (!available() && !ensure()) return false;
+        PrivCodec.Response r = roundTrip(PrivCodec.encodeRequest(nextSeq(),
+                PrivCodec.OP_RELEASE, Integer.toString(displayId)));
+        return r != null && r.ok;
+    }
+
+    /**
+     * K3：武装/解除武装路由源（displayId + 嵌入应用）。触摸 TTL 由守护进程在
+     * MOTION 里自刷，桌面只管部署时登记与清场。
+     */
+    public static synchronized boolean arm(int displayId, String pkg) {
+        if (!available() && !ensure()) return false;
+        PrivCodec.Response r = roundTrip(PrivCodec.encodeRequest(nextSeq(),
+                PrivCodec.OP_ARM, Integer.toString(displayId),
+                pkg == null || pkg.isEmpty() ? "-" : pkg));
+        return r != null && r.ok;
+    }
+
+    /** K3：全局启动拦截开/关。守护进程死了拦截自动解除（system_server 侧 binder 清理）。 */
+    public static synchronized boolean ctrl(boolean on) {
+        if (!available() && !ensure()) return false;
+        PrivCodec.Response r = roundTrip(PrivCodec.encodeRequest(nextSeq(),
+                PrivCodec.OP_CTRL, on ? "on" : "off"));
+        if (r == null || !r.ok) {
+            Log.w(TAG, "CTRL(" + on + ") 失败: " + (r == null ? "无应答" : r.payload));
+            return false;
+        }
+        Log.i(TAG, "启动拦截 " + (on ? "已开启" : "已关闭"));
+        return true;
+    }
+
+    /** 自检页：守护进程一行快照（watch/held/subs/ctrl）。后台线程调用。 */
+    public static synchronized String state() {
+        if (!ensure()) return "守护进程离线";
+        PrivCodec.Response r = roundTrip(PrivCodec.encodeRequest(nextSeq(), PrivCodec.OP_STATE));
+        return r != null && r.ok ? r.payload : "STATE 失败: " + (r == null ? "无应答" : r.payload);
+    }
+
+    /* ---------------- 事件订阅（独立连接） ----------------
+     * 主连接是请求-应答；订阅连接上守护进程持续推 EVT 行（BUMP/ROUTED），
+     * 一连接一订阅者。守护进程 EOF（桌面死亡/主动断开）即自动摘除订阅。
+     */
+
+    /** 事件行回调（watch 线程上调，消费方自行 post 到主线程）。 */
+    public interface EventListener { void onEventLine(String line); }
+
+    private static volatile EventListener evtListener;
+    private static LocalSocket watchSock;
+    private static Thread watchThread;
+
+    /**
+     * 订阅事件推送（幂等：换 listener 只换回调，连接复用）。
+     * 会 fork su —— 后台线程调用。返回 false = 守护进程不可用。
+     */
+    public static synchronized boolean subscribe(EventListener l) {
+        if (l == null) return false;
+        evtListener = l;
+        if (watchThread != null && watchThread.isAlive()) return true;
+        if (!ensure()) { evtListener = null; return false; }
+        Thread t = new Thread(PrivClient::runWatch, "seagull-watch");
+        t.setDaemon(true);
+        watchThread = t;
+        t.start();
+        return true;
+    }
+
+    /** 退订并断开订阅连接（幂等）。 */
+    public static synchronized void unsubscribe() {
+        evtListener = null;
+        try { if (watchSock != null) watchSock.close(); } catch (Throwable ignore) {}
+        watchSock = null;
+        watchThread = null;   // 线程随 readLine EOF 自然退出
+    }
+
+    public static boolean subscribed() {
+        Thread t = watchThread;
+        return t != null && t.isAlive();
+    }
+
+    /**
+     * 订阅会话主体：独立 socket，发 WATCH on 后只读行。
+     * 收到的行两类：① "EVT ..." → 派发给 listener；② 应答行（WATCH on/off 的 OK）
+     * → 忽略。socket 死了线程自然退出；下次 subscribe 再起新的。
+     */
+    private static void runWatch() {
+        LocalSocket s = null;
+        BufferedReader rin = null;
+        BufferedWriter wout = null;
+        try {
+            s = new LocalSocket();
+            s.connect(new LocalSocketAddress(SOCKET, LocalSocketAddress.Namespace.ABSTRACT));
+            s.setSoTimeout(0);
+            watchSock = s;
+            rin = new BufferedReader(
+                    new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+            wout = new BufferedWriter(
+                    new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8));
+            wout.write(PrivCodec.encodeRequest(1, PrivCodec.OP_WATCH, "on"));
+            wout.flush();
+            Log.i(TAG, "事件订阅连接已上线");
+            String line;
+            while ((line = rin.readLine()) != null) {
+                if (line.startsWith(PrivCodec.EVT + " ")) {
+                    EventListener l = evtListener;
+                    if (l != null) {
+                        try { l.onEventLine(line); } catch (Throwable t) {
+                            Log.w(TAG, "事件回调异常: " + t);
+                        }
+                    }
+                }
+                // 其余（WATCH on 的 OK 应答等）丢弃
+            }
+            Log.w(TAG, "事件订阅连接断开（EOF）");
+        } catch (Throwable t) {
+            Log.w(TAG, "事件订阅异常退出: " + t);
+        } finally {
+            try { if (s != null) s.close(); } catch (Throwable ignore) {}
+            if (watchSock == s) watchSock = null;
+            if (evtListener != null) evtListener = null;
+        }
+    }
+
     /* ---------------- 收发 ---------------- */
 
     private static long nextSeq() { return ++seq; }

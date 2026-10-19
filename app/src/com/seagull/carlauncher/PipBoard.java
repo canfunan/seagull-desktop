@@ -189,7 +189,8 @@ public final class PipBoard extends LinearLayout {
         applyFocusVisuals(false);
         ui.postDelayed(this::redeployIfPossible, 300);
         ui.postDelayed(this::selfHeal, 600);
-        startRepin();   // 批次 AF：跳主屏后最多 2.5s 自动搬回
+        startRepin();   // 批次 AF：跳主屏后自动搬回（监听在线 8s 兜底拍，离线 2.5s）
+        startWatch();   // 批次 AK：root 事件订阅，BUMP 触发自愈（毫秒级，替代靠拍等）
     }
 
     /**
@@ -206,6 +207,9 @@ public final class PipBoard extends LinearLayout {
         ui.removeCallbacksAndMessages(null);
         if (slotA != null) slotA.detachSurface();
         if (slotB != null) slotB.detachSurface();
+        watching = false;
+        // 订阅连接挂着后台线程，页面销毁就退订（onResume 会重订）；fork su 不能在主线程
+        new Thread(PrivClient::unsubscribe, "pip-unwatch").start();
         if (MirrorSlot.activeCount() == 0) {
             stopProjections();
             PipProjectionService.stop(act);
@@ -1120,7 +1124,9 @@ public final class PipBoard extends LinearLayout {
                     }
                 }
             }, "pip-repin").start();
-            ui.postDelayed(this, REPIN_MS);
+            // R9（清单）：root 事件监听在线 → 自愈由 BUMP 毫秒级触发，巡检降为
+            // 8s 纯兜底拍（防监听通道失联后无人搬回）；离线保持 2.5s 原状。
+            ui.postDelayed(this, watching ? 8000 : REPIN_MS);
         }
     };
 
@@ -1128,6 +1134,57 @@ public final class PipBoard extends LinearLayout {
     public void startRepin() {
         ui.removeCallbacks(repinRun);
         ui.postDelayed(repinRun, REPIN_MS);
+    }
+
+    /* ---------------- 批次 AK：root 事件订阅（BUMP 自愈 / ROUTED 刷新） ---------------- */
+
+    /** true = 事件订阅连接活着（自愈由 BUMP 毫秒级触发，巡检降为兜底拍）。 */
+    private volatile boolean watching;
+
+    /**
+     * 订阅守护进程事件（幂等）。订阅会 fork su，全程后台线程；回调在 watch 线程上，
+     * 一律 ui.post 回主线程。空气开关关闭 = 整段跳过（行为与 AJ 一致）。
+     */
+    public void startWatch() {
+        if (PrivClient.subscribed()) { watching = true; return; }
+        new Thread(() -> {
+            // rootBridgeOn 未命中缓存时 exec getprop（fork，秒级）—— 不能在 onResume
+            // 主线程读，整段判断随订阅线程走
+            if (!Caps.rootBridgeOn()) return;
+            boolean ok = PrivClient.subscribe(PipBoard.this::onEvtLine);
+            ui.post(() -> watching = ok);
+            Log.i(TAG, "事件订阅" + (ok ? "已上线（BUMP 触发自愈）" : "不可用，巡检照旧 2.5s"));
+        }, "pip-watch").start();
+    }
+
+    /** 事件行派发（watch 线程 → 主线程）。 */
+    private void onEvtLine(String line) {
+        ui.post(() -> {
+            if (line.startsWith(PrivCodec.EVT + " " + PrivCodec.EVT_BUMP)) {
+                // 任务栈有变化：复用既有自愈（只搬不拉的护栏全在里面），带节流
+                selfHeal();
+                return;
+            }
+            if (line.startsWith(PrivCodec.EVT + " " + PrivCodec.EVT_ROUTED)) {
+                // 拦截改道完成：pkg 已被重新启动到画布屏 —— 刷新提示 + 补一次自愈
+                String[] p = line.split(" ");
+                String pkg = p.length > 2 ? p[2] : "";
+                String dsp = p.length > 3 ? p[3] : "?";
+                Log.i(TAG, "拦截改道 " + pkg + " → 画布 display " + dsp);
+                for (int i = 1; i <= 2; i++) {
+                    final int slot = i;   // lambda 捕获要求 effectively final
+                    MirrorSlot s = slotOf(slot);
+                    if (s != null && s.displayId() > 0 && s.displayId() == parseD(dsp)) {
+                        healSlotSoon(slot);
+                        ui.postDelayed(() -> setHint(slot, s), 1500);
+                    }
+                }
+            }
+        });
+    }
+
+    private static int parseD(String s) {
+        try { return Integer.parseInt(s.trim()); } catch (Throwable t) { return -1; }
     }
 
     private boolean notEmpty(String s) { return s != null && !s.isEmpty(); }

@@ -9,6 +9,10 @@
 > 高德官方服务接口（§H）是高德开放的协议，不属于 OneStep 的版权物。
 >
 > 本地研究副本：/tmp/OneStep4（只读，不进仓库）。
+>
+> **落地状态（2026-10-19）**：A/B/C/D/E/H 已全部落地（批次 AK~AN，实现自写），
+> 逐项对齐见 `UPDATE-CHECKLIST.md`，批次记录见 `DEVLOG.md`，架构见 `AI-GUIDE.md` §10。
+> F/G 按本文件结论暂缓；I 的 sepolicy 规则未做（当前 socket/建屏链路未被拦即不需要）。
 
 ---
 
@@ -109,11 +113,21 @@
 
 ---
 
-## 分阶段落地建议（待拍板，本文件只记计划）
+## 分阶段落地建议（已执行，结果如下）
 
 1. **K1 最小闭环**：常驻 root 服务（A）+ injectInputEvent 触摸（B）+ ITaskStackListener（E）。
    不动 UI、不动模块、不动部署链路——三件事都在 root 层内闭环，收益立现。
+   → **已落地（批次 AK）**。实现口径：沿用既有 LocalSocket 守护进程扩展，未走
+   ServiceManager.addService（理由见 DEVLOG AK 复盘）；TaskWatcher 只推 BUMP 不解析
+   任务详情（防 ROM 字段漂移踩对槽红线）。
 2. **K2 TRUSTED 屏**：VD 创建迁入 root 服务（C），部署链路改成"生在画布"优先、"搬任务"兜底；实测高德/网易云/iMusic 各自表现。
+   → **已落地（批次 AL）**。root 建屏优先 → 私有屏直建 → TRUSTED 角色 → 投影，
+   四级降级；实测项（跳主屏根治/IME）待真机验收。
 3. **K3 启动拦截**：IActivityController（D）上线，C0 hook 降级为备用。
+   → **已落地（批次 AM）**。C0 hook 保留共存（不互斥，无降级开关场景，见清单 AM-R6）。
 4. **K4 导航卡片**：高德官方服务（H）接入 + 顶栏导航卡片 UI。
-5. 每阶段独立可回滚；K1 完成前其他阶段不动工。
+   → **已落地（批次 AN）**。手写 transact（构建链无 aidl 工具）+ 明文/AES-GCM 双解
+   + 8s 保鲜；车机版 action 待实测。
+5. ~~每阶段独立可回滚；K1 完成前其他阶段不动工。~~
+   → 按用户指令四批一次落地；独立回滚由空气开关 `persist.seagull.rootbridge` 保证
+   （0 = 行为严格回到 AJ）。

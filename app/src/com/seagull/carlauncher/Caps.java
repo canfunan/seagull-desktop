@@ -111,6 +111,40 @@ public final class Caps {
     private static final java.util.concurrent.ExecutorService EXEC =
             java.util.concurrent.Executors.newCachedThreadPool();
 
+    /* ---------------- root bridge 空气开关（批次 AK 通用要求） ----------------
+     * persist.seagull.rootbridge：1 = 批次 AK~AM 新链路（root 建屏/拦截/事件订阅），
+     * 0 或缺省 = 全部走 AJ 旧链路 —— 用户 setprop 即秒级回滚，不用卸载重装。
+     * 读法：getprop 需要 shell/root 权限，走 exec（后台线程专用，有 10s 缓存）。
+     */
+
+    private static volatile long sBridgeAt;
+    private static volatile Boolean sBridgeOn;
+
+    public static boolean rootBridgeOn() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        Boolean cached = sBridgeOn;
+        if (cached != null && now - sBridgeAt < 10_000) return cached;
+        boolean on = false;
+        String out = exec("getprop persist.seagull.rootbridge");
+        if (out != null) on = out.trim().equals("1");
+        sBridgeOn = on;
+        sBridgeAt = now;
+        return on;
+    }
+
+    /** 空气开关设值（设置页开关用；root 不可用时返回 false）。 */
+    public static boolean setRootBridge(boolean on) {
+        boolean ok = exec("setprop persist.seagull.rootbridge " + (on ? "1" : "0")) != null;
+        if (ok) { sBridgeOn = on; sBridgeAt = android.os.SystemClock.elapsedRealtime(); }
+        return ok;
+    }
+
+    /** 只读最近一次缓存的展示文案，不发 getprop —— 设置页渲染在 UI 线程，不能阻塞。 */
+    public static String rootBridgeLabel() {
+        Boolean c = sBridgeOn;
+        return c == null ? "未检测" : (c ? "开" : "关");
+    }
+
     /* ---------------- 悬浮窗 ---------------- */
 
     public static boolean canOverlay(Context ctx) {

@@ -51,9 +51,28 @@ public final class MirrorSlot implements CanvasSource {
     private volatile String mode = "";
     /** 批次 K：true = TRUSTED 直建失败且缺录屏 token，需要先走录屏授权再兜底。 */
     private volatile boolean needsProjection;
+    /** 批次 AL：true = 本次屏是守护进程（root）建的 —— resize/挂面/拆全走 PrivClient。 */
+    private volatile boolean rootBased;
     private String lastError = "";
     private String lastPkg = "";
     private String lastSig = "";
+
+    /**
+     * root 屏维护队列（批次 AL）：root 屏没有本地 VirtualDisplay 对象，
+     * resize/挂面/拆屏都是一次守护进程往返。所有异步维护排进这条单线程队列：
+     * ① 绝不在主线程做往返（ensure() 可能 fork su，秒级阻塞 = ANR）；
+     * ② 串行 —— 并发 resize 一块屏是「点击错位」的另一个来源。
+     */
+    private static final java.util.concurrent.ExecutorService ROOT_EXEC =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "seagull-rootvd");
+                t.setDaemon(true);
+                return t;
+            });
+
+    private void rootExecAsync(Runnable r) {
+        try { ROOT_EXEC.execute(r); } catch (Throwable ignore) {}
+    }
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     /** 触摸转发交给 TouchForward（跟手/防误滑/长按/排障都在里面）。 */
@@ -158,7 +177,9 @@ public final class MirrorSlot implements CanvasSource {
         //     → attachTo 带真 surface 来部署（PipBoard.deploySlot 已改成等画布）。
         // teardown 只属于两种情形：用户换了应用（pkg 变）/ 显式清空。
         if (surface == null || !surface.isValid()) {
-            if (vd != null && displayId > 0 && pkg != null && pkg.equals(lastPkg)) return true;
+            if ((vd != null || rootBased) && displayId > 0 && pkg != null && pkg.equals(lastPkg)) {
+                return true;
+            }
             lastError = "画布未就绪，等待 Surface 再部署";
             return false;
         }
@@ -168,6 +189,24 @@ public final class MirrorSlot implements CanvasSource {
 
         if (pkg == null || pkg.trim().isEmpty()) { lastError = "未选择目标应用"; return false; }
         if (w <= 0 || h <= 0) { lastError = "锚点尺寸未就绪"; return false; }
+
+        // 已有 root 屏、只是 surface/尺寸变了 → 守护进程 resize + 挂面，不重建
+        if (rootBased && pkg.equals(lastPkg) && displayId > 0) {
+            final int id = displayId, fw = w, fh = h, fdpi = dpi;
+            final Surface fs = surface;
+            vdW = w;
+            vdH = h;
+            vdDpi = dpi;
+            ready = true;
+            lastSig = sig;
+            rootExecAsync(() -> {
+                PrivClient.resize(id, fw, fh, fdpi);
+                PrivClient.surface(id, fs);
+            });
+            Log.i(TAG, "[" + name + "] root 屏 resized/reattached " + w + "x" + h
+                    + " on displayId=" + id);
+            return true;
+        }
 
         // 已有 VD、只是 surface/尺寸变了 → resize + setSurface，不重建（避免目标重启）
         VirtualDisplay existing = vd;
@@ -197,6 +236,36 @@ public final class MirrorSlot implements CanvasSource {
         needsProjection = false;
         trusted = false;
         mode = "";
+
+        /*
+         * 批次 AL（OneStep 思路落地，实现自写）—— root TRUSTED 屏优先路：
+         * 屏由守护进程（uid 0）建，TRUSTED+PUBLIC 直接拿到，任务可以"生在画布"
+         * （launchOptions.setLaunchDisplayId 一次成功，不再有搬回拉锯），
+         * Android 14 拉回主屏与私有屏"不许放别人东西"两类问题从根上消失。
+         * 空气开关 persist.seagull.rootbridge 关闭/建屏失败 → 自动落回旧三路，
+         * 行为与 AJ 完全一致（通用要求：失败降级）。
+         */
+        if (Caps.rootBridgeOn() && PrivClient.ensure()) {
+            PrivClient.Created rc = PrivClient.create(w, h, dpi);
+            if (rc != null) {
+                rootBased = true;
+                trusted = rc.trusted;
+                mode = "root屏";
+                projection = null;   // root 屏与投影无关
+                displayId = rc.displayId;
+                vdW = w;
+                vdH = h;
+                vdDpi = dpi;
+                register(displayId);
+                PrivClient.surface(displayId, surface);
+                Log.i(TAG, "[" + name + "] root TRUSTED 屏建成 id=" + displayId
+                        + " trusted=" + trusted + "，走生在画布部署");
+                if (finishDeploy(pkg, sig, surface)) return true;
+                rootBased = false;
+                return false;
+            }
+            Log.w(TAG, "[" + name + "] root 建屏失败，回落本地建屏三路");
+        }
 
         /*
          * 建屏三路（批次 R 重排，CarWithX 私有屏直建提为首选）：
@@ -253,20 +322,20 @@ public final class MirrorSlot implements CanvasSource {
 
         // 建屏成功即注册（触摸/抽屉据此找得到这块屏），不必等 Surface
         register(displayId);
+        return finishDeploy(pkg, sig, surface);
+    }
 
-        // 【批次 AH】relaxCompat 必须在两条部署路之前：兼容位（FORCE_RESIZE_APP /
-        // NEVER_FIX_ORIENTATION）只对新进程生效。冷启动路本来就在 launchOnDisplay
-        // 里做，但搬任务路此前完全没做 —— 应用被搬进虚拟屏时进程还是旧的，读不到
-        // 兼容位，本次会话就永远以旧尺寸/竖版待在画布里（"不铺满"），触摸按满屏
-        // 比例换算也跟着全错。现在搬任务路也先把兼容位写好：哪怕当前进程吃不到，
-        // 之后任何一次冷启动都会铺满。
+    /**
+     * 建屏成功后的公共部署段（root 屏与本地屏同款，批次 AL 抽取）：
+     *   ① relaxCompat（搬任务路也要写，进程虽旧但之后任何冷启动都吃得到）；
+     *   ② 先搬已有任务（保运行状态，不杀导航/播放），搬不动才冷启动；
+     *   ③ 部署后自愈一次 + 两拍布局抖动；
+     *   ④ K3：部署即武装路由源（displayId ↔ 嵌入应用；触摸 TTL 由守护进程自刷）。
+     * 失败拆屏返回 false。
+     */
+    private boolean finishDeploy(String pkg, String sig, Surface surface) {
         RootOps.relaxCompat(pkg);
 
-        // 部署两段（复刻 CarWithX deploy 顺序，蓝图 §2.1）：
-        //   ① 锚点 + 搬已有任务（moveExistingTask 内部先落锚点 PipAnchorActivity，
-        //      再 move-task）：目标已在跑时首选，保住运行状态（导航中不被打断），
-        //      也避免 `am start --display` 把 singleTask 目标拉回主屏全屏。
-        //   ② 冷启动：没有已在跑的任务（或①两条通道都不可用）才走 launchOnDisplay。
         boolean moved;
         try {
             moved = RootOps.moveExistingTask(ctx, pkg, displayId);
@@ -285,8 +354,7 @@ public final class MirrorSlot implements CanvasSource {
             }
         }
 
-        // 部署即自愈一次（批次 L）：singleTask 目标落地瞬间就可能被系统拉回默认屏，
-        // 不等用户切页面。保守：am stack list 解析不出就不动（见 ensureOnDisplay）。
+        // 部署即自愈一次（批次 L）：singleTask 目标落地瞬间就可能被系统拉回默认屏
         try {
             String heal = RootOps.ensureOnDisplay(ctx, pkg, displayId);
             Log.i(TAG, "[" + name + "] 部署后自愈: " + heal);
@@ -294,17 +362,25 @@ public final class MirrorSlot implements CanvasSource {
             Log.w(TAG, "[" + name + "] 部署后自愈异常: " + t);
         }
 
+        // K3 R2：部署成功即武装（拦截改道需要知道"哪块屏跑着谁"）。空气开关
+        // 关闭时不武装 —— 行为与 AJ 一致。arm/ctrl 都是一次守护进程往返，排队走。
+        if (Caps.rootBridgeOn()) {
+            final int fd = displayId;
+            final String fpkg = pkg;
+            rootExecAsync(() -> {
+                PrivClient.arm(fd, fpkg);
+                PrivClient.ctrl(true);
+            });
+        }
+
         lastSig = sig;
-        ready = surface.isValid();
-        // 【批次 AH】搬已有任务进新屏后，应用窗口常停在搬入前的旧尺寸、卡在画布一角
-        //（用户截图实测：网易云四周黑边不铺满、高德/网易云触摸全偏）。没有任何东西
-        // 强制它重排 —— surface 挂载时的 resize 若与旧尺寸相同是 no-op，应用收不到
-        // 重排时机。这里安排两拍"布局抖动"（2s/4.5s，见 nudgeLayout），1px 缩放强制
-        // 一轮 config change，应用重排铺满；不杀进程、不丢导航/播放状态。
+        ready = surface != null && surface.isValid();
+        // 【批次 AH】搬已有任务进新屏后，应用窗口常停在旧尺寸 → 两拍"布局抖动"
+        // 强制重排铺满（不杀进程、不丢导航/播放状态）。
         scheduleNudge(2000);
         scheduleNudge(4500);
-        Log.i(TAG, "[" + name + "] " + pkg + " 已部署到 displayId=" + displayId + " " + w + "x" + h
-                + " trusted=" + trusted + " ready=" + ready);
+        Log.i(TAG, "[" + name + "] " + pkg + " 已部署到 displayId=" + displayId + " " + vdW + "x" + vdH
+                + " trusted=" + trusted + " root=" + rootBased + " ready=" + ready);
         return true;
     }
 
@@ -406,13 +482,20 @@ public final class MirrorSlot implements CanvasSource {
      * 这里在每根手势的 DOWN 上比一次，只在尺寸真的漂了才 resize（同尺寸直接返回，零开销）。
      */
     public void syncSize(int w, int h, int dpi) {
-        if (vd == null || displayId <= 0 || w <= 0 || h <= 0) return;
+        if (displayId <= 0 || w <= 0 || h <= 0) return;
         if (vdW == w && vdH == h) return;
+        vdW = w;
+        vdH = h;
+        vdDpi = dpi;
+        // root 屏：本地簿记先行（触摸换算立即用新值），真实 resize 排队走守护进程
+        if (rootBased) {
+            final int d = displayId, fdpi = dpi;
+            rootExecAsync(() -> PrivClient.resize(d, w, h, fdpi));
+            return;
+        }
+        if (vd == null) return;
         try {
             vd.resize(w, h, dpi);
-            vdW = w;
-            vdH = h;
-            vdDpi = dpi;
             Log.i(TAG, "[" + name + "] VD 尺寸校准 → " + w + "x" + h + "@" + dpi + "dpi");
         } catch (Throwable t) {
             Log.w(TAG, "[" + name + "] VD 尺寸校准失败: " + t);
@@ -440,6 +523,8 @@ public final class MirrorSlot implements CanvasSource {
      * 音乐不断。密度 ±8 肉眼无感，两拍在 1s 内完成。
      */
     public void nudgeLayout() {
+        // root 屏：两拍抖动整段排队走守护进程 resize（专用线程里 sleep，不占别人的路）
+        if (rootBased) { nudgeRoot(); return; }
         final int d = displayId;
         final int w = vdW, h = vdH, dpi = vdDpi;
         if (vd == null || d <= 0 || w <= 0 || h <= 0 || dpi <= 0) return;
@@ -477,6 +562,26 @@ public final class MirrorSlot implements CanvasSource {
                 .postDelayed(this::nudgeLayout, delayMs);
     }
 
+    /** root 屏版布局抖动：尺寸 ±1px 与密度 ±8 两拍，全部走守护进程 resize（串行队列）。 */
+    private void nudgeRoot() {
+        final int d = displayId, w = vdW, h = vdH, dpi = vdDpi;
+        if (d <= 0 || w <= 0 || h <= 0 || dpi <= 0) return;
+        rootExecAsync(() -> {
+            try {
+                PrivClient.resize(d, w, Math.max(64, h - 1), dpi);
+                Thread.sleep(400);
+                PrivClient.resize(d, w, h, dpi);
+                Thread.sleep(800);
+                PrivClient.resize(d, w, h, dpi + 8);
+                Thread.sleep(1000);
+                PrivClient.resize(d, w, h, dpi);
+                Log.i(TAG, "[" + name + "] root 屏布局抖动完成 " + w + "x" + h);
+            } catch (Throwable t) {
+                Log.w(TAG, "[" + name + "] root 屏布局抖动失败: " + t);
+            }
+        });
+    }
+
     /** 上一次喂进来的画布尺寸：CANCEL 补发（cancelStroke）时用同一坐标系。 */
     private volatile int svW, svH;
 
@@ -500,14 +605,31 @@ public final class MirrorSlot implements CanvasSource {
 
     /** surface 被销毁：只断输出，保留 VD 与目标任务栈，下次 surface 回来再挂。 */
     public void detachSurface() {
+        if (rootBased && displayId > 0) {
+            final int d = displayId;
+            rootExecAsync(() -> PrivClient.surface(d, null));
+            ready = false;
+            return;
+        }
         try { if (vd != null) vd.setSurface(null); } catch (Throwable ignore) {}
         ready = false;
     }
 
     public void teardownVd() {
+        final int d = displayId;
+        final boolean wasRoot = rootBased;
         ready = false;
-        unregister(displayId);
-        try { if (vd != null) vd.release(); } catch (Throwable ignore) {}
+        rootBased = false;
+        unregister(d);
+        if (wasRoot && d > 0) {
+            // root 屏：拆屏是守护进程往返，排队走（幂等；守护进程已死也安全）。
+            // 不在这里无条件 disarm —— 武装是全局单源，拆 A 槽会把 B 槽的武装一起解掉；
+            // 过期武装由 5s 触摸 TTL 自然失效（K3 设计），下次部署 finishDeploy 会重武装。
+            final int fd = d;
+            rootExecAsync(() -> PrivClient.release(fd));
+        } else {
+            try { if (vd != null) vd.release(); } catch (Throwable ignore) {}
+        }
         vd = null;
         // 每槽一份独立投影会话（批次 Q）：VD 拆了就把自己那份停掉。
         // 早期两槽共用一份会话，这里只能再等等——现在没这个问题了。
