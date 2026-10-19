@@ -37,6 +37,10 @@ import java.util.Map;
  *
  * 本页背景透明：壁纸（静态图或动态视频层）由 HomeActivity 铺在 root 上。
  */
+
+/** 时钟块/组件拖动回调（dx/dy 为手指位移）。CI 用 --release 11，内部类不允许声明接口，故提为文件级。 */
+interface Move { void run(float dx, float dy); }
+
 public final class WallpaperPage extends FrameLayout {
 
     /** 小组件 bind 授权回执（HomeActivity.onActivityResult 原样转发进来）。 */
@@ -413,8 +417,6 @@ public final class WallpaperPage extends FrameLayout {
                 });
         private boolean dragging, moved;
         private float lx, ly;
-
-        interface Move { void run(float dx, float dy); }
 
         Drag(View target, Move onMove, Runnable tapAction, Runnable endAction) {
             this.target = target;

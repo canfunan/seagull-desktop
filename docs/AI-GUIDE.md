@@ -179,6 +179,10 @@ bash /tmp/opencode/typecheck.sh
 # 输出 TYPECHECK OK 才算过
 ```
 
+必须带 `--release 11` 与 CI（build.sh 第 3 步）同语言级别：本地 javac 默认
+17，Java 16 才放行「内部类声明静态成员/成员接口」，低级别源码只在 CI 炸
+（批次 CI 踩过：WallpaperPage.Drag 里的 interface Move 提为文件级才修好）。
+
 ### 6.2 APK 构建（只走 CI）
 
 本地**不**构建 APK。推 main 之后：
