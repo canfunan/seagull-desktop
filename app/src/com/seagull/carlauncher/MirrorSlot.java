@@ -194,17 +194,22 @@ public final class MirrorSlot implements CanvasSource {
         if (rootBased && pkg.equals(lastPkg) && displayId > 0) {
             final int id = displayId, fw = w, fh = h, fdpi = dpi;
             final Surface fs = surface;
-            vdW = w;
-            vdH = h;
-            vdDpi = dpi;
             ready = true;
             lastSig = sig;
             rootExecAsync(() -> {
-                PrivClient.resize(id, fw, fh, fdpi);
+                // 批次 CC：簿记只在 resize 确认后更新 —— 在途/失败期间触摸按旧尺寸比例
+                // 换算，与屏上被缩放的内容严格对齐（车联助手不变量，机制见 syncSize 注释）。
+                boolean ok = PrivClient.resize(id, fw, fh, fdpi);
                 PrivClient.surface(id, fs);
+                if (ok) {
+                    setSizeBookkeeping(fw, fh, fdpi);
+                    Log.i(TAG, "[" + name + "] root 屏 resized/reattached " + fw + "x" + fh
+                            + " on displayId=" + id);
+                } else {
+                    Log.w(TAG, "[" + name + "] root resize 失败（挂面已完成），触摸换算保持 "
+                            + vdW + "x" + vdH);
+                }
             });
-            Log.i(TAG, "[" + name + "] root 屏 resized/reattached " + w + "x" + h
-                    + " on displayId=" + id);
             return true;
         }
 
@@ -475,28 +480,45 @@ public final class MirrorSlot implements CanvasSource {
     /* ---------------- 触摸回注 ---------------- */
 
     /**
-     * 手势开始前校准尺寸（批次 AD·修「点击错位」）。
+     * 手势开始前校准尺寸（批次 AD·修「点击错位」；批次 CC 按车联助手不变量重写）。
      *
      * 画布被改成半屏 / 铺满之后，若 VD 没有跟着 resize 到同一像素尺寸，应用仍按旧尺寸
      * 渲染、被合成器缩放到画布上；而触摸是按新尺寸原样注入的 —— 于是越往右下越偏。
      * 这里在每根手势的 DOWN 上比一次，只在尺寸真的漂了才 resize（同尺寸直接返回，零开销）。
+     *
+     * 批次 CC（反编译 com.leting 新版坐实，旧实现恰好反着做）：
+     *   ① **尺寸簿记只在 resize 确认后更新**。车联助手从不"先记账再生效"：它的 VD 在
+     *      surfaceChanged 里同步 resize，坐标口径永远等于屏上真实内容，触摸 1:1 零簿记。
+     *      旧实现"本地簿记先行"，root 屏 resize 却是异步的 —— 簿记说新尺寸、屏还是旧尺寸
+     *      的窗口期里（某些 ROM 静默拒绝 resize 时甚至是永久），fx/fy 恒 1，点击整体偏移，
+     *      这正是「触摸不准」的主根因。现在确认成功才记账；在途/失败期间触摸按旧尺寸
+     *      比例换算，与屏上被缩放的内容严格对齐，点哪儿是哪儿。
+     *   ② **密度恒定**（对齐车联助手：dpi 恒为建屏值，从不重算）—— DOWN 校准只对齐
+     *      像素尺寸，不触发应用 density 重配/重排。dpi 只在 deploy/attachSurface 定。
      */
-    public void syncSize(int w, int h, int dpi) {
+    public void syncSize(int w, int h) {
         if (displayId <= 0 || w <= 0 || h <= 0) return;
         if (vdW == w && vdH == h) return;
-        vdW = w;
-        vdH = h;
-        vdDpi = dpi;
-        // root 屏：本地簿记先行（触摸换算立即用新值），真实 resize 排队走守护进程
         if (rootBased) {
-            final int d = displayId, fdpi = dpi;
-            rootExecAsync(() -> PrivClient.resize(d, w, h, fdpi));
+            final int d = displayId, fdpi = vdDpi;
+            rootExecAsync(() -> {
+                // 在途/失败不改簿记：触摸换算继续按旧尺寸走，与屏上内容保持比例一致。
+                // 失败日志是「root resize 被 ROM 拒绝」的唯一可见信号，别吞。
+                if (PrivClient.resize(d, w, h, fdpi)) {
+                    setSizeBookkeeping(w, h, fdpi);
+                    Log.i(TAG, "[" + name + "] root 尺寸校准确认 → " + w + "x" + h);
+                } else {
+                    Log.w(TAG, "[" + name + "] root resize 失败，触摸换算保持 "
+                            + vdW + "x" + vdH);
+                }
+            });
             return;
         }
         if (vd == null) return;
         try {
-            vd.resize(w, h, dpi);
-            Log.i(TAG, "[" + name + "] VD 尺寸校准 → " + w + "x" + h + "@" + dpi + "dpi");
+            vd.resize(w, h, vdDpi);
+            setSizeBookkeeping(w, h, vdDpi);
+            Log.i(TAG, "[" + name + "] VD 尺寸校准 → " + w + "x" + h + "@" + vdDpi + "dpi");
         } catch (Throwable t) {
             Log.w(TAG, "[" + name + "] VD 尺寸校准失败: " + t);
         }
@@ -504,8 +526,23 @@ public final class MirrorSlot implements CanvasSource {
 
     /* ---------------- 批次 AH：布局抖动（搬入后强制重排铺满） ---------------- */
 
-    /** deploy / attachSurface / syncSize 时记录的 dpi，抖动回弹时保持不变。 */
+    /** deploy / attachSurface 时记录的 dpi，抖动回弹与后续校准时保持不变。 */
     private volatile int vdDpi;
+
+    /** 尺寸簿记锁：vdW/vdH/vdDpi 三元组原子更新（触摸线程读、异步确认线程写）。 */
+    private static final Object SIZE_LOCK = new Object();
+
+    /**
+     * 尺寸簿记统一入口（批次 CC）：**只在 resize 确认成功后调用** ——
+     * 车联助手不变量：坐标口径永远跟屏上真实尺寸走，绝不先行。
+     */
+    private void setSizeBookkeeping(int w, int h, int dpi) {
+        synchronized (SIZE_LOCK) {
+            vdW = w;
+            vdH = h;
+            vdDpi = dpi;
+        }
+    }
 
     /**
      * VD 抖动：强制画布里的应用重排/重建。批次 AJ 升级为两拍：
@@ -596,7 +633,7 @@ public final class MirrorSlot implements CanvasSource {
         if (canvasW > 0) svW = canvasW;
         if (canvasH > 0) svH = canvasH;
         float sx = (vdW > 0 && svW > 0) ? vdW / (float) svW : transformer.scaleX();
-        float sy = (vdH > 0 && svH > 0) ? vdH / (float) svH : transformer.scaleX();
+        float sy = (vdH > 0 && svH > 0) ? vdH / (float) svH : transformer.scaleY();
         touchFor().setDisplay(displayId, sx, sy);
         touchFor().feed(e);
     }

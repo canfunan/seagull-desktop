@@ -429,7 +429,9 @@ public final class PipBoard extends LinearLayout {
         int w = (s == slotA) ? 1 : 2;
         cvW[w] = wd;
         cvH[w] = ht;
-        s.syncSize(wd, ht, dpiFit(wd, ht));
+        // 批次 CC：DOWN 校准只对齐像素尺寸，密度不动（对齐车联助手 —— 密度恒定，
+        // 点击期间不触发应用 density 重配/重排；密度只在建屏/挂面时由 dpiFit 定）。
+        s.syncSize(wd, ht);
     }
 
     /** 点画布进入应用：交给 HomeActivity（切单应用 + 同步底栏高亮），没注入就本地降级。 */

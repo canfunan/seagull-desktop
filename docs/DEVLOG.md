@@ -12,6 +12,77 @@
 
 ---
 
+## 批次 CC — 反编译车联助手新版（base.apk）：触摸为什么"准"，两条不变量我们反着做了
+
+### 目标
+
+用户传上车联助手（com.leting）最新版 base.apk，要求反编译弄清"它的触摸怎么这么准"，
+对照修海鸥。jadx 1.5.0 全量反编译（产物在 /workspace/tmp-leting/src，会话内临存）。
+
+### 复盘（触摸"准"的真相 —— 不在注入器，在两条不变量）
+
+**注入器毫无秘密**：PIP1/PIP2 的触摸分发器（`b1/d.java`、`b1/h.java`）与 7 月那版一字未改
+—— `su -c input -d <id> tap/swipe`，异步 exec、不等待、不处理多指/CANCEL，当年报告点名的
+"设计缺陷"全都在。**它准是因为它根本不需要换算坐标**：
+
+- **不变量①：VD 尺寸永远严格等于触摸面尺寸**（`b1/b.java` surfaceChanged 回调）：
+  `virtualDisplay.resize(surfaceW, surfaceH, dpi)` —— SurfaceView 每变一次，VD 同步跟一次，
+  注入坐标 = View 坐标，1:1，全程零簿记。建屏时也是直接用 `SurfaceView.getWidth/Height`。
+- **不变量②：密度恒定**：dpi 恒为主屏 densityDpi（`c.f3501b` 建屏时取一次），resize 只动
+  像素尺寸不动密度 → 点击期间应用绝不发生 density 重配/重排。
+
+我们恰好在这两条上反着做（`MirrorSlot.syncSize` 旧注释自己写着"本地簿记先行，触摸换算
+立即用新值"）：
+
+- root 守护屏路径 resize 是**异步且无确认**的：簿记先写成新尺寸，真实 resize 排队走守护
+  进程。窗口期里（乃至某些 ROM 静默拒绝 resize 时**永久**）"簿记说新尺寸、屏还是旧尺寸"，
+  fx/fy 恒 1，点击整体偏移 —— 这才是「触摸不准」的主根因，批次 AD/AE 修的"比例映射"
+  在簿记被污染后照样失真。
+- in-process 路径 `vd.resize()` 抛异常时簿记也已先行更新 —— 同病。
+- `PipBoard.syncCanvasSize` 在每次 DOWN 上 `dpiFit(w,h)` 重算密度 —— 点击可能触发应用
+  density 重配 + 全量重排，屏上元素位置瞬移，手感就是"不准"。
+
+**网易云防跳不是差距**：车联助手 xphook 对 `com.netease.cloudmusic.iot` 挂 H1~H6
+（startActivity/startActivityForResult/Context 全入口注入 setLaunchDisplayId，判定=
+「Activity 当前 displayId>0 且目标是网易云自己的 Activity」，`injectNeteaseDisplayId` 用
+反射 ActivityOptions.fromBundle —— 我们批次 AG 已证明这在真机上必失败，换成了
+putInt(KEY_LAUNCH_DISPLAY_ID)）。海鸥的 C1~C6 + C0 总闸（Instrumentation.execStartActivity）
+覆盖面更全。这段逐行比对后确认无需改。
+
+**部署链同样无差距**：锚点 Activity → `am stack move-task` 搬锚点 stack（`c1/h.d()`，
+带 sleep 0.15 的 awk 脚本）→ 冷启动 API → `su am start --display` 兜底 —— 海鸥
+`moveToAnchorRoot`/`launchOnDisplay` 一一对应。
+
+### 改了什么
+
+1. `MirrorSlot.syncSize`：签名去掉 dpi 参数（**密度恒定**，沿用建屏值）。root 路径改为
+   `PrivClient.resize` **确认成功才记账**（`setSizeBookkeeping`，SIZE_LOCK 三元组原子更新）；
+   失败保持旧尺寸并打日志 —— 在途/失败期间触摸按旧尺寸比例换算，与屏上被缩放的内容
+   严格对齐。失败日志也是「root resize 被 ROM 拒绝」的唯一可见信号。
+2. `MirrorSlot.deploy` root 重挂分支：同样的"确认后记账"，去掉簿记先行。
+3. `MirrorSlot` 新增 `SIZE_LOCK` + `setSizeBookkeeping`；`onTouch` 修一处笔误
+   （sy 回退误用 `transformer.scaleX()` → `scaleY()`）。
+4. `PipBoard.syncCanvasSize`：DOWN 校准只传尺寸不传密度 —— 建屏/挂面（surfaceChanged →
+   attachTo/deploy）才由 dpiFit 定密度，点击期不再触发应用重配。
+
+### 验证
+
+- javac（JDK17 --release 11，与 build.sh 同参；R.java 取自上一版产物反编译补齐）全量过。
+- 真机口径：装新包 → 进画中画拖动分隔把手改占比 → 立刻点击高德缩放按钮/网易云按钮，
+  落点应与看到的位置一致（改占比后第一下就准，不再要等第二下）；`logcat -s SeagullTouch
+  SeagullLsp` 里 root 屏应出现「root 尺寸校准确认」，若出现「root resize 失败」请截图发回
+  —— 那说明这台 ROM 的守护进程 resize 被拒，触摸会自动按旧尺寸比例换算保持准确。
+
+### 遗留
+
+- 车联助手的 VD 是 in-process 私有屏（flags=0，零依赖守护进程 resize）；海鸥 root 守护屏
+  的 resize 若真机日志显示被 ROM 拒绝，下一步就是把 root 屏的尺寸变更也改走 in-process
+  VD（或屏建成固定尺寸、触摸恒比例换算），真机日志出来再定。
+- 车联助手 `onResume` 每次都重跑迁移+部署（幂等自愈）；海鸥已有 healSlotSoon + 巡检，
+  覆盖面等价。
+
+---
+
 ## 批次 BB — 截图坐实两件事：网易云搬屏路径漏写兼容位（黑边真因）+ 进应用自动收起导航栏
 
 ### 目标
