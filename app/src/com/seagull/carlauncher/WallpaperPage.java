@@ -10,7 +10,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.location.Location;
+import android.os.Environment;
+import android.os.StatFs;
+import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.GestureDetector;
 import android.view.Gravity;
@@ -19,6 +26,7 @@ import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -56,6 +64,8 @@ public final class WallpaperPage extends FrameLayout {
     private static final int HOST_ID = 0x5E59;
 
     private final TextView clock, date, media, lyric;
+    /** I2 农历行：日期行下方的 "农历 腊月十九 · 乙巳(蛇)"。 */
+    private final TextView lunarRow;
     private final LinearLayout clockBox;
     private final FrameLayout widgetLayer;
     private LauncherModel model;
@@ -73,6 +83,21 @@ public final class WallpaperPage extends FrameLayout {
     private final LinearLayout gpsBox;
     private final TextView gpsBig, gpsMid, gpsTrip;
     private boolean gpsAttached;
+
+    /** I3 倒计时块：距目标日 N 天；配置（名称/日期）经点按菜单。 */
+    private final LinearLayout cdBox;
+    private final TextView cdBig, cdSub;
+
+    /** I5 监控块：内存/CPU/存储三行小字，后台线程采样。 */
+    private final LinearLayout monBox;
+    private final TextView monL1, monL2, monL3;
+
+    /** I4 指南针兜底：GPS 航向失联时用加速度计+磁力计方位角补显。 */
+    private SensorManager sm;
+    private final float[] accV = new float[3], magV = new float[3];
+    private boolean accOk, magOk;
+    private float sensAz = Float.NaN;
+    private long lastSensAt;
 
     /** 已挂小组件的位置表：id → {x 中点比例, y 顶边比例, s 缩放倍率}。 */
     private final Map<Integer, float[]> widgetPos = new HashMap<>();
@@ -110,11 +135,13 @@ public final class WallpaperPage extends FrameLayout {
 
         clock = tv(c, 62, R.color.text, true);
         date = tv(c, 16, R.color.text_dim, false);
+        lunarRow = tv(c, 15, R.color.text_dim, false);
         media = tv(c, 15, R.color.text, false);
         lyric = tv(c, 14, R.color.text_dim, false);
 
         clockBox.addView(clock);
         clockBox.addView(date, topMargin(c, 6));
+        clockBox.addView(lunarRow, topMargin(c, 4));
         clockBox.addView(media, topMargin(c, 30));
         clockBox.addView(lyric, topMargin(c, 4));
         addView(clockBox, new LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT));
@@ -160,11 +187,67 @@ public final class WallpaperPage extends FrameLayout {
                 },
                 () -> model.save()));
 
+        // I3 倒计时块：与行车块同套拖动/缩放；配置经点按菜单
+        cdBox = new LinearLayout(c);
+        cdBox.setOrientation(LinearLayout.VERTICAL);
+        cdBox.setGravity(Gravity.CENTER_HORIZONTAL);
+        cdBig = tv(c, 26, R.color.text, true);
+        cdSub = tv(c, 13, R.color.text_dim, false);
+        cdBox.addView(cdBig);
+        cdBox.addView(cdSub, topMargin(c, 4));
+        cdBox.setVisibility(GONE);
+        addView(cdBox, new LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT));
+        cdBox.setOnTouchListener(new Drag(cdBox,
+                (dx, dy) -> nudgeBlock(cdBox, dx, dy),
+                this::onCdTap,
+                this::onCdTap,
+                () -> saveBlockPos(cdBox, pos -> {
+                    model.wallCdX = pos[0]; model.wallCdY = pos[1];
+                }),
+                null,
+                () -> zoomBase = model.wallCdScale <= 0 ? 1f : model.wallCdScale,
+                f -> {
+                    float s = clampf(zoomBase * f, 0.5f, 2.4f);
+                    applyCdScale(s);
+                    model.wallCdScale = s;
+                },
+                () -> model.save()));
+
+        // I5 监控块：内存/CPU/存储三行；默认关，时钟块菜单开
+        monBox = new LinearLayout(c);
+        monBox.setOrientation(LinearLayout.VERTICAL);
+        monBox.setGravity(Gravity.CENTER_HORIZONTAL);
+        monL1 = tv(c, 13, R.color.text_dim, false);
+        monL2 = tv(c, 13, R.color.text_dim, false);
+        monL3 = tv(c, 13, R.color.text_dim, false);
+        monBox.addView(monL1);
+        monBox.addView(monL2, topMargin(c, 3));
+        monBox.addView(monL3, topMargin(c, 3));
+        monBox.setVisibility(GONE);
+        addView(monBox, new LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT));
+        monBox.setOnTouchListener(new Drag(monBox,
+                (dx, dy) -> nudgeBlock(monBox, dx, dy),
+                this::showMonMenu,
+                this::showMonMenu,
+                () -> saveBlockPos(monBox, pos -> {
+                    model.wallMonX = pos[0]; model.wallMonY = pos[1];
+                }),
+                null,
+                () -> zoomBase = model.wallMonScale <= 0 ? 1f : model.wallMonScale,
+                f -> {
+                    float s = clampf(zoomBase * f, 0.5f, 2.4f);
+                    applyMonScale(s);
+                    model.wallMonScale = s;
+                },
+                () -> model.save()));
+
         // 点空白处取消组件选中（长按空白仍是添加小组件）
         setOnClickListener(v -> deselectWidget());
         setOnLongClickListener(v -> { showAddWidget(); return true; });
         applyClock();
         applyGps();
+        applyCd();
+        applyMon();
         loadWidgets();
         tick();
     }
@@ -191,6 +274,7 @@ public final class WallpaperPage extends FrameLayout {
     private void restackClockBox(float s) {
         LinearLayout.LayoutParams lp;
         lp = (LinearLayout.LayoutParams) date.getLayoutParams(); lp.topMargin = dp(6 * s); date.setLayoutParams(lp);
+        lp = (LinearLayout.LayoutParams) lunarRow.getLayoutParams(); lp.topMargin = dp(4 * s); lunarRow.setLayoutParams(lp);
         lp = (LinearLayout.LayoutParams) media.getLayoutParams(); lp.topMargin = dp(30 * s); media.setLayoutParams(lp);
         lp = (LinearLayout.LayoutParams) lyric.getLayoutParams(); lp.topMargin = dp(4 * s); lyric.setLayoutParams(lp);
     }
@@ -235,17 +319,29 @@ public final class WallpaperPage extends FrameLayout {
     }
 
     private void showClockMenu() {
+        // 隐藏掉的块在这里找回（时钟块菜单 = 壁纸块的总开关位）
+        java.util.List<String> show = new ArrayList<>();
+        if (!model.wallGpsEnabled) show.add("显示行车块");
+        if (!model.wallCdEnabled) show.add("显示倒数块");
+        if (!model.wallMonEnabled) show.add("显示监控块");
+        String[] sizes = {"小", "标准", "大", "特大"};
+        String[] opts = show.isEmpty() ? sizes
+                : java.util.Arrays.copyOf(sizes, sizes.length + show.size());
+        for (int i = 0; i < show.size(); i++) opts[sizes.length + i] = show.get(i);
         new AlertDialog.Builder(getContext())
                 .setTitle("时间日期大小（按住拖动可移位置）")
-                .setItems(model.wallGpsEnabled
-                        ? new String[]{"小", "标准", "大", "特大"}
-                        : new String[]{"小", "标准", "大", "特大", "显示行车块"}, (d, w) -> {
-                    if (w <= 3) {
+                .setItems(opts, (d, w) -> {
+                    if (w < sizes.length) {
                         model.wallClockScale = w == 0 ? 0.7f : w == 1 ? 1f : w == 2 ? 1.3f : 1.6f;
                         applyClock();
                     } else {
-                        model.wallGpsEnabled = true;
+                        String cmd = opts[w];
+                        if (cmd.equals("显示行车块")) model.wallGpsEnabled = true;
+                        else if (cmd.equals("显示倒数块")) model.wallCdEnabled = true;
+                        else if (cmd.equals("显示监控块")) model.wallMonEnabled = true;
                         refreshGpsBlock();
+                        refreshCdBlock();
+                        refreshMonBlock();
                     }
                     model.save();
                 })
@@ -354,6 +450,7 @@ public final class WallpaperPage extends FrameLayout {
                 LocationHelper.acquire(getContext(), gpsListener);
                 gpsAttached = true;
             }
+            startSensors();
             updateGpsRows(LocationHelper.last());
         } else {
             if (gpsAttached) { LocationHelper.release(gpsListener); gpsAttached = false; }
@@ -395,11 +492,313 @@ public final class WallpaperPage extends FrameLayout {
         return dirs[Math.round(deg / 45f) & 7];
     }
 
+    /* ------------------------- 块级通用：摆位/拖动/落盘 ------------------------- */
+
+    private void placeBlock(View box, float xRatio, float yRatio) {
+        int w = getWidth(), h = getHeight();
+        if (w <= 0 || h <= 0) return;
+        LayoutParams lp = (LayoutParams) box.getLayoutParams();
+        int bw = Math.max(0, box.getMeasuredWidth());
+        int bh = Math.max(0, box.getMeasuredHeight());
+        int nl = clamp(Math.round(w * xRatio - bw / 2f), dp(8), Math.max(dp(8), w - bw - dp(8)));
+        int nt = clamp(Math.round(h * yRatio), dp(8), Math.max(dp(8), h - bh - dp(8)));
+        if (lp.leftMargin != nl || lp.topMargin != nt) {
+            lp.leftMargin = nl;
+            lp.topMargin = nt;
+            box.setLayoutParams(lp);
+        }
+    }
+
+    private void nudgeBlock(View box, float dx, float dy) {
+        LayoutParams lp = (LayoutParams) box.getLayoutParams();
+        int w = getWidth(), h = getHeight();
+        int bw = box.getMeasuredWidth();
+        lp.leftMargin = clamp(lp.leftMargin + Math.round(dx), dp(8), Math.max(dp(8), w - bw - dp(8)));
+        lp.topMargin = clamp(lp.topMargin + Math.round(dy), dp(8),
+                Math.max(dp(8), h - box.getMeasuredHeight() - dp(8)));
+        box.setLayoutParams(lp);
+    }
+
+    private void saveBlockPos(View box, java.util.function.Consumer<float[]> put) {
+        int w = getWidth(), h = getHeight();
+        if (w <= 0 || h <= 0) return;
+        LayoutParams lp = (LayoutParams) box.getLayoutParams();
+        put.accept(new float[]{
+                (lp.leftMargin + box.getMeasuredWidth() / 2f) / w, (float) lp.topMargin / h});
+        model.save();
+    }
+
+    /* ------------------------- I3 倒计时块 ------------------------- */
+
+    private void applyCd() {
+        applyCdScale(model.wallCdScale <= 0 ? 1f : model.wallCdScale);
+    }
+
+    private void applyCdScale(float s) {
+        cdBig.setTextSize(26 * s);
+        cdSub.setTextSize(13 * s);
+        cdBox.post(() -> placeBlock(cdBox, model.wallCdX, model.wallCdY));
+    }
+
+    /** 无配置时块显示设置提示，点按直接进配置。 */
+    public void refreshCdBlock() {
+        if (!model.wallCdEnabled) { cdBox.setVisibility(GONE); return; }
+        cdBox.setVisibility(VISIBLE);
+        cdSub.setVisibility(VISIBLE);
+        updateCdRows();
+    }
+
+    private void onCdTap() {
+        if (!model.wallCdEnabled) return;
+        if (model.cdTarget.isEmpty()) { editCdDate(); return; }
+        showCdMenu();
+    }
+
+    private void showCdMenu() {
+        new AlertDialog.Builder(getContext())
+                .setTitle("倒数日（按住拖动可移位置）")
+                .setItems(new String[]{"改名称", "改日期", "小", "标准", "大", "特大", "隐藏"},
+                        (d, w) -> {
+                            if (w == 0) editCdLabel();
+                            else if (w == 1) editCdDate();
+                            else if (w <= 5) {
+                                model.wallCdScale = w == 2 ? 0.7f : w == 3 ? 1f : w == 4 ? 1.3f : 1.6f;
+                                applyCdScale(model.wallCdScale);
+                            } else {
+                                model.wallCdEnabled = false;
+                                refreshCdBlock();
+                            }
+                            model.save();
+                        })
+                .show();
+    }
+
+    private void editCdLabel() {
+        askText("倒数日名称", model.cdLabel.isEmpty() ? "回家" : model.cdLabel, v -> {
+            model.cdLabel = v;
+            model.save();
+            updateCdRows();
+        });
+    }
+
+    private void editCdDate() {
+        askText("目标日（yyyy-MM-dd）", model.cdTarget, v -> {
+            long days = cdDays(v);
+            if (days == Long.MIN_VALUE) {
+                Toast.makeText(getContext(), "日期格式不对，示例 2026-10-01", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            model.cdTarget = v;
+            if (model.cdLabel.isEmpty()) model.cdLabel = "目标日";
+            model.save();
+            updateCdRows();
+        });
+    }
+
+    /** 目标日距今天数（按本地零点差）；解析失败返回 Long.MIN_VALUE。 */
+    private static long cdDays(String ymd) {
+        try {
+            String[] p = ymd.trim().split("-");
+            if (p.length != 3) return Long.MIN_VALUE;
+            int y = Integer.parseInt(p[0]), m = Integer.parseInt(p[1]), d = Integer.parseInt(p[2]);
+            if (y < 1970 || y > 2200 || m < 1 || m > 12 || d < 1 || d > 31) return Long.MIN_VALUE;
+            java.util.Calendar t = java.util.Calendar.getInstance();
+            t.clear();
+            t.set(y, m - 1, d, 0, 0, 0);
+            java.util.Calendar now = java.util.Calendar.getInstance();
+            now.set(java.util.Calendar.HOUR_OF_DAY, 0);
+            now.set(java.util.Calendar.MINUTE, 0);
+            now.set(java.util.Calendar.SECOND, 0);
+            now.set(java.util.Calendar.MILLISECOND, 0);
+            return (t.getTimeInMillis() - now.getTimeInMillis()) / 86_400_000L;
+        } catch (Throwable t) {
+            return Long.MIN_VALUE;
+        }
+    }
+
+    private void updateCdRows() {
+        if (cdBox.getVisibility() != VISIBLE) return;
+        if (model.cdTarget.isEmpty()) {
+            cdBig.setText("点按设置");
+            cdSub.setText("倒数日");
+            return;
+        }
+        long days = cdDays(model.cdTarget);
+        if (days == Long.MIN_VALUE) {
+            cdBig.setText("日期有误");
+            cdSub.setText("点按重设");
+            return;
+        }
+        if (days > 0) cdBig.setText(days + " 天");
+        else if (days == 0) cdBig.setText("就是今天");
+        else cdBig.setText("已过 " + (-days) + " 天");
+        cdSub.setText(model.cdLabel.isEmpty() ? model.cdTarget : model.cdLabel + " · " + model.cdTarget);
+    }
+
+    /* ------------------------- I5 监控块 ------------------------- */
+
+    private void applyMon() {
+        applyMonScale(model.wallMonScale <= 0 ? 1f : model.wallMonScale);
+    }
+
+    private void applyMonScale(float s) {
+        monL1.setTextSize(13 * s);
+        monL2.setTextSize(13 * s);
+        monL3.setTextSize(13 * s);
+        monBox.post(() -> placeBlock(monBox, model.wallMonX, model.wallMonY));
+    }
+
+    public void refreshMonBlock() {
+        if (!model.wallMonEnabled) { monBox.setVisibility(GONE); return; }
+        monBox.setVisibility(VISIBLE);
+        refreshMonRows();
+    }
+
+    private void showMonMenu() {
+        new AlertDialog.Builder(getContext())
+                .setTitle("系统监控（按住拖动可移位置）")
+                .setItems(new String[]{"小", "标准", "大", "特大", "隐藏"}, (d, w) -> {
+                    if (w <= 3) {
+                        model.wallMonScale = w == 0 ? 0.7f : w == 1 ? 1f : w == 2 ? 1.3f : 1.6f;
+                        applyMonScale(model.wallMonScale);
+                    } else {
+                        model.wallMonEnabled = false;
+                        refreshMonBlock();
+                    }
+                    model.save();
+                })
+                .show();
+    }
+
+    /**
+     * 采样走后台线程：cpuPct 内部有 120ms sleep（SysOps L2 注释明确提示
+     * 调用方放后台线程），tick 在 UI 线程上，直接调会卡帧。
+     */
+    private void refreshMonRows() {
+        final Context ctx = getContext();
+        new Thread(() -> {
+            String l1 = "--", l2 = "--", l3 = "--";
+            try {
+                android.app.ActivityManager am = (android.app.ActivityManager)
+                        ctx.getSystemService(Context.ACTIVITY_SERVICE);
+                android.app.ActivityManager.MemoryInfo mi =
+                        new android.app.ActivityManager.MemoryInfo();
+                am.getMemoryInfo(mi);
+                l1 = String.format(java.util.Locale.US, "内存 %dM / %dM",
+                        mi.availMem / (1024 * 1024), mi.totalMem / (1024 * 1024));
+            } catch (Throwable ignore) { }
+            try { l2 = "CPU " + SysOps.cpuPct(); } catch (Throwable ignore) { }
+            try {
+                StatFs st = new StatFs(Environment.getDataDirectory().getPath());
+                l3 = String.format(java.util.Locale.US, "存储 %.0fG / %.0fG",
+                        st.getAvailableBytes() / 1e9, st.getTotalBytes() / 1e9);
+            } catch (Throwable ignore) { }
+            final String f1 = l1, f2 = l2, f3 = l3;
+            uiPost(() -> {
+                if (monBox.getVisibility() != VISIBLE) return;
+                monL1.setText(f1);
+                monL2.setText(f2);
+                monL3.setText(f3);
+            });
+        }, "SeagullMon").start();
+    }
+
+    /* ------------------------- I4 指南针兜底（传感器） ------------------------- */
+
+    private void startSensors() {
+        if (sm != null) return;
+        try {
+            SensorManager m = (SensorManager) getContext()
+                    .getSystemService(Context.SENSOR_SERVICE);
+            Sensor a = m.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+            Sensor g = m.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD);
+            if (a == null || g == null) return;   // 车机无磁力计很常见：静默降级
+            sm = m;
+            sm.registerListener(sensL, a, SensorManager.SENSOR_DELAY_UI);
+            sm.registerListener(sensL, g, SensorManager.SENSOR_DELAY_UI);
+        } catch (Throwable t) {
+            sm = null;
+        }
+    }
+
+    private void stopSensors() {
+        if (sm == null) return;
+        try { sm.unregisterListener(sensL); } catch (Throwable ignore) { }
+        sm = null;
+        accOk = false;
+        magOk = false;
+        sensAz = Float.NaN;
+    }
+
+    private final SensorEventListener sensL = new SensorEventListener() {
+        @Override public void onSensorChanged(SensorEvent e) {
+            if (e.values == null || e.values.length < 3) return;
+            if (e.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+                System.arraycopy(e.values, 0, accV, 0, 3);
+                accOk = true;
+            } else if (e.sensor.getType() == Sensor.TYPE_MAGNETIC_FIELD) {
+                System.arraycopy(e.values, 0, magV, 0, 3);
+                magOk = true;
+            }
+            long now = SystemClock.elapsedRealtime();
+            if (!accOk || !magOk || now - lastSensAt < 500) return;
+            lastSensAt = now;
+            float[] r = new float[9], out = new float[9], v = new float[3];
+            if (!SensorManager.getRotationMatrix(r, null, accV, magV)) return;
+            // 车机固定横屏：把屏幕坐标系转 90°，否则方位角偏 90°
+            SensorManager.remapCoordinateSystem(r, SensorManager.AXIS_Y,
+                    SensorManager.AXIS_MINUS_X, out);
+            SensorManager.getOrientation(out, v);
+            float az = (float) Math.toDegrees(v[0]);
+            if (az < 0) az += 360f;
+            // 低通平滑：磁力计原始值抖得厉害
+            sensAz = Float.isNaN(sensAz) ? az : sensAz + shortestArc(sensAz, az) * 0.35f;
+            if (sensAz < 0) sensAz += 360f;
+            if (sensAz >= 360f) sensAz -= 360f;
+            // 只有 GPS 航向失联时才补显（块可见 + 有权限才写）
+            Location loc = LocationHelper.last();
+            if (gpsBox.getVisibility() != VISIBLE
+                    || !LocationHelper.hasPermission(getContext())) return;
+            if (loc == null || !LocationHelper.fresh()) {
+                gpsMid.setText(String.format(java.util.Locale.US, "海拔 -- · 航向 %s %.0f°",
+                        bearingLabel(sensAz), sensAz));
+            }
+        }
+
+        @Override public void onAccuracyChanged(Sensor s, int accuracy) { }
+    };
+
+    /** a→b 的最短角差（±180 内），供指数平滑用。 */
+    private static float shortestArc(float a, float b) {
+        float d = (b - a) % 360f;
+        if (d > 180f) d -= 360f;
+        if (d < -180f) d += 360f;
+        return d;
+    }
+
+    /* ------------------------- 通用小件 ------------------------- */
+
+    private void askText(String title, String cur, java.util.function.Consumer<String> ok) {
+        final android.widget.EditText et = new android.widget.EditText(getContext());
+        et.setText(cur);
+        et.setSelection(et.getText().length());
+        new AlertDialog.Builder(getContext())
+                .setTitle(title)
+                .setView(et)
+                .setPositiveButton("确定", (d, w) -> ok.accept(et.getText().toString().trim()))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void uiPost(Runnable r) { post(r); }
+
     @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
         super.onSizeChanged(w, h, ow, oh);
         if (w <= 0 || h <= 0) return;
         clockBox.post(this::placeClockBox);
         gpsBox.post(this::placeGpsBox);
+        cdBox.post(() -> placeBlock(cdBox, model.wallCdX, model.wallCdY));
+        monBox.post(() -> placeBlock(monBox, model.wallMonX, model.wallMonY));
         for (Integer wid : new ArrayList<>(widgetPos.keySet())) refitWidget(wid);
     }
 
@@ -647,10 +1046,14 @@ public final class WallpaperPage extends FrameLayout {
         super.onAttachedToWindow();
         try { host().startListening(); } catch (Throwable ignore) { }
         refreshGpsBlock();
+        refreshCdBlock();
+        refreshMonBlock();
+        if (model.wallGpsEnabled && LocationHelper.hasPermission(getContext())) startSensors();
     }
 
     @Override protected void onDetachedFromWindow() {
         if (gpsAttached) { LocationHelper.release(gpsListener); gpsAttached = false; }
+        stopSensors();
         try { if (host != null) host.stopListening(); } catch (Throwable ignore) { }
         super.onDetachedFromWindow();
     }
@@ -881,6 +1284,20 @@ public final class WallpaperPage extends FrameLayout {
         if (date != null) date.setText(SysOps.dateCn());
         if (clock != null) clockBox.post(this::placeClockBox);
 
+        // I2 农历行：超表/异常 → 隐藏，不留空行
+        if (lunarRow != null) {
+            java.util.Calendar c = java.util.Calendar.getInstance();
+            String ln = LunarCalendar.lineFor(c.get(java.util.Calendar.YEAR),
+                    c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH));
+            lunarRow.setText(ln);
+            lunarRow.setVisibility(ln.isEmpty() ? GONE : VISIBLE);
+        }
+
+        // I3 倒计时：跨天也要走（块可见时每 tick 重算）
+        if (cdBox != null && cdBox.getVisibility() == VISIBLE) updateCdRows();
+        // I5 监控：30s 一个采样周期，后台线程
+        if (monBox != null && monBox.getVisibility() == VISIBLE) refreshMonRows();
+
         String now = Lyrics.nowPlaying();
         if (media != null) {
             media.setText(now == null ? "" : now);
@@ -901,11 +1318,17 @@ public final class WallpaperPage extends FrameLayout {
     public void applySkin() {
         if (clock != null) clock.setTextColor(Skin.c(R.color.text));
         if (date != null) date.setTextColor(Skin.c(R.color.text_dim));
+        if (lunarRow != null) lunarRow.setTextColor(Skin.c(R.color.text_dim));
         if (media != null) media.setTextColor(Skin.c(R.color.text));
         if (lyric != null) lyric.setTextColor(Skin.c(R.color.text_dim));
         if (gpsBig != null) gpsBig.setTextColor(Skin.c(R.color.text));
         if (gpsMid != null) gpsMid.setTextColor(Skin.c(R.color.text_dim));
         if (gpsTrip != null) gpsTrip.setTextColor(Skin.c(R.color.text_dim));
+        if (cdBig != null) cdBig.setTextColor(Skin.c(R.color.text));
+        if (cdSub != null) cdSub.setTextColor(Skin.c(R.color.text_dim));
+        if (monL1 != null) monL1.setTextColor(Skin.c(R.color.text_dim));
+        if (monL2 != null) monL2.setTextColor(Skin.c(R.color.text_dim));
+        if (monL3 != null) monL3.setTextColor(Skin.c(R.color.text_dim));
     }
 
     private static TextView tv(Context c, float size, int colorRes, boolean bold) {

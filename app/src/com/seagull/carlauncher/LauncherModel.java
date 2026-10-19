@@ -303,6 +303,20 @@ public final class LauncherModel {
     public float wallGpsY = 0.74f;
     public float wallGpsScale = 1f;
     public boolean wallGpsEnabled = true;
+
+    /** I3 倒计时块：目标日配置（yyyy-MM-dd）+ 摆位。未配置时块显示设置提示。 */
+    public String cdLabel = "";
+    public String cdTarget = "";
+    public float wallCdX = 0.84f;
+    public float wallCdY = 0.74f;
+    public float wallCdScale = 1f;
+    public boolean wallCdEnabled = true;
+
+    /** I5 监控块（内存/CPU/存储）：默认关，时钟块菜单开。 */
+    public float wallMonX = 0.84f;
+    public float wallMonY = 0.13f;
+    public float wallMonScale = 1f;
+    public boolean wallMonEnabled = false;
     /** 壁纸页小组件记录（批次 CI）：[{"id":appWidgetId,"x":0~1,"y":0~1}] */
     public String wallWidgetsJson = "[]";
     public final List<Wall> wallLib = new ArrayList<>();
@@ -993,6 +1007,15 @@ public final class LauncherModel {
             wgp.put("x", wallGpsX); wgp.put("y", wallGpsY); wgp.put("s", wallGpsScale);
             wgp.put("on", wallGpsEnabled);
             o.put("wallGps", wgp);
+            JSONObject wcd = new JSONObject();
+            wcd.put("label", cdLabel); wcd.put("target", cdTarget);
+            wcd.put("x", wallCdX); wcd.put("y", wallCdY); wcd.put("s", wallCdScale);
+            wcd.put("on", wallCdEnabled);
+            o.put("wallCd", wcd);
+            JSONObject wmo = new JSONObject();
+            wmo.put("x", wallMonX); wmo.put("y", wallMonY); wmo.put("s", wallMonScale);
+            wmo.put("on", wallMonEnabled);
+            o.put("wallMon", wmo);
             o.put("wallWidgets", wallWidgetsJson);
             /* 屏幕 */
             o.put("marginH", marginH);
@@ -1223,6 +1246,22 @@ public final class LauncherModel {
                 wallGpsY = (float) wgo.optDouble("y", 0.74);
                 wallGpsScale = (float) wgo.optDouble("s", 1.0);
                 wallGpsEnabled = wgo.optBoolean("on", true);
+            }
+            JSONObject wco2 = o.optJSONObject("wallCd");
+            if (wco2 != null) {
+                cdLabel = wco2.optString("label", "");
+                cdTarget = wco2.optString("target", "");
+                wallCdX = (float) wco2.optDouble("x", 0.84);
+                wallCdY = (float) wco2.optDouble("y", 0.74);
+                wallCdScale = (float) wco2.optDouble("s", 1.0);
+                wallCdEnabled = wco2.optBoolean("on", true);
+            }
+            JSONObject wmo2 = o.optJSONObject("wallMon");
+            if (wmo2 != null) {
+                wallMonX = (float) wmo2.optDouble("x", 0.84);
+                wallMonY = (float) wmo2.optDouble("y", 0.13);
+                wallMonScale = (float) wmo2.optDouble("s", 1.0);
+                wallMonEnabled = wmo2.optBoolean("on", false);
             }
             wallWidgetsJson = o.optString("wallWidgets", "[]");
             fontScale = o.optInt("fontScale", 100);
