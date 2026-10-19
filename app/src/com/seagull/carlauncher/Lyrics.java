@@ -480,7 +480,8 @@ public final class Lyrics {
 
     /* ==================== 杂项 ==================== */
 
-    private static MediaController activeController(Context ctx) {
+    /** O2 开放给 MediaKeyRouter/音乐块复用：本地播放中会话优先，否则最近活跃。 */
+    public static MediaController activeController(Context ctx) {
         try {
             MediaSessionManager msm = (MediaSessionManager) ctx.getSystemService(Context.MEDIA_SESSION_SERVICE);
             if (msm == null) return null;

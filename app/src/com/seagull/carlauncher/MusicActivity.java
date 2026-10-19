@@ -1,6 +1,7 @@
 package com.seagull.carlauncher;
 
 import android.app.Activity;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -10,6 +11,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.SeekBar;
@@ -30,6 +32,7 @@ public class MusicActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private TrackAdapter adapter;
     private TextView title, artist;
+    private ImageView artV;
     private SeekBar bar;
     private TextView pos, dur;
     private View playBtn;
@@ -74,10 +77,28 @@ public class MusicActivity extends Activity {
         head.setBackground(hbg);
         head.setPadding(dp(14), dp(10), dp(14), dp(10));
 
+        // O2 封面位：当前曲内嵌封面（MusicService 懒提取），无图显示占位
+        LinearLayout hrow = new LinearLayout(this);
+        hrow.setOrientation(LinearLayout.HORIZONTAL);
+        hrow.setGravity(Gravity.CENTER_VERTICAL);
+        artV = new ImageView(this);
+        GradientDrawable abg = new GradientDrawable();
+        abg.setColor(Skin.c(R.color.ground));
+        abg.setCornerRadius(dp(8));
+        artV.setBackground(abg);
+        artV.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(dp(56), dp(56));
+        hrow.addView(artV, alp);
+        LinearLayout hcol = new LinearLayout(this);
+        hcol.setOrientation(LinearLayout.VERTICAL);
         title = tx(17, R.color.text);
-        head.addView(title);
+        hcol.addView(title);
         artist = tx(12, R.color.text_dim);
-        head.addView(artist);
+        hcol.addView(artist);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, -2, 1f);
+        tlp.leftMargin = dp(10);
+        hrow.addView(hcol, tlp);
+        head.addView(hrow);
 
         LinearLayout pro = new LinearLayout(this);
         pro.setOrientation(LinearLayout.HORIZONTAL);
@@ -170,6 +191,8 @@ public class MusicActivity extends Activity {
             MusicLib.Track t = MusicService.queue().get(MusicService.index());
             title.setText(MusicLib.label(t));
             artist.setText(MusicService.isPlaying() ? "本地音乐 · 播放中" : "本地音乐 · 已暂停");
+            Bitmap art = MusicService.currentArt();
+            artV.setImageBitmap(art);   // null 时占位底色露出（setImageBitmap(null) 清空）
             ((TextView) playBtn).setText(MusicService.isPlaying() ? "⏸" : "▶");
             int d = MusicService.duration();
             bar.setMax(Math.max(1, d));
@@ -182,6 +205,7 @@ public class MusicActivity extends Activity {
         } else {
             title.setText("没在播本地音乐");
             artist.setText("点下面任意一首开始");
+            artV.setImageBitmap(null);
             ((TextView) playBtn).setText("▶");
             bar.setProgress(0);
             pos.setText("0:00");

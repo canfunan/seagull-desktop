@@ -50,11 +50,11 @@
 - [x] N3 娱乐组件（G值表；频谱 Visualizer 权限评估后决定）——G值表块（第六块，加速度计低通+峰值，零权限，菜单清零峰值/隐藏/缩放）；频谱弃：Visualizer 要 RECORD_AUDIO，桌面常驻权限成本过高，收益低（真机音频回路还不一定给数据）
 
 ## 批次 O 日常可用度（2026-10-19 拍板，spec: .monkeycode/specs/daily-essential-batch）
-- [ ] O1 方控媒体键兜底——HomeActivity.dispatchKeyEvent 拦 KEYCODE_MEDIA_* → MediaKeyRouter（本地会话优先→最近活跃→无会话走默认路由），getActiveSessions 复用通知监听器身份
-- [ ] O2 专辑封面——CoverCache（单线程解码+256px 采样+LRU2）；本地曲 MediaMetadataRetriever 懒提取内嵌封面进 metadata；音乐块背景压暗遮罩+迷你播放器封面位；同键 60s 负缓存
-- [ ] O3 配置导出/导入——prefs 全键 JSON+meta 包壳落 files/export/（留 5 份轮转），SeagullFileProvider 分享；导入 SAF 限 5MB 先校验后批写，失败零污染；bumpCfg+提示重启桌面
-- [ ] O4 崩溃自恢复——uncaught 包装器记 RootLog+files/crash/（10 份轮转），同签名 24h 内 3 次置标记；下次启动清标记+画布回落默认布局+一次性提示；负一屏日志导出并入 crash 文件
-- [ ] 自检：ConfigCheck（导出→导入 round-trip 30+ 键+2 拒绝用例）、CrashSigCheck（签名/窗口/阈值 12+ 用例）
+- [x] O1 方控媒体键兜底——HomeActivity.dispatchKeyEvent 拦 KEYCODE_MEDIA_* → MediaKeyRouter（本地会话优先→最近活跃→无会话走默认路由），getActiveSessions 复用通知监听器身份
+- [x] O2 专辑封面——CoverCache（单线程解码+256px 采样+LRU2）；本地曲 MediaMetadataRetriever 懒提取内嵌封面进 metadata；音乐块背景压暗遮罩+迷你播放器封面位；同键 60s 负缓存
+- [x] O3 配置导出/导入——prefs 全键 JSON+meta 包壳落 files/export/（留 5 份轮转），SeagullFileProvider 分享；导入 SAF 限 5MB 先校验后批写，失败零污染；bumpCfg+提示重启桌面
+- [x] O4 崩溃自恢复——uncaught 包装器记 RootLog+files/crash/（10 份轮转），同签名 24h 内 3 次置标记；下次启动清标记+画布回落默认布局+一次性提示；负一屏日志导出并入 crash 文件
+- [x] 自检：ConfigCheck（导出→导入 round-trip 30+ 键+2 拒绝用例）、CrashSigCheck（签名/窗口/阈值 12+ 用例）
 
 ## 批次 P OBD2 车辆数据（2026-10-19 拍板，spec: .monkeycode/specs/obd2-vehicle-data）
 - [ ] P1 ObdEngine——SPP 连接（SPP_UUID，bonded 过滤）+AT 初始化（ATZ/ATE0/ATL0/ATS0/ATH0/ATSP0/0100 逐条等 '>'）+单命令轮询（010D/010C/0105/0142/012F，0142 失效补 ATRV）+断线 5s 重连+连续 10 轮全失效判离线；ObdParser 纯静态（SAE J1979 公式+错误 token）

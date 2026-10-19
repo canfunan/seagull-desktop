@@ -348,6 +348,26 @@ public final class NegScreenView extends FrameLayout {
         } catch (Throwable t) {
             sb.append("(logcat 拉取失败: ").append(t).append(")\n");
         }
+        // O4：files/crash/ 崩溃记录并入（CrashGuard 落档，最近 N 份原文）
+        try {
+            File cdir = new File(getContext().getFilesDir(), "crash");
+            File[] cfs = cdir.listFiles();
+            if (cfs != null && cfs.length > 0) {
+                java.util.Arrays.sort(cfs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+                sb.append("-- 崩溃记录（最近 ").append(Math.min(cfs.length, 5)).append(" 份） --\n");
+                for (int i = 0; i < cfs.length && i < 5; i++) {
+                    sb.append("==== ").append(cfs[i].getName()).append(" ====\n");
+                    try (java.io.BufferedReader br = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(
+                                    new java.io.FileInputStream(cfs[i]), "UTF-8"))) {
+                        String cl;
+                        while ((cl = br.readLine()) != null) sb.append(cl).append('\n');
+                    } catch (Throwable t2) {
+                        sb.append("(读取失败: ").append(t2).append(")\n");
+                    }
+                }
+            }
+        } catch (Throwable ignore) { }
         String name = "seagull-log-" + ver.replaceAll("[^0-9A-Za-z.\\-]", "_") + ".txt";
         // 三级回落：公共目录 File API（旧 ROM 可直写）→ root cp → 应用私有目录
         try {

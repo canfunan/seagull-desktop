@@ -38,9 +38,9 @@ Updated: 2026-10-19
 1. WHEN 活跃媒体会话的 MediaMetadata 含 METADATA_KEY_ALBUM_ART 位图或 METADATA_KEY_ALBUM_ART_URI，封面解码 SHALL 在后台线程完成并缓存。
 2. WHEN 缓存命中同一键（title+artist 拼接），封面解码 SHALL 跳过重复解码。
 3. WHEN 封面位图边长超过 256px，解码流程 SHALL 采样缩放到 256px 以内再入缓存（OOM 防护）。
-4. WHILE 封面可用，音乐块背景 SHALL 以压暗遮罩叠加封面，迷你播放器封面位 SHALL 显示封面。
-5. IF 封面缺失或解码失败，音乐块与迷你播放器 SHALL 回落现有默认样式（纯色块），界面零报错。
-6. WHEN 本地音乐文件的 ID3 内嵌封面存在，MusicService 构造 MediaMetadata SHALL 将内嵌封面写入 METADATA_KEY_ALBUM_ART。
+4. WHILE 当前本地曲有内嵌封面，音乐块 SHALL 在曲名行前显示封面缩略图，迷你播放器封面位 SHALL 显示封面；本地空闲且存在远端（蓝牙）活跃会话时，音乐块 SHALL 覆盖显示远端曲名、歌手与封面（CoverCache 异步解码）。
+5. IF 封面缺失或解码失败，音乐块与迷你播放器 SHALL 回落现有默认样式（占位底色/纯色块），界面零报错；同键失败 60s 负缓存。
+6. WHEN 本地音乐文件的 ID3 内嵌封面存在，MusicService SHALL 在首次播放该曲时提取（MediaMetadataRetriever）并写入 METADATA_KEY_ALBUM_ART 发布。
 
 ## F3 配置导出/导入
 

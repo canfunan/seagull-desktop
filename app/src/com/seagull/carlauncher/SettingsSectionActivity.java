@@ -565,6 +565,7 @@ public class SettingsSectionActivity extends BaseActivity {
     private static final int REQ_WALL = 0x5A11;
     private static final int REQ_WALLVIDEO = 0x5A12;
     private static final int REQ_WXWALLDIR = 0x5A13;
+    private static final int REQ_CFGIMP = 0x5A14;
 
     /** K1 壁纸包根目录：SAF 目录树，免存储权限，授予持久化即可长期读。 */
     private void pickWxWallDir() {
@@ -599,6 +600,17 @@ public class SettingsSectionActivity extends BaseActivity {
 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_CFGIMP) {
+            if (res != RESULT_OK || data == null || data.getData() == null) return;
+            String err = ConfigPort.importFrom(this, data.getData());
+            if (err == null) {
+                toast("已导入，点「重启桌面」生效");
+            } else {
+                msgDialog("导入被拒绝", err + "\n\n现有配置没有动。");
+            }
+            render();
+            return;
+        }
         if (req == REQ_WXWALLDIR) {
             if (res != RESULT_OK || data == null || data.getData() == null) return;
             Uri tree = data.getData();
@@ -1128,6 +1140,35 @@ public class SettingsSectionActivity extends BaseActivity {
         });
         note("root 建屏 / 启动拦截 / 事件订阅的总开关。出问题在这里一键回旧链路，"
                 + "等价于 setprop persist.seagull.rootbridge 0，秒级生效不用卸载。");
+
+        sectionLabel("配置备份");
+        actionRow("导出配置", "布局/Dock/主题/天气歌词/目的地等全部配置打包成 JSON 分享", v -> {
+            new Thread(() -> {
+                try {
+                    final java.io.File f = ConfigPort.exportTo(this, currentVersionName());
+                    runOnUiThread(() -> {
+                        if (dead()) return;
+                        if (f == null) { toast("导出文件写不进去"); return; }
+                        toast("已导出：" + f.getName());
+                        try { ConfigPort.share(this, f); } catch (Throwable t) { toast("没有能接文件的应用"); }
+                    });
+                } catch (Throwable t) {
+                    RootLog.w("SettingsSec", "导出失败", t);
+                    runOnUiThread(() -> { if (!dead()) toast("导出失败：" + t.getMessage()); });
+                }
+            }, "cfg-export").start();
+        });
+        actionRow("导入配置", "从文件管理器选导出的 JSON，校验通过才写入（失败不动现有配置）", v -> {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("application/json");
+            try { startActivityForResult(i, REQ_CFGIMP); } catch (Throwable t) {
+                i.setType("*/*");
+                try { startActivityForResult(i, REQ_CFGIMP); } catch (Throwable ignore) {
+                    toast("这台机器没有文件选择器");
+                }
+            }
+        });
 
         sectionLabel("15.10 系统监控");
         // 审计 H4：monitorLine 内含 /proc/stat 双读 + Thread.sleep(120) + 温度文件读，

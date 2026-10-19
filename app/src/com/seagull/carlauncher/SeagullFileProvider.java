@@ -52,13 +52,16 @@ public final class SeagullFileProvider extends ContentProvider {
         return d != null ? d : new java.io.File("/data/data/" + AUTHORITY_PKG + "/files");
     }
 
-    /** 权威字符串拿 files/ 下的文件；别名/大小写不符一律当不存在。 */
+    /** 权威字符串拿 files/ 下的文件；别名/大小写不符一律当不存在。
+     *  允许段：updates/（APK 更新）、export/（O3 配置导出）。 */
     private File fileFor(Uri uri) {
         if (uri == null) return null;
         String auth = uri.getAuthority();
         if (auth != null && !AUTHORITY.equals(auth)) return null;
         java.util.List<String> segs = uri.getPathSegments();
-        if (segs == null || segs.isEmpty() || !"updates".equals(segs.get(0))) return null;
+        if (segs == null || segs.isEmpty()) return null;
+        String root = segs.get(0);
+        if (!"updates".equals(root) && !"export".equals(root)) return null;
         StringBuilder rel = new StringBuilder();
         for (int i = 1; i < segs.size(); i++) {
             String s = segs.get(i);

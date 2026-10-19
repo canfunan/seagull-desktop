@@ -17,6 +17,7 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -72,6 +73,10 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        CrashGuard.install(this);   // O4：兜底器装在一切之前
+        if (CrashGuard.consumeRecovery(this)) {
+            toast("检测到连续崩溃，画布已恢复默认布局");
+        }
         lastSkin = skinSignature();
         selfReport();
         setContentView(buildUi());
@@ -605,6 +610,12 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (pager != null && pager.getCurrentItem() == PAGE_POSTER) gestureWatch(ev);
         else { gsTwoFired = false; gsUpFired = false; }
         return super.dispatchTouchEvent(ev);
+    }
+
+    /** O1 方控媒体键兜底：media 键被路由到前台窗口（launcher）时转 transportControls。 */
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (MediaKeyRouter.handle(event, this)) return true;
+        return super.dispatchKeyEvent(event);
     }
 
     private void gestureWatch(MotionEvent ev) {

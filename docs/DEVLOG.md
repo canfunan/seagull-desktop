@@ -2621,3 +2621,10 @@ Manifest/杂项：
 - dockBody 加指引：替换应用的入口在桌面长按 Dock 图标。
 
 **复盘**：① 前几轮复盘的「权限面/入口面」核对漏了 SettingsHubActivity 的 SECTIONS 表——设置入口本身也是个需要「清单对齐」的面，光核对 SectionActivity 的 case 分支没用，得核对 hub 有没有行；② 替换应用这个 bug 在 M 批次前的代码里就存在（「用户反馈过替换点了没反应」的注释说明 CI 批次修过一半：修了 indexOf 找不到位次，没修 key 格式），根因是两个 key 格式（pkg vs pkg/cls）在代码里并存，写侧转格式时漏了这一处。
+
+## 批次 O 日常可用度（O1-O4）
+- O1 方控媒体键 — MediaKeyRouter 独立类（HomeActivity.dispatchKeyEvent 单点接线）：本地会话(playing/paused)优先→列表第一个→无会话 return false 走系统路由（不抢键）；DOWN 执行/UP 吞掉防二次；SecurityException（通知监听未授权）退回默认路由并 RootLog。转发日志 1s 节流（方控长按连发 down）。javac 绿。
+- O2 专辑封面 — 双路：本地 MusicService 懒提取（PREP 线程 MediaMetadataRetriever，LRU4 按路径）→ publishState 塞 ALBUM_ART → 蓝牙歌词/方控链路白拿；远端 CoverCache（键 title|artist，LRU2，URI 后台单线程解码，同键 60s 负缓存）。音乐块加 musArt 缩略图行（22dp，前置），空闲分支升级「蓝牙播放中」覆盖渲染（Lyrics.activeController 开 public 复用，本地占位为默认渲染再覆盖=无状态残留）；MiniPlayer 加 56dp 封面位。设计偏离记录：块背景遮罩弃（换肤玻璃背景会打架）改前置缩略图，requirements.md AC4 同步改写。javac 绿。
+- O3 配置导出/导入 — ConfigPort：prefs 全键 JSON（String/Boolean 直存、StringSet 打 __set 标记、其余类型跳过记日志=前向保护）+ meta 壳(ts/v/commit)；导出 files/export/ 5 份轮转，SeagullFileProvider 放开 export/ 段（原来只认 updates/）走 ACTION_SEND；导入 SAF 限 5MB 先 parseImport 校验（缺 meta/v/keys/非 JSON 各给可读文案）后单次 apply 批写回+bumpCfg，失败零污染。纯函数 buildExportJson/parseImport 抽出供 JVM 自检。javac 绿。
+- O4 崩溃自恢复 — CrashGuard：uncaught 包装器（RootLog+files/crash/ 10 份轮转+同签名 24h 内 3 次置标记）→ 委托原处理器保系统终止语义；处理链自身全 try-catch（兜底器二次崩溃=什么都留不下）。consumeRecovery 在 HomeActivity.onCreate UI 建立前消费标记：清 mirror_pkg1/2（PipBoard.loadPkg 数据源）画布回落默认布局+一次性 toast。负一屏日志导出并入 crash 文件（最近 5 份原文）。签名=异常类名+首帧（车机同因崩溃首帧稳定，不含 message——同一崩溃点 msg 多变）。javac 绿。
+- 自检基建 — org.json 垫片（shim/org/json，单遍递归下降 ~200 行）：android.jar 的 org.json 是 Stub 跑不了 JVM，ConfigCheck 需要。教训一：垫片只上运行时 classpath，与源码分开发编译（把垫片混进源码编译会让 Lyrics 的真 API 调用对不上垫片子集）；教训二：手写 brace 截取法有暗坑（`sb.length()>0` 恒真这类自欺条件），重写成单遍递归下降一遍过。10 项自检全绿（新增 ConfigCheck 14 项/CrashSigCheck 14 项）。

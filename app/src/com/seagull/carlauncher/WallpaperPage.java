@@ -8,6 +8,7 @@ import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProviderInfo;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.Sensor;
@@ -24,6 +25,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -91,6 +93,7 @@ public final class WallpaperPage extends FrameLayout {
     /** I5 监控块：内存/CPU/存储三行小字，后台线程采样。 */
     private final LinearLayout monBox;
     private final LinearLayout musBox;
+    private final ImageView musArt;
     private final LinearLayout gBox;
     private final TextView musL0, musL1, musL2, musL3;
     private final TextView monL1, monL2, monL3;
@@ -248,11 +251,21 @@ public final class WallpaperPage extends FrameLayout {
         // M5 播放列表块：当前曲 + 队列两行 + 提示行；点按开选歌页，长按菜单
         musBox = new LinearLayout(c);
         musBox.setOrientation(LinearLayout.VERTICAL);
+        // O2 封面缩略图行：封面 + 当前曲行同行；无封面时缩略图 GONE
+        LinearLayout musRow0 = new LinearLayout(c);
+        musRow0.setOrientation(LinearLayout.HORIZONTAL);
+        musRow0.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        musArt = new ImageView(c);
+        musArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        musRow0.addView(musArt, new LayoutParams(dp(22), dp(22)));
         musL0 = tv(c, 15, R.color.leaf, true);          // 状态行：当前曲
+        LinearLayout.LayoutParams mlp0 = new LinearLayout.LayoutParams(-2, -2);
+        mlp0.leftMargin = dp(6);
+        musRow0.addView(musL0, mlp0);
         musL1 = tv(c, 12, R.color.text_dim, true);      // 队列 +1
         musL2 = tv(c, 12, R.color.text_dim, true);      // 队列 +2
         musL3 = tv(c, 11, R.color.text_dim, true);      // 提示行
-        musBox.addView(musL0);
+        musBox.addView(musRow0);
         musBox.addView(musL1, topMargin(c, 3));
         musBox.addView(musL2, topMargin(c, 3));
         musBox.addView(musL3, topMargin(c, 5));
@@ -761,18 +774,62 @@ public final class WallpaperPage extends FrameLayout {
         int i = MusicService.index();
         if (i >= 0 && i < q.size()) {
             MusicLib.Track cur = q.get(i);
+            Bitmap art = MusicService.currentArt();
+            if (art != null && !art.isRecycled()) {
+                musArt.setImageBitmap(art);
+                musArt.setVisibility(VISIBLE);
+            } else {
+                musArt.setImageBitmap(null);
+                musArt.setVisibility(GONE);
+            }
             musL0.setText((MusicService.isPlaying() ? "▶ " : "⏸ ")
                     + MusicLib.label(cur));
             musL1.setText(i + 1 < q.size() ? "下首 " + MusicLib.label(q.get(i + 1)) : "队列到头，播完循环");
             musL2.setText(i + 2 < q.size() ? "再下 " + MusicLib.label(q.get(i + 2)) : "");
             musL3.setText("点按选歌 · 长按菜单");
         } else {
+            // 本地占位为默认渲染；有远端会话（手机音乐经车机出声）再整块覆盖
             List<MusicLib.Track> lib = MusicLib.last();
+            musArt.setImageBitmap(null);
+            musArt.setVisibility(GONE);
             musL0.setText("本地音乐");
             musL1.setText(lib.isEmpty() ? "还没扫到歌" : "共 " + lib.size() + " 首");
             musL2.setText("");
             musL3.setText("点按选歌 · 长按菜单");
+            // O2 蓝牙兜底：曲名 + 封面（CoverCache 异步解码，下一秒 tick 补上）
+            android.media.session.MediaController mc = Lyrics.activeController(getContext());
+            if (mc != null) showRemoteMedia(mc);
         }
+    }
+
+    /** O2 远端会话渲染：曲名行 + 封面缩略图（有封面才露）。 */
+    private void showRemoteMedia(android.media.session.MediaController mc) {
+        android.media.MediaMetadata md = mc.getMetadata();
+        if (md == null) return;
+        String t = str(md, android.media.MediaMetadata.METADATA_KEY_TITLE);
+        if (t == null || t.trim().isEmpty()) return;
+        String a = str(md, android.media.MediaMetadata.METADATA_KEY_ARTIST);
+        boolean playing = false;
+        android.media.session.PlaybackState ps = mc.getPlaybackState();
+        if (ps != null) playing = ps.getState() == android.media.session.PlaybackState.STATE_PLAYING;
+        Bitmap art = CoverCache.get(t, a, md);
+        if (art != null && !art.isRecycled()) {
+            musArt.setImageBitmap(art);
+            musArt.setVisibility(VISIBLE);
+        } else {
+            musArt.setImageBitmap(null);
+            musArt.setVisibility(GONE);
+        }
+        musL0.setText((playing ? "▶ " : "⏸ ") + t + " · 蓝牙");
+        musL1.setText(a == null || a.trim().isEmpty() ? "手机/蓝牙音乐播放中" : a + " · 蓝牙播放中");
+        musL2.setText("");
+        musL3.setText("本地选歌点按这里");
+    }
+
+    /** MediaMetadata 文本安全读（含 trim），null 返回 null。 */
+    private static String str(android.media.MediaMetadata md, String key) {
+        CharSequence cs = md == null ? null : md.getText(key);
+        return cs == null ? null : cs.toString();
     }
 
     /** 桌面 tick 驱动扫描（没扫过才起一次）；结果回主线程刷块。 */

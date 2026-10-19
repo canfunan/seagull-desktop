@@ -6,10 +6,13 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaMetadata;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
@@ -51,6 +54,40 @@ public class MusicService extends Service {
 
     public static List<MusicLib.Track> queue() { return queue; }
     public static int index() { return idx; }
+
+    /** O2 内嵌封面缓存：路径→位图，4 张 LRU。 */
+    private static final android.util.LruCache<String, Bitmap> ART =
+            new android.util.LruCache<String, Bitmap>(4);
+
+    /** 当前曲封面（无当前曲/未提取返回 null）；音乐块与迷你播放器共用。 */
+    public static Bitmap currentArt() {
+        List<MusicLib.Track> q = queue;
+        int i = idx;
+        if (i < 0 || i >= q.size()) return null;
+        return ART.get(q.get(i).path);
+    }
+
+    /** 提取 ID3/容器内嵌封面，采样到 256px 内（OOM 防护）；无图返回 null。 */
+    private static Bitmap extractArt(String path) {
+        MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+        try {
+            mmr.setDataSource(path);
+            byte[] raw = mmr.getEmbeddedPicture();
+            if (raw == null || raw.length == 0) return null;
+            Bitmap src = BitmapFactory.decodeByteArray(raw, 0, raw.length);
+            if (src == null) return null;
+            int m = Math.max(src.getWidth(), src.getHeight());
+            if (m <= 256) return src;
+            float f = 256f / m;
+            return Bitmap.createScaledBitmap(src,
+                    Math.max(1, (int) (src.getWidth() * f)),
+                    Math.max(1, (int) (src.getHeight() * f)), true);
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            try { mmr.release(); } catch (Throwable ignore) { }
+        }
+    }
     public static boolean isPlaying() { return playing; }
 
     /* ---------------- 静态控制口（UI 直接调） ---------------- */
@@ -165,6 +202,7 @@ public class MusicService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        CoverCache.init(this);   // O2 封面管线 app context
         am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         session = new MediaSession(this, "SeagullLocalMusic");
         session.setCallback(cb);
@@ -265,6 +303,12 @@ public class MusicService extends Service {
                 try { p.seekTo(seek); } catch (Throwable ignore) {}
             }
             playing = true;
+            // O2 内嵌封面懒提取：首次播放该曲时提取一次入 LRU（PREP 线程，别挡 UI）
+            Bitmap art = ART.get(t.path);
+            if (art == null) {
+                art = extractArt(t.path);
+                if (art != null) ART.put(t.path, art);
+            }
             ui.post(() -> publishState(t, p.getDuration(), true));
         } catch (Throwable e) {
             android.util.Log.w(TAG, "起播失败: " + e);
@@ -316,14 +360,17 @@ public class MusicService extends Service {
     };
 
     /** 元数据只带标准键（框架 MediaMetadata 无自定义歌词键）；.lrc 由
-     *  Lyrics 侧按 title/artist 找同名文件 + MusicLib.lrcFor 兜底（M4）。 */
+     *  Lyrics 侧按 title/artist 找同名文件 + MusicLib.lrcFor 兜底（M4）。
+     *  O2：内嵌封面已提取则一并发布，蓝牙歌词/方控链路的读取方白拿。 */
     private void publishState(MusicLib.Track t, int durMs, boolean nowPlaying) {
         if (session == null) return;
-        MediaMetadata mb = new MediaMetadata.Builder()
+        MediaMetadata.Builder b = new MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE, t.title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, t.artist)
-                .putLong(MediaMetadata.METADATA_KEY_DURATION, durMs)
-                .build();
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, durMs);
+        Bitmap art = ART.get(t.path);
+        if (art != null) b.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, art);
+        MediaMetadata mb = b.build();
         try { session.setMetadata(mb); } catch (Throwable ignore) {}
         PlaybackState pb = new PlaybackState.Builder()
                 .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
