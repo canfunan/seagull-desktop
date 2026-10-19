@@ -40,7 +40,7 @@ app/
   src/com/seagull/carlauncher/
     BaseActivity.java          公共基类：fontScale + Skin + 方向 + model
     LauncherModel.java         全量配置单一事实源（最大的文件，改它要小心）
-    HomeActivity.java          桌面宿主：顶栏 + 内容层（PipBoard 画中画首屏 ⇄ DesktopView 网格）+ 底栏
+    HomeActivity.java          桌面宿主：顶栏 + 内容层（PipBoard 画中画首屏 ⇄ DesktopView 网格）+ 底栏（DockBar，批次 CH 车机玻璃风格）
     DesktopView.java           桌面网格 + 组件条 + Dock + 拖拽压合 + 长按菜单
     Skin.java / Theme.java     运行时配色 / 内置 14 套主题
     Wallpaper.java             壁纸导入 + 亮度抽样
@@ -55,7 +55,7 @@ app/
     MirrorSlot.java            虚拟屏镜像槽（两块；root TRUSTED 屏优先 → 私有屏直建 → TRUSTED 角色 → 投影兜底；1:1）
     MirrorHost.java            画中画槽进程级持有者：退出页面不断屏、桌面自愈、清空入口
     PipBoard.java              画中画面板：单焦点/卡片化/空态大按钮/环境光遮罩 + 部署/授权/自愈（HomeActivity 与 MirrorActivity 共用）；事件订阅（BUMP 自愈/ROUTED 提示）
-    MiniPlayer.java            36dp 媒体条（三键 + 热区外扩 + 会话不活跃隐藏）
+    MiniPlayer.java            36dp 媒体条（批次 CH 退役：媒体控件并入 DockBar 横幅；文件留档未删）
     MediaListenerService.java  媒体会话快照 + transport control（MiniPlayer 数据源，通知监听器 getActiveSessions）
     CanvasSource.java          画布数据源接口（MirrorSlot 已实现；StreamCanvasSource 占位）
     TouchTransformer.java      画布→显示坐标缩放（identity 恒 1 / scaling 等比 + 零保护，纯 JVM 可自检）

@@ -12,6 +12,68 @@
 
 ---
 
+## 批次 CH — 底部 Dock 整条重画：车机悬浮玻璃底栏，媒体控件内嵌，退出键移除
+
+### 目标
+
+用户给了车机底栏视觉稿：左「四格多应用菜单 + 粗体时间」、中「圆形应用图标横排 +
+媒体横幅预览条（歌名 + 暂停/下一曲）」、右「品牌 Logo + 5G 网络标识 + 电量百分比」；
+磨砂玻璃、大圆角、悬浮常驻；音乐/地图用什么软件就显示什么图标；退出键不要。
+
+### 改了什么
+
+**DockBar 整条重写**（批次 CG 的 CarPlay 五键版退役）：
+- 三段布局：左 = 四格菜单（G_APPS 细线 2x2 方格）+ 16sp 粗体 HH:mm；中 =
+  `model.dock` 真实应用图标（40dp，outline 圆形裁剪 clipToOutline，横向 10dp 等距，
+  上限 6 个）+ 媒体横幅胶囊（媒体 App 图标 22dp + 歌名 maxWidth 118dp 截断 +
+  播放/暂停、下一曲两键，直发 `MediaListenerService` transport control）；
+  右 = 海鸥 Logo（双 quadTo 弧线剪影，点击回桌面）+ 网络标识（WiFi 优先，蜂窝
+  按代际 5G/4G/3G/2G）+ 电池自绘（外壳 + 正极帽 + 电量填充，≤20% 转警示橙）+ 百分比。
+- 磨砂玻璃：80% 透明近黑圆角矩形（`0xCC121216`）+ 1px 玻璃描边 + 顶部高光线，
+  恒深不跟主题（沿用批次 CG 口径：真模糊需 API 31 RenderEffect，车机不满足）。
+- 悬浮：HomeActivity 侧 DOCK_SIDE=10 / DOCK_BOTTOM=8 留边，条高 66dp，圆角 24dp；
+  `dockH()` 仍含底边距（74dp），收起滑出 86dp 依旧完全离屏，批次 BB 收起/唤出
+  机制原样保留。
+- Listener 重构：`onDock(int)` 五常量改为 `onApps() / onApp(App) / onHome()` 三回调。
+  四格菜单 = APPS ⇄ MAIN 双态；dock 应用按 `windowOf` 路由（1/2 号窗口走
+  `savePkg+expandSlot`，其余 `launch()` 全屏）——与设置页 Dock 组既有文案口径一致；
+  Logo = 回桌面主页。`syncDock`/`setActive` 高亮体系随五键一起删除。
+
+**MiniPlayer 退役**：媒体控件并入 Dock 横幅后，`buildMainPage` 不再挂 36dp 媒体条，
+`applyMainInsets`（媒体条显形画布让位逻辑）整体删除；横幅空白区点击接原
+`focusMediaCanvas`（导焦画布）。`MiniPlayer.java` 文件留档未删。
+
+### 复盘
+
+- **单应用内媒体控制不可见（用户拍板：维持）**：旧 MiniPlayer 常浮在画布上方，
+  进应用也能控音乐；新设计横幅在 Dock 里，进应用 Dock 收起 → 想控音乐先键条唤出
+  Dock。视觉稿「底栏常驻」与批次 BB「进应用收起拿满屏」二选一，用户选了后者。
+- **媒体图标缓存**：横幅刷新很勤（会话回调 + 30s 兜底拍），`getApplicationIcon`
+  每次 Binder，加 8 项静态 LruCache；命中走 `ConstantState.newDrawable` 出独立副本
+  （同 `LauncherModel.icon` 口径，防多 View bounds 打架）。
+- **网络标识诚实性**：无 READ_PHONE_STATE 时 `getNetworkType` 多半 UNKNOWN，
+  兜底显示 5G（车机基本 4G/5G 在线）；WiFi 检测（ACCESS_NETWORK_STATE）是真的。
+  项目自带 android.jar 无 `NETWORK_TYPE_LTE_CA` 常量，LTE 分支只留主常量。
+- **宽度预算**：满配（5-6 图标 + 横幅 + 左右两段）约 750dp；车机横屏 ≥850dp 安全，
+  竖屏/低密横屏可能裁横幅尾部 —— 横幅歌名 maxWidth 118dp 已是压缩后的结果，
+  再窄只能降 MAX_ICONS，留待真机反馈。
+- 按钮热区 22~26dp 无外扩（旧 MiniPlayer 有 12dp 外扩），真机若误触多再补。
+
+### 验证
+
+javac 全量类型检查 OK（项目自带 android.jar + xposed-api-82.jar）；纯 JVM 自检
+LrcCheck 15 项 / PrivCodecCheck 39 项 / StackListCheck 30 项全过；R 引用零新增
+（纯代码建 UI），aapt2 阶段无新风险。真机项标 🟡：玻璃观感 / 圆形图标裁剪 /
+横幅与图标同排不溢出 / 唤出 Dock 控音乐路径。
+
+### 遗留
+
+- `MiniPlayer.java` 待新版真机确认后删除。
+- 竖屏宽度预算（上面复盘第 4 条）。
+- 底栏状态（时间/电量/网络）只在 30s tick 与整屏重建时刷，秒级时钟不走这条。
+
+---
+
 ## 批次 CG — 两句体验需求：槽 2「点击下方图标才进入」+ 底部导航栏整条换成苹果 CarPlay 风格
 
 ### ① 槽 2 点击才进入 —— 闸门必须是「进程级」的，且要拦住所有自动部署路径

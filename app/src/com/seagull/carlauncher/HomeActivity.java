@@ -32,7 +32,7 @@ import java.util.List;
  *   [0] 壁纸桌面（WallpaperPage）         —— 左滑过来
  *   [1] 主界面（PipBoard 画布：地图 / 音乐）—— 默认页，进应用就是它
  *   [2] 全部应用（AppGridPage）            —— 右滑过来
- *   + 常驻底部导航栏（DockBar：首页/地图/音乐/其他/退出），三页共用同一条
+ *   + 常驻底部导航栏（DockBar：车机玻璃 Dock，媒体控件内嵌其中），三页共用同一条
  *
  * 与参考一致的几条硬约束：
  *   · 没有原生顶栏（参考里主布局顶部只有状态栏留白，没有标题条）——
@@ -58,7 +58,6 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     private WallpaperPage poster;
     private AppGridPage appsPage;
     private PipBoard pip;
-    private MiniPlayer mini;
     private IslandView island;
     private NavCard navCard;
     private TextView pipBox;
@@ -178,6 +177,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             if (poster != null) poster.tick();
             if (island != null && model != null) island.bind(model);
             if (pip != null) pip.updateHintsPublic();
+            if (dock != null) dock.tick();
             refreshMini();   // 30s 一次兜底扫描；播放态变化有 MediaController 回调即时刷
             // 周期自愈：应用中途把新 activity 落到默认屏（盖住桌面=返回也没用）时，
             // 30s 内搬回虚拟屏。onResume 也会立即跑一次。
@@ -196,10 +196,10 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
                 getResources().getDisplayMetrics()));
     }
 
-    /** 底部导航栏（批次 CG 起 CarPlay 风格）：通栏贴底，无侧边距/离屏留白，74dp 条高。 */
-    private static final int DOCK_H = 74;
-    private static final int DOCK_SIDE = 0;
-    private static final int DOCK_BOTTOM = 0;
+    /** 底部导航栏（批次 CH 车机玻璃 Dock）：悬浮贴底，四周留边 + 大圆角，66dp 条高。 */
+    private static final int DOCK_H = 66;
+    private static final int DOCK_SIDE = 10;
+    private static final int DOCK_BOTTOM = 8;
 
     private int dockH() { return dp(DOCK_H + DOCK_BOTTOM); }
 
@@ -226,8 +226,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         plp.bottomMargin = dockH();   // 常驻导航栏不被翻页内容盖住
         root.addView(pager, plp);
 
-        // 常驻底部导航栏（批次 CG：CarPlay 风格通栏深色条，纯图标 + iOS 式选中圆点）
-        dock = new DockBar(this, this::onDock);
+        // 常驻底部导航栏（批次 CH：车机玻璃 Dock —— 四格菜单+时间 | 应用图标+媒体横幅 | Logo+网络+电量）
+        dock = new DockBar(this, model, dockListener);
+        dock.setOnBannerClick(this::focusMediaCanvas);
         FrameLayout.LayoutParams dlp = new FrameLayout.LayoutParams(-1, dp(DOCK_H), Gravity.BOTTOM);
         dlp.leftMargin = dp(DOCK_SIDE);
         dlp.rightMargin = dp(DOCK_SIDE);
@@ -263,40 +264,33 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         root.addView(pipBox, new FrameLayout.LayoutParams(-1, -1));
 
         pager.setCurrentItem(PAGE_MAIN, false);   // 首屏 = 主界面（地图/音乐）
-        syncDock(DockBar.HOME);
         return root;
     }
 
-    /** 主界面（第 1 页）：PipBoard 双画布（地图 + 音乐）+ 底部常驻媒体条。 */
+    /** 主界面（第 1 页）：PipBoard 双画布（地图 + 音乐）。媒体控件已内嵌进底部 Dock。 */
     private FrameLayout buildMainPage() {
         FrameLayout page = new FrameLayout(this);
         page.setBackgroundColor(Skin.c(R.color.ground));
 
         pip = new PipBoard(this, slot -> PipBoard.showPicker(this, slot, pip), true, model);
-        // 点画布 = 进入该应用：铺满内容区 + 底栏高亮跟随（导航栏原地不动）
+        // 点画布 = 进入该应用：铺满内容区（导航栏原地不动）
         pip.setOnEnterSlot(this::expandSlot);
-        // 批次 AA：画布键条「桌面」= 与导航栏首页同路径 —— 退回分屏主页，
+        // 批次 AA：画布键条「桌面」= 退回分屏主页，
         // 应用留在虚拟屏后台不杀，再点画布秒回（MirrorHost 只断 Surface 不拆屏）
         pip.setOnExitSlot(which -> {
             pip.showSplit();
             enableSwipe(true);
             setDockCollapsed(false);     // 回桌面 = 导航栏必须回来
-            syncDock(DockBar.HOME);
         });
         // 批次 BB：键条「导航栏」键 = 收起/唤出 Dock 导航栏
         pip.setOnToggleDock(this::toggleDock);
-        // 批次 AD：画布直接铺到内容区底部（与底栏零缝隙）；只有媒体条显形时才让出 36dp
+        // 批次 AD：画布直接铺到内容区底部（与底栏零缝隙）
         page.addView(pip, new FrameLayout.LayoutParams(-1, -1));
-
-        // 常驻媒体条：层级在画布之上，没媒体会话时整条隐藏
-        mini = new MiniPlayer(this);
-        mini.setOnInfoClick(this::focusMediaCanvas);
-        page.addView(mini, new FrameLayout.LayoutParams(-1, dp(36), Gravity.BOTTOM));
         return page;
     }
 
     /**
-     * MiniPlayer 空白区点击：媒体源正在画布里 → 导焦到那块画布（不新开页面）；
+     * Dock 媒体横幅点击：媒体源正在画布里 → 导焦到那块画布（不新开页面）；
      * 媒体源在后台（没进画布）→ 什么都不做，不挤占当前应用。
      */
     private void focusMediaCanvas() {
@@ -307,27 +301,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         else if (s.pkg.equals(PipBoard.loadPkg(this, 2))) pip.focusSlot(2);
     }
 
-    /** 刷媒体条：没会话 → 整条隐藏不占位。 */
+    /** 刷媒体横幅（内嵌在底部 Dock 中段）：没会话 → 整条隐藏不占位。 */
     private void refreshMini() {
-        if (mini == null) return;
+        if (dock == null) return;
         MediaListenerService.refresh(this);
-        mini.bind(MediaListenerService.snap());
-        applyMainInsets();
-    }
-
-    /**
-     * 媒体条显形时画布让出 36dp，隐藏时归零 —— 这条底边距就是用户看到的
-     * 「底栏和画中画之间那条大缝」。没媒体在放的时候必须为 0，画布贴到底栏。
-     */
-    private void applyMainInsets() {
-        if (pip == null || mini == null) return;
-        if (!(pip.getLayoutParams() instanceof FrameLayout.LayoutParams)) return;
-        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) pip.getLayoutParams();
-        int want = mini.getVisibility() == View.VISIBLE ? dp(36) : 0;
-        if (lp.bottomMargin != want) {
-            lp.bottomMargin = want;
-            pip.setLayoutParams(lp);
-        }
+        dock.bindMedia(MediaListenerService.snap());
     }
 
     /**
@@ -364,35 +342,36 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     /* ------------------------- 底部导航栏 ------------------------- */
 
-    private void onDock(int which) {
-        switch (which) {
-            case DockBar.HOME:
-                // 「首页」= 桌面主页：从单应用模式退回分屏桌面，导航栏一直在原位
-                if (pip != null) pip.showSplit();
-                setPage(PAGE_MAIN, true);
-                enableSwipe(true);
-                setDockCollapsed(false);
-                syncDock(DockBar.HOME);
-                break;
-            case DockBar.MAP:
-                expandSlot(1);
-                break;
-            case DockBar.MUSIC:
-                expandSlot(2);
-                break;
-            case DockBar.APPS:
-                if (pip != null) pip.showSplit();
-                setPage(PAGE_APPS, true);
-                enableSwipe(true);
-                setDockCollapsed(false);
-                syncDock(DockBar.APPS);
-                break;
-            case DockBar.EXIT:
-            default:
-                exitLauncher();
-                break;
+    /**
+     * 玻璃 Dock 回调（批次 CH）：四格菜单 = 全部应用页 ⇄ 桌面主页切换；
+     * Dock 应用按「默认开在几号窗口」路由（1/2 号窗口走画布，其余直接启动）；
+     * Logo = 回桌面主页。
+     */
+    private final DockBar.Listener dockListener = new DockBar.Listener() {
+        @Override public void onApps() {
+            if (pip != null) pip.showSplit();
+            boolean toApps = pager == null || pager.getCurrentItem() != PAGE_APPS;
+            enableSwipe(true);
+            setDockCollapsed(false);
+            setPage(toApps ? PAGE_APPS : PAGE_MAIN, true);
         }
-    }
+        @Override public void onApp(LauncherModel.App a) {
+            if (a == null || a.pkg == null || a.pkg.isEmpty()) return;
+            int slot = model == null ? 0 : model.windowOf(a.pkg);
+            if (slot > 0) {
+                PipBoard.savePkg(HomeActivity.this, slot, a.pkg);
+                expandSlot(slot);
+            } else {
+                launch(a.pkg);
+            }
+        }
+        @Override public void onHome() {
+            if (pip != null) pip.showSplit();
+            setPage(PAGE_MAIN, true);
+            enableSwipe(true);
+            setDockCollapsed(false);
+        }
+    };
 
     /**
      * 切到具体应用界面（批次 AD）：把该槽的画布铺满内容区，底部导航栏原地不动。
@@ -418,7 +397,6 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             pip.deploySlotPublic(which);
             pip.healSlotSoon(which);     // singleTask 拉回默认屏的兜底（学参考 xphook 语义）
         }
-        syncDock(which == 1 ? DockBar.MAP : DockBar.MUSIC);
     }
 
     private void setPage(int index, boolean animate) {
@@ -429,20 +407,13 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (pager != null) pager.setSwipeEnabled(on);
     }
 
-    /** 翻页时同步导航栏高亮（第 2 页高亮「其他」，其余高亮「首页」）。 */
+    /** 翻页回调：单应用模式锁了翻页，万一被程序切走，这里兜底退回分屏。 */
     private void onPageChanged(int index) {
-        // 单应用模式锁了翻页，正常划不动；万一被程序切走，这里兜底退回分屏
         if (index != PAGE_MAIN && pip != null && pip.isSingle()) {
             pip.showSplit();
             enableSwipe(true);
             setDockCollapsed(false);
         }
-        if (index == PAGE_APPS) syncDock(DockBar.APPS);
-        else syncDock(DockBar.HOME);
-    }
-
-    private void syncDock(int which) {
-        if (dock != null) dock.setActive(which);
     }
 
     /* ---------------- 批次 BB：导航栏收起 / 唤出 ---------------- */
@@ -486,15 +457,6 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         setDockCollapsed(!dockCollapsed);
     }
 
-    /** 退出桌面：把桌面退到后台，回到系统上一屏。 */
-    private void exitLauncher() {
-        try {
-            moveTaskToBack(true);
-        } catch (Throwable t) {
-            finish();
-        }
-    }
-
     /* ------------------------- AppGridPage.Host ------------------------- */
 
     @Override public void onOpenApp(String pkg, int slot) {
@@ -510,7 +472,6 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             pip.deploySlotPublic(s);
             pip.focusSlot(s);
         }
-        syncDock(s == 1 ? DockBar.MAP : DockBar.MUSIC);
     }
 
     @Override public void onPinApp(String pkg) {

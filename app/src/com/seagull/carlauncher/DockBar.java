@@ -2,130 +2,403 @@ package com.seagull.carlauncher;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.Outline;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewOutlineProvider;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * 常驻底部导航栏 —— 苹果 CarPlay 风格（批次 CG 整条重画）。
+ * 常驻底部 Dock —— 车机风格悬浮磨砂玻璃底栏（批次 CH 整条重画）。
  *
- * 用户原话「导航栏实在太丑了，想要苹果互联风格的图标和导航栏」。CarPlay 底栏的
- * 硬特征逐条落地：
- *   · 通栏贴底、无侧边距、无圆角，深色玻璃观感（车机没有 RenderEffect 毛玻璃，
- *     用 94% 不透明近黑 + 顶部 1px 高光模拟「玻璃上沿」）；
- *   · 只有图标没有文字、没有竖分隔线 —— 五个键等宽铺满（CarPlay dock 就是纯图标）；
- *   · 图标是白色细线几何：统一线宽 ~7%、圆头圆角，深浅主题都不换色
- *     （CarPlay 恒深色，浅色主题下这条深底栏同样成立）；
- *   · 选中态 = 纯白 + iOS 式小圆点，未选中 = 55% 白。
+ * 布局从左到右三段（用户给的车机底栏视觉稿）：
+ *   · 左：四格应用菜单（进全部应用页）+ 数字时间（白色无衬线粗体）；
+ *   · 中：Dock 应用真实图标（圆形裁剪、横向等距）+ 媒体横幅预览条 ——
+ *     当前在放的歌直接显示「音乐 App 图标 + 歌名 + 暂停/播放 + 下一曲」，
+ *     媒体控件嵌在 Dock 里，不再单独开大卡片（MiniPlayer 退役）；
+ *   · 右：海鸥 Logo（点击回桌面）+ 网络标识（WiFi/5G/4G/3G/2G）+ 电池图标与电量；
+ *     全部轻量化单色白，不抢视觉重心。退出键删除。
  *
- * 图标语义（对齐 CarPlay/苹果的既有认知）：
- *   首页 = 圆环（CarPlay 左下角 home 键就是这个白圈）；地图 = 导航箭头（实心）；
- *   音乐 = 连尾双音符 ♫（Apple Music 字形）；其他 = 四圆角方格（iOS 主屏网格）；
- *   退出 = 电源（弧 + 竖线）。
+ * 视觉：磨砂玻璃 = 车机没有 RenderEffect（API 31 才有），用 80% 透明近黑底
+ * + 1px 玻璃描边 + 顶部高光线模拟；大圆角 + 四周留边悬浮在壁纸/内容之上。
+ * 图标恒白细线几何，不跟主题换色（玻璃条恒深，亮壁纸下同样成立）。
+ *
+ * 音乐/地图用什么软件就显示什么图标：Dock 图标取自 LauncherModel.dock 的
+ * 真实应用图标；媒体横幅图标取当前媒体会话包名的应用图标。
  */
 public class DockBar extends LinearLayout {
 
-    public static final int HOME = 0;
-    public static final int MAP = 1;
-    public static final int MUSIC = 2;
-    public static final int APPS = 3;
-    public static final int EXIT = 4;
-
+    /** 回调：四格菜单 / Dock 应用 / Logo 回桌面。 */
     public interface Listener {
-        void onDock(int which);
+        void onApps();
+        void onApp(LauncherModel.App a);
+        void onHome();
     }
 
-    private static final int[] ICONS = {HOME, MAP, MUSIC, APPS, EXIT};
+    private static final int MAX_ICONS = 6;
 
-    /** CarPlay 恒深色：底条 94% 近黑，图标纯白 / 未选中 55% 白 / 圆点 60% 白。 */
-    private static final int BAR_BG = 0xF0121214;
-    private static final int BAR_EDGE = 0x26FFFFFF;   // 顶部玻璃上沿高光
-    private static final int INK_ON = 0xFFFFFFFF;
-    private static final int INK_OFF = 0x8CFFFFFF;
-    private static final int DOT = 0x99FFFFFF;
+    /** 玻璃条恒深色：底 80% 近黑、描边与高光白系。图标纯白。 */
+    private static final int BAR_BG = 0xCC121216;
+    private static final int BAR_EDGE = 0x22FFFFFF;
+    private static final int BAR_TOP = 0x30FFFFFF;
+    private static final int BAR_CORNER_DP = 24;
+    private static final int INK = 0xFFFFFFFF;
+    private static final int INK_DIM = 0xB3FFFFFF;
+    private static final int BANNER_BG = 0x2EFFFFFF;
 
-    private final DockIconView[] icons = new DockIconView[ICONS.length];
-    private final View[] dots = new View[ICONS.length];
-    private int active = HOME;
+    /** 白色细线几何图标：四格菜单 / 海鸥 Logo / 播放三键。 */
+    private static final int G_APPS = 0;
+    private static final int G_LOGO = 1;
+    private static final int G_PLAY = 2;
+    private static final int G_PAUSE = 3;
+    private static final int G_NEXT = 4;
 
-    public DockBar(Context c, final Listener listener) {
+    private final Listener listener;
+    private LauncherModel model;
+
+    private final LinearLayout apps;
+    private final TextView clock;
+    private final LinearLayout media;
+    private final ImageView mediaIcon;
+    private final TextView mediaTitle;
+    private final GlyphIconView btnPlay;
+    private final TextView netLabel;
+    private final BatteryView battery;
+    private final TextView batteryPct;
+
+    private Runnable onBannerClick;
+
+    /** 媒体 App 图标小缓存：横幅刷新很勤，别每次都走 Binder。 */
+    private static final android.util.LruCache<String, Drawable> MEDIA_ICONS =
+            new android.util.LruCache<>(8);
+
+    public DockBar(Context c, LauncherModel m, final Listener l) {
         super(c);
+        model = m;
+        listener = l;
         setOrientation(HORIZONTAL);
         setGravity(Gravity.CENTER_VERTICAL);
-        setBackground(new BarDrawable());
-        setPadding(dp(6), 0, dp(6), 0);
+        setBackground(new GlassDrawable(BAR_CORNER_DP));
+        int padX = dp(c, 14);
+        setPadding(padX, 0, padX, 0);
+        setClipToOutline(true);
+        setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(),
+                        dp(view.getContext(), BAR_CORNER_DP));
+            }
+        });
 
-        for (int i = 0; i < ICONS.length; i++) {
-            final int which = ICONS[i];
-            LinearLayout item = new LinearLayout(c);
-            item.setOrientation(VERTICAL);
-            item.setGravity(Gravity.CENTER);
+        /* ---- 左段：四格菜单 + 时间 ---- */
+        LinearLayout left = new LinearLayout(c);
+        left.setOrientation(HORIZONTAL);
+        left.setGravity(Gravity.CENTER_VERTICAL);
 
-            DockIconView icon = new DockIconView(c, which);
-            icons[i] = icon;
-            item.addView(icon, new LinearLayout.LayoutParams(dp(30), dp(30)));
+        GlyphIconView menu = new GlyphIconView(c, G_APPS);
+        menu.setOnClickListener(v -> { if (listener != null) listener.onApps(); });
+        left.addView(menu, new LinearLayout.LayoutParams(dp(c, 24), dp(c, 24)));
 
-            // iOS 式选中圆点：不认识的图标也能看出「现在在哪一页」
-            View dot = new View(c);
-            dot.setBackground(Skin.round(DOT, 2f));
-            dot.setVisibility(INVISIBLE);
-            dots[i] = dot;
-            LinearLayout.LayoutParams dl = new LinearLayout.LayoutParams(dp(4), dp(4));
-            dl.topMargin = dp(4);
-            item.addView(dot, dl);
+        clock = new TextView(c);
+        clock.setTextColor(INK);
+        clock.setTextSize(16);
+        clock.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        clock.setIncludeFontPadding(false);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
+        clp.leftMargin = dp(c, 9);
+        left.addView(clock, clp);
+        addView(left, new LinearLayout.LayoutParams(-2, -2));
 
-            item.setPadding(dp(4), dp(4), dp(4), dp(2));
-            item.setOnClickListener(v -> { if (listener != null) listener.onDock(which); });
-            addView(item, new LinearLayout.LayoutParams(0, -2, 1f));
+        /* ---- 中段：Dock 应用图标 + 媒体横幅（居中，两侧让位） ---- */
+        LinearLayout center = new LinearLayout(c);
+        center.setOrientation(HORIZONTAL);
+        center.setGravity(Gravity.CENTER_VERTICAL);
+        addView(center, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        apps = new LinearLayout(c);
+        apps.setOrientation(HORIZONTAL);
+        apps.setGravity(Gravity.CENTER_VERTICAL);
+        center.addView(apps, new LinearLayout.LayoutParams(-2, -2));
+
+        media = new LinearLayout(c);
+        media.setOrientation(HORIZONTAL);
+        media.setGravity(Gravity.CENTER_VERTICAL);
+        media.setBackground(Skin.round(BANNER_BG, 18));
+        media.setPadding(dp(c, 8), dp(c, 5), dp(c, 4), dp(c, 5));
+        media.setVisibility(GONE);
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-2, -2);
+        mlp.leftMargin = dp(c, 10);
+        center.addView(media, mlp);
+        media.setOnClickListener(v -> { if (onBannerClick != null) onBannerClick.run(); });
+
+        mediaIcon = new ImageView(c);
+        media.addView(mediaIcon, new LinearLayout.LayoutParams(dp(c, 22), dp(c, 22)));
+
+        mediaTitle = new TextView(c);
+        mediaTitle.setTextColor(INK);
+        mediaTitle.setTextSize(13);
+        mediaTitle.setSingleLine(true);
+        mediaTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        mediaTitle.setMaxWidth(dp(c, 118));
+        mediaTitle.setPadding(dp(c, 7), 0, dp(c, 4), 0);
+        media.addView(mediaTitle, new LinearLayout.LayoutParams(-2, -2));
+
+        btnPlay = new GlyphIconView(c, G_PAUSE);
+        btnPlay.setOnClickListener(v -> MediaListenerService.playPause());
+        media.addView(btnPlay, new LinearLayout.LayoutParams(dp(c, 26), dp(c, 26)));
+
+        GlyphIconView btnNext = new GlyphIconView(c, G_NEXT);
+        btnNext.setOnClickListener(v -> MediaListenerService.next());
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(dp(c, 26), dp(c, 26));
+        nlp.leftMargin = dp(c, 4);
+        media.addView(btnNext, nlp);
+
+        /* ---- 右段：Logo + 网络 + 电池 ---- */
+        LinearLayout right = new LinearLayout(c);
+        right.setOrientation(HORIZONTAL);
+        right.setGravity(Gravity.CENTER_VERTICAL);
+
+        GlyphIconView logo = new GlyphIconView(c, G_LOGO);
+        logo.setOnClickListener(v -> { if (listener != null) listener.onHome(); });
+        right.addView(logo, new LinearLayout.LayoutParams(dp(c, 22), dp(c, 22)));
+
+        netLabel = new TextView(c);
+        netLabel.setTextColor(INK);
+        netLabel.setTextSize(12);
+        netLabel.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        netLabel.setIncludeFontPadding(false);
+        LinearLayout.LayoutParams nlpl = new LinearLayout.LayoutParams(-2, -2);
+        nlpl.leftMargin = dp(c, 10);
+        right.addView(netLabel, nlpl);
+
+        battery = new BatteryView(c);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(c, 24), dp(c, 13));
+        blp.leftMargin = dp(c, 10);
+        right.addView(battery, blp);
+
+        batteryPct = new TextView(c);
+        batteryPct.setTextColor(INK);
+        batteryPct.setTextSize(12);
+        batteryPct.setIncludeFontPadding(false);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-2, -2);
+        plp.leftMargin = dp(c, 4);
+        right.addView(batteryPct, plp);
+        addView(right, new LinearLayout.LayoutParams(-2, -2));
+
+        bind(model);
+        tick();
+    }
+
+    /** 媒体横幅空白区点击（宿主接「导焦到媒体画布」）。 */
+    public void setOnBannerClick(Runnable r) { onBannerClick = r; }
+
+    /** 重画 Dock 应用区（固定列表变了 / 换肤后调用）。 */
+    public void bind(LauncherModel m) {
+        model = m;
+        apps.removeAllViews();
+        if (m == null) return;
+        List<String> keys = m.dock.isEmpty() ? defaultDockKeys(m) : m.dock;
+        int n = Math.min(keys.size(), Math.max(1, Math.min(m.dockCount, MAX_ICONS)));
+        int added = 0;
+        Context c = getContext();
+        for (String k : keys) {
+            if (added >= n) break;
+            LauncherModel.App a = m.find(k);
+            if (a == null) continue;
+            Drawable d = m.icon(a);
+            if (d == null) continue;
+            ImageView iv = new ImageView(c);
+            iv.setImageDrawable(d);
+            roundClip(iv, 20);
+            iv.setOnClickListener(v -> { if (listener != null) listener.onApp(a); });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(c, 40), dp(c, 40));
+            if (added > 0) lp.leftMargin = dp(c, 10);
+            apps.addView(iv, lp);
+            added++;
         }
-        syncActive();
+        apps.setVisibility(added > 0 ? VISIBLE : GONE);
     }
 
-    /** 高亮某一项（由页面切换 / 点击驱动）。 */
-    public void setActive(int which) {
-        active = which;
-        syncActive();
+    /** 媒体横幅：没会话整条隐藏不占位；有则显示 App 图标 + 歌名 + 播放态。 */
+    public void bindMedia(MediaListenerService.Snap s) {
+        if (s == null || s.pkg == null || s.pkg.isEmpty()) {
+            media.setVisibility(GONE);
+            return;
+        }
+        media.setVisibility(VISIBLE);
+        mediaIcon.setImageDrawable(mediaAppIcon(s.pkg));
+        String line = s.title != null && !s.title.isEmpty()
+                ? s.title + (s.artist != null && !s.artist.isEmpty() ? " · " + s.artist : "")
+                : s.pkg;
+        mediaTitle.setText(line);
+        btnPlay.setKind(s.playing ? G_PAUSE : G_PLAY);
     }
 
-    /** 换肤后调用：CarPlay 风格恒深色，不跟主题换色，只需重算选中态。 */
+    /** 时间 / 电量 / 网络一跳（30s 一次足够）。 */
+    public void tick() {
+        Context c = getContext();
+        clock.setText(SysOps.clockHHmm());
+        int lv = batteryLevel(c);
+        battery.setLevel(lv);
+        batteryPct.setText(lv >= 0 ? lv + "%" : "--%");
+        netLabel.setText(networkLabel());
+    }
+
+    /** 换肤后调用：玻璃条恒深不跟主题，只需重画 Dock 应用与状态值。 */
     public void applySkin() {
-        syncActive();
+        bind(model);
+        tick();
     }
 
-    private void syncActive() {
-        for (int i = 0; i < ICONS.length; i++) {
-            boolean on = ICONS[i] == active;
-            if (icons[i] != null) icons[i].setActive(on);
-            if (dots[i] != null) dots[i].setVisibility(on ? VISIBLE : INVISIBLE);
+    /* ---------------- 数据 ---------------- */
+
+    /** 默认 Dock：电话/信息/浏览器/相机，找不到取前几个（同 DesktopView 口径）。 */
+    private static List<String> defaultDockKeys(LauncherModel m) {
+        String[] prefer = {"com.android.dialer", "com.android.mms", "com.android.chrome",
+                "com.android.camera", "com.android.settings"};
+        List<String> out = new ArrayList<>();
+        for (String p : prefer) {
+            for (LauncherModel.App a : m.allApps) {
+                if (a.pkg.equals(p)) { out.add(a.key()); break; }
+            }
         }
+        if (out.isEmpty()) {
+            for (int i = 0; i < Math.min(MAX_ICONS, m.allApps.size()); i++) {
+                out.add(m.allApps.get(i).key());
+            }
+        }
+        return out;
     }
 
-    private int dp(float v) {
-        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
-                getResources().getDisplayMetrics()));
+    private Drawable mediaAppIcon(String pkg) {
+        Drawable d = MEDIA_ICONS.get(pkg);
+        if (d != null) {
+            Drawable.ConstantState cs = d.getConstantState();
+            return cs != null ? cs.newDrawable(getResources()) : d;
+        }
+        try {
+            d = getContext().getPackageManager().getApplicationIcon(pkg);
+            if (d != null) MEDIA_ICONS.put(pkg, d);
+        } catch (Throwable t) {
+            d = null;
+        }
+        return d;
+    }
+
+    private static int batteryLevel(Context c) {
+        try {
+            android.os.BatteryManager bm = (android.os.BatteryManager)
+                    c.getSystemService(Context.BATTERY_SERVICE);
+            int p = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);
+            return p < 0 ? -1 : Math.min(100, p);
+        } catch (Throwable t) {
+            return -1;
+        }
     }
 
     /**
-     * 底条背景：94% 近黑 + 顶部 1px 高光。画成 Drawable 而不是叠 View，
-     * 收起/唤出的位移动画不会把高光留在屏外。
+     * 网络标识：WiFi 优先；蜂窝按网络代际给 5G/4G/3G/2G。
+     * getNetworkType 在无 READ_PHONE_STATE 时多半拿 UNKNOWN —— 车机基本
+     * 4G/5G 在线，兜底按视觉稿显示 5G。
      */
-    private static final class BarDrawable extends android.graphics.drawable.Drawable {
+    private String networkLabel() {
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+            android.net.Network nw = cm == null ? null : cm.getActiveNetwork();
+            android.net.NetworkCapabilities caps =
+                    nw == null ? null : cm.getNetworkCapabilities(nw);
+            if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) {
+                return "WiFi";
+            }
+        } catch (Throwable ignore) {}
+        try {
+            android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager)
+                    getContext().getSystemService(Context.TELEPHONY_SERVICE);
+            int t = tm == null ? android.telephony.TelephonyManager.NETWORK_TYPE_UNKNOWN
+                    : tm.getNetworkType();
+            switch (t) {
+                case android.telephony.TelephonyManager.NETWORK_TYPE_NR:
+                    return "5G";
+                case android.telephony.TelephonyManager.NETWORK_TYPE_LTE:
+                    return "4G";
+                case android.telephony.TelephonyManager.NETWORK_TYPE_HSPAP:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_HSPA:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_HSDPA:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_HSUPA:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_UMTS:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_EVDO_0:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_EVDO_A:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_EVDO_B:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_EHRPD:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_TD_SCDMA:
+                    return "3G";
+                case android.telephony.TelephonyManager.NETWORK_TYPE_GPRS:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_EDGE:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_CDMA:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_1xRTT:
+                case android.telephony.TelephonyManager.NETWORK_TYPE_IDEN:
+                    return "2G";
+                default:
+                    return "5G";
+            }
+        } catch (Throwable ignore) {}
+        return "5G";
+    }
+
+    /* ---------------- 形 ---------------- */
+
+    /** 应用图标圆形裁剪：outline 圆角 + clipToOutline（API 21+，minSdk 29 稳）。 */
+    private static void roundClip(final ImageView iv, float radiusDp) {
+        final float r = dp(iv.getContext(), radiusDp);
+        iv.setOutlineProvider(new ViewOutlineProvider() {
+            @Override public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), r);
+            }
+        });
+        iv.setClipToOutline(true);
+    }
+
+    private static int dp(Context c, float v) {
+        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
+                c.getResources().getDisplayMetrics()));
+    }
+
+    /**
+     * 磨砂玻璃底：80% 透明近黑圆角矩形 + 1px 玻璃描边 + 顶部高光线。
+     * 画成 Drawable 而非叠 View，收起/唤出的位移动画不会把高光留在屏外。
+     */
+    private static final class GlassDrawable extends android.graphics.drawable.Drawable {
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint top = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float radius;
 
-        BarDrawable() {
+        GlassDrawable(float cornerDp) {
+            radius = cornerDp * Skin.density;
             fill.setColor(BAR_BG);
             edge.setColor(BAR_EDGE);
+            edge.setStyle(Paint.Style.STROKE);
             edge.setStrokeWidth(2f);
+            top.setColor(BAR_TOP);
+            top.setStrokeWidth(2f);
         }
 
         @Override public void draw(Canvas cv) {
-            cv.drawRect(0, 0, getBounds().width(), getBounds().height(), fill);
-            cv.drawLine(0, 1f, getBounds().width(), 1f, edge);
+            float w = getBounds().width(), h = getBounds().height();
+            if (w <= 0 || h <= 0) return;
+            cv.drawRoundRect(0, 0, w, h, radius, radius, fill);
+            cv.drawRoundRect(1f, 1f, w - 1f, h - 1f, radius - 1f, radius - 1f, edge);
+            cv.drawLine(radius, 1.5f, w - radius, 1.5f, top);
         }
 
         @Override public void setAlpha(int a) { fill.setAlpha(a); invalidateSelf(); }
@@ -135,32 +408,27 @@ public class DockBar extends LinearLayout {
         @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
     }
 
-    /** 单个矢量图标：白色细线几何，线宽统一 ~7%、圆头圆角；选中纯白、未选中 55% 白。 */
-    static final class DockIconView extends View {
-        private final int kind;
+    /** 单个白色矢量图标：细线几何，线宽 ~7%，圆头圆角。 */
+    static final class GlyphIconView extends View {
+        private int kind;
         private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint fillP = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
         private final RectF tmp = new RectF();
-        private boolean active;
 
-        DockIconView(Context c, int kind) {
+        GlyphIconView(Context c, int kind) {
             super(c);
             this.kind = kind;
             stroke.setStyle(Paint.Style.STROKE);
             stroke.setStrokeCap(Paint.Cap.ROUND);
             stroke.setStrokeJoin(Paint.Join.ROUND);
-            fill.setStyle(Paint.Style.FILL);
-            refresh();
+            stroke.setColor(INK);
+            fillP.setStyle(Paint.Style.FILL);
+            fillP.setColor(INK);
         }
 
-        void setActive(boolean on) { active = on; refresh(); }
-
-        void refresh() {
-            int col = active ? INK_ON : INK_OFF;
-            stroke.setColor(col);
-            fill.setColor(col);
-            invalidate();
+        public void setKind(int k) {
+            if (kind != k) { kind = k; invalidate(); }
         }
 
         @Override protected void onDraw(Canvas cv) {
@@ -168,47 +436,13 @@ public class DockBar extends LinearLayout {
             if (w <= 0 || h <= 0) return;
             float s = Math.min(w, h);
             float cx = w / 2f, cy = h / 2f;
-            stroke.setStrokeWidth(s * 0.07f);
+            stroke.setStrokeWidth(s * 0.08f);
             path.reset();
 
             switch (kind) {
-                case HOME: {
-                    // CarPlay home 键：一枚白圈，圈内留空
-                    float r = s * 0.36f;
-                    cv.drawCircle(cx, cy, r, stroke);
-                    break;
-                }
-                case MAP: {
-                    // 导航箭头（实心，指向上）：tip / 右翼 / 底部凹口 / 左翼
-                    float k = s * 0.04f;
-                    path.moveTo(cx, cy - 9f * k);
-                    path.lineTo(cx + 8.3f * k, cy + 8.3f * k);
-                    path.lineTo(cx, cy + 4.6f * k);
-                    path.lineTo(cx - 8.3f * k, cy + 8.3f * k);
-                    path.close();
-                    cv.drawPath(path, fill);
-                    break;
-                }
-                case MUSIC: {
-                    // 连尾双音符 ♫：斜置粗横梁 + 两根竖干 + 两个实心符头
-                    float bx1 = cx - s * 0.20f, by1 = cy - s * 0.30f;
-                    float bx2 = cx + s * 0.28f, by2 = cy - s * 0.38f;
-                    stroke.setStrokeWidth(s * 0.11f);
-                    cv.drawLine(bx1, by1, bx2, by2, stroke);
-                    stroke.setStrokeWidth(s * 0.07f);
-                    cv.drawLine(bx1, by1 + s * 0.02f, bx1, cy + s * 0.22f, stroke);
-                    cv.drawLine(bx2, by2 + s * 0.02f, bx2, cy + s * 0.14f, stroke);
-                    float hr = s * 0.105f;
-                    path.reset();
-                    path.addCircle(bx1 - hr * 0.6f, cy + s * 0.235f, hr, Path.Direction.CW);
-                    path.addCircle(bx2 - hr * 0.6f, cy + s * 0.155f, hr, Path.Direction.CW);
-                    cv.drawPath(path, fill);
-                    break;
-                }
-                case APPS: {
-                    // iOS 主屏网格：四枚圆角方格（实心）
-                    float half = s * 0.125f, off = s * 0.21f, rad = s * 0.06f;
-                    path.reset();
+                case G_APPS: {
+                    // 四格应用菜单：2x2 圆角方块，细线框（多任务入口的既有认知）
+                    float half = s * 0.16f, off = s * 0.22f, rad = s * 0.05f;
                     for (int sx = -1; sx <= 1; sx += 2) {
                         for (int sy = -1; sy <= 1; sy += 2) {
                             tmp.set(cx + sx * off - half, cy + sy * off - half,
@@ -216,23 +450,85 @@ public class DockBar extends LinearLayout {
                             path.addRoundRect(tmp, rad, rad, Path.Direction.CW);
                         }
                     }
-                    cv.drawPath(path, fill);
+                    cv.drawPath(path, stroke);
                     break;
                 }
-                case EXIT:
+                case G_LOGO: {
+                    // 海鸥 Logo：两段弧线组成的 M 形飞鸟剪影（单色细线）
+                    path.moveTo(cx - s * 0.44f, cy + s * 0.14f);
+                    path.quadTo(cx - s * 0.20f, cy - s * 0.34f, cx, cy - s * 0.02f);
+                    path.quadTo(cx + s * 0.20f, cy - s * 0.34f, cx + s * 0.44f, cy + s * 0.14f);
+                    cv.drawPath(path, stroke);
+                    break;
+                }
+                case G_PLAY: {
+                    // 播放：实心三角
+                    path.moveTo(cx - s * 0.22f, cy - s * 0.30f);
+                    path.lineTo(cx + s * 0.30f, cy);
+                    path.lineTo(cx - s * 0.22f, cy + s * 0.30f);
+                    path.close();
+                    cv.drawPath(path, fillP);
+                    break;
+                }
+                case G_PAUSE: {
+                    // 暂停：两根圆头竖条
+                    float x1 = cx - s * 0.14f, x2 = cx + s * 0.14f;
+                    cv.drawLine(x1, cy - s * 0.26f, x1, cy + s * 0.26f, stroke);
+                    cv.drawLine(x2, cy - s * 0.26f, x2, cy + s * 0.26f, stroke);
+                    break;
+                }
+                case G_NEXT:
                 default: {
-                    // 电源：缺口圆弧 + 顶部竖线
-                    float r = s * 0.30f;
-                    tmp.set(cx - r, cy - r * 0.9f, cx + r, cy + r * 1.1f);
-                    path.addArc(tmp, -55f, 290f);
-                    cv.drawPath(path, stroke);
-                    path.reset();
-                    path.moveTo(cx, cy - s * 0.46f);
-                    path.lineTo(cx, cy - s * 0.04f);
-                    cv.drawPath(path, stroke);
+                    // 下一曲：实心三角 + 右侧竖条
+                    path.moveTo(cx - s * 0.30f, cy - s * 0.24f);
+                    path.lineTo(cx + s * 0.12f, cy);
+                    path.lineTo(cx - s * 0.30f, cy + s * 0.24f);
+                    path.close();
+                    cv.drawPath(path, fillP);
+                    cv.drawLine(cx + s * 0.26f, cy - s * 0.26f, cx + s * 0.26f, cy + s * 0.26f, stroke);
                     break;
                 }
             }
+        }
+    }
+
+    /** 电池图标：圆角外壳 + 顶端正极 + 按电量填充；<20% 转警示色。 */
+    private static final class BatteryView extends View {
+        private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint fillP = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private int level = -1;
+
+        BatteryView(Context c) {
+            super(c);
+            stroke.setStyle(Paint.Style.STROKE);
+            stroke.setStrokeCap(Paint.Cap.ROUND);
+            stroke.setColor(INK_DIM);
+            fillP.setStyle(Paint.Style.FILL);
+        }
+
+        void setLevel(int lv) {
+            if (level != lv) { level = lv; invalidate(); }
+        }
+
+        @Override protected void onDraw(Canvas cv) {
+            int w = getWidth(), h = getHeight();
+            if (w <= 0 || h <= 0) return;
+            float bodyR = h * 0.28f;
+            float bodyW = w * 0.82f;
+            stroke.setStrokeWidth(h * 0.11f);
+            RectF body = new RectF(0.5f, 0.5f, bodyW, h - 0.5f);
+            cv.drawRoundRect(body, bodyR, bodyR, stroke);
+            // 正极帽
+            float capX0 = bodyW + h * 0.16f;
+            cv.drawLine(capX0, h * 0.32f, capX0, h * 0.68f, stroke);
+            if (level < 0) return;
+            boolean low = level <= 20;
+            fillP.setColor(low ? 0xFFFF9F0A : INK);
+            float inset = h * 0.30f;
+            float fw = (bodyW - inset * 2f) * level / 100f;
+            if (fw <= 0.5f) return;
+            RectF f = new RectF(inset, inset, inset + fw, h - inset);
+            cv.drawRoundRect(f, bodyR * 0.5f, bodyR * 0.5f, fillP);
         }
     }
 }

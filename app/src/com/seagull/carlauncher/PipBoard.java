@@ -649,7 +649,7 @@ public final class PipBoard extends LinearLayout {
      * 私有 VD 上画导航栏，应用自己也没有「底部导航栏」这个形态（反编译：
      * 车机版横屏=左侧栏、竖屏=顶部 Tab）。键条是画布内导航的唯一可靠入口：
      *   · 返回 = input -d <id> keyevent 4（KEYCODE_BACK 注进应用）；
-     *   · 桌面 = 退回分屏主页（与 DockBar.HOME 同一路径），应用留在后台不杀。
+     *   · 桌面 = 退回分屏主页（与 DockBar Logo 键同一路径），应用留在后台不杀。
      * 键条是普通 View 层（PipBoard 纪律③：常驻 chrome 不被 App 覆盖），
      * 应用自己的沉浸 flag、全屏请求都影响不到它。
      */
