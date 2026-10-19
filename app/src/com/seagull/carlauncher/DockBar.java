@@ -38,10 +38,11 @@ import java.util.List;
  */
 public class DockBar extends LinearLayout {
 
-    /** 回调：四格菜单 / Dock 应用 / Logo 回桌面。 */
+    /** 回调：四格菜单 / Dock 应用（点按 + 长按管理）/ Logo 回桌面。 */
     public interface Listener {
         void onApps();
         void onApp(LauncherModel.App a);
+        void onAppLongPress(LauncherModel.App a);
         void onHome();
     }
 
@@ -67,6 +68,7 @@ public class DockBar extends LinearLayout {
     private LauncherModel model;
 
     private final LinearLayout apps;
+    private final LinearLayout center;
     private final TextView clock;
     private final LinearLayout media;
     private final ImageView mediaIcon;
@@ -104,9 +106,10 @@ public class DockBar extends LinearLayout {
         left.setOrientation(HORIZONTAL);
         left.setGravity(Gravity.CENTER_VERTICAL);
 
-        GlyphIconView menu = new GlyphIconView(c, G_APPS);
+        GlyphIconView menu = new GlyphIconView(c, G_APPS).scale(0.75f);
+        menu.setContentDescription("全部应用");
         menu.setOnClickListener(v -> { if (listener != null) listener.onApps(); });
-        left.addView(menu, new LinearLayout.LayoutParams(dp(c, 24), dp(c, 24)));
+        left.addView(menu, new LinearLayout.LayoutParams(dp(c, 32), dp(c, 32)));
 
         clock = new TextView(c);
         clock.setTextColor(INK);
@@ -119,7 +122,7 @@ public class DockBar extends LinearLayout {
         addView(left, new LinearLayout.LayoutParams(-2, -2));
 
         /* ---- 中段：Dock 应用图标 + 媒体横幅（居中，两侧让位） ---- */
-        LinearLayout center = new LinearLayout(c);
+        center = new LinearLayout(c);
         center.setOrientation(HORIZONTAL);
         center.setGravity(Gravity.CENTER_VERTICAL);
         addView(center, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -152,14 +155,16 @@ public class DockBar extends LinearLayout {
         mediaTitle.setPadding(dp(c, 7), 0, dp(c, 4), 0);
         media.addView(mediaTitle, new LinearLayout.LayoutParams(-2, -2));
 
-        btnPlay = new GlyphIconView(c, G_PAUSE);
+        btnPlay = new GlyphIconView(c, G_PAUSE).scale(0.74f);
+        btnPlay.setContentDescription("播放/暂停");
         btnPlay.setOnClickListener(v -> MediaListenerService.playPause());
-        media.addView(btnPlay, new LinearLayout.LayoutParams(dp(c, 26), dp(c, 26)));
+        media.addView(btnPlay, new LinearLayout.LayoutParams(dp(c, 34), dp(c, 34)));
 
-        GlyphIconView btnNext = new GlyphIconView(c, G_NEXT);
+        GlyphIconView btnNext = new GlyphIconView(c, G_NEXT).scale(0.74f);
+        btnNext.setContentDescription("下一曲");
         btnNext.setOnClickListener(v -> MediaListenerService.next());
-        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(dp(c, 26), dp(c, 26));
-        nlp.leftMargin = dp(c, 4);
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(dp(c, 34), dp(c, 34));
+        nlp.leftMargin = dp(c, 2);
         media.addView(btnNext, nlp);
 
         /* ---- 右段：Logo + 网络 + 电池 ---- */
@@ -167,9 +172,10 @@ public class DockBar extends LinearLayout {
         right.setOrientation(HORIZONTAL);
         right.setGravity(Gravity.CENTER_VERTICAL);
 
-        GlyphIconView logo = new GlyphIconView(c, G_LOGO);
+        GlyphIconView logo = new GlyphIconView(c, G_LOGO).scale(0.73f);
+        logo.setContentDescription("回桌面");
         logo.setOnClickListener(v -> { if (listener != null) listener.onHome(); });
-        right.addView(logo, new LinearLayout.LayoutParams(dp(c, 22), dp(c, 22)));
+        right.addView(logo, new LinearLayout.LayoutParams(dp(c, 30), dp(c, 30)));
 
         netLabel = new TextView(c);
         netLabel.setTextColor(INK);
@@ -218,8 +224,13 @@ public class DockBar extends LinearLayout {
             if (d == null) continue;
             ImageView iv = new ImageView(c);
             iv.setImageDrawable(d);
+            iv.setContentDescription(a.label);
             roundClip(iv, 20);
             iv.setOnClickListener(v -> { if (listener != null) listener.onApp(a); });
+            iv.setOnLongClickListener(v -> {
+                if (listener != null) listener.onAppLongPress(a);
+                return true;
+            });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(c, 40), dp(c, 40));
             if (added > 0) lp.leftMargin = dp(c, 10);
             apps.addView(iv, lp);
@@ -228,10 +239,20 @@ public class DockBar extends LinearLayout {
         apps.setVisibility(added > 0 ? VISIBLE : GONE);
     }
 
-    /** 媒体横幅：没会话整条隐藏不占位；有则显示 App 图标 + 歌名 + 播放态。 */
+    /** 媒体横幅：没会话整条隐藏不占位；有则显示 App 图标 + 歌名 + 播放态。
+     *  窄屏放不下时横幅自动让位（suppress），同一条媒体不再反复冒头；换歌或
+     *  Dock 尺寸变化后重新尝试。 */
     public void bindMedia(MediaListenerService.Snap s) {
         if (s == null || s.pkg == null || s.pkg.isEmpty()) {
+            lastSnap = null;
             media.setVisibility(GONE);
+            return;
+        }
+        lastSnap = s;
+        String key = s.pkg + "|" + s.title;
+        currentKey = key;
+        if (key.equals(suppressedKey)) {
+            media.setVisibility(GONE);   // 这条媒体已确认放不下，别再闪
             return;
         }
         media.setVisibility(VISIBLE);
@@ -241,7 +262,29 @@ public class DockBar extends LinearLayout {
                 : s.pkg;
         mediaTitle.setText(line);
         btnPlay.setKind(s.playing ? G_PAUSE : G_PLAY);
+        removeCallbacks(fitPass);
+        post(fitPass);
     }
+
+    private MediaListenerService.Snap lastSnap;
+    private String currentKey;
+    private String suppressedKey;
+
+    /** 布局后实测：中段放不下「图标区 + 横幅」就藏横幅，图标区保完整。 */
+    private final Runnable fitPass = new Runnable() {
+        @Override public void run() {
+            if (media.getVisibility() != VISIBLE) return;
+            int avail = center.getWidth();
+            if (avail <= 0) return;   // 还没布局完，等下一轮 tick 再试
+            int need = apps.getWidth()
+                    + ((LinearLayout.LayoutParams) media.getLayoutParams()).leftMargin
+                    + media.getWidth();
+            if (need > avail) {
+                suppressedKey = currentKey;
+                media.setVisibility(GONE);
+            }
+        }
+    };
 
     /** 时间 / 电量 / 网络一跳（30s 一次足够）。 */
     public void tick() {
@@ -257,6 +300,15 @@ public class DockBar extends LinearLayout {
     public void applySkin() {
         bind(model);
         tick();
+    }
+
+    /** Dock 尺寸变化（旋转/换肤重建）：清掉窄屏让位标记，重新尝试横幅。 */
+    @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
+        super.onSizeChanged(w, h, ow, oh);
+        if (w != ow && lastSnap != null) {
+            suppressedKey = null;
+            bindMedia(lastSnap);
+        }
     }
 
     /* ---------------- 数据 ---------------- */
@@ -306,20 +358,21 @@ public class DockBar extends LinearLayout {
     }
 
     /**
-     * 网络标识：WiFi 优先；蜂窝按网络代际给 5G/4G/3G/2G。
-     * getNetworkType 在无 READ_PHONE_STATE 时多半拿 UNKNOWN —— 车机基本
-     * 4G/5G 在线，兜底按视觉稿显示 5G。
+     * 网络标识：WiFi 优先；有蜂窝链路但代际未知 → 5G（车机基本 4G/5G 在线，
+     * 无 READ_PHONE_STATE 时 getNetworkType 拿 UNKNOWN，这是诚实的兜底）；
+     * 完全没网 → "--"，不硬编一个假代际。
      */
     private String networkLabel() {
+        boolean cellular = false;
         try {
             android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
                     getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
             android.net.Network nw = cm == null ? null : cm.getActiveNetwork();
             android.net.NetworkCapabilities caps =
                     nw == null ? null : cm.getNetworkCapabilities(nw);
-            if (caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) {
-                return "WiFi";
-            }
+            if (caps == null) return "--";
+            if (caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) return "WiFi";
+            cellular = caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR);
         } catch (Throwable ignore) {}
         try {
             android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager)
@@ -349,10 +402,10 @@ public class DockBar extends LinearLayout {
                 case android.telephony.TelephonyManager.NETWORK_TYPE_IDEN:
                     return "2G";
                 default:
-                    return "5G";
+                    return cellular ? "5G" : "--";
             }
         } catch (Throwable ignore) {}
-        return "5G";
+        return cellular ? "5G" : "--";
     }
 
     /* ---------------- 形 ---------------- */
@@ -401,16 +454,24 @@ public class DockBar extends LinearLayout {
             cv.drawLine(radius, 1.5f, w - radius, 1.5f, top);
         }
 
-        @Override public void setAlpha(int a) { fill.setAlpha(a); invalidateSelf(); }
+        /** 三支画笔一起淡（fill/edge/top 各按自身基色 alpha 等比缩放）。 */
+        @Override public void setAlpha(int a) {
+            fill.setAlpha(a);
+            edge.setAlpha(Math.round(0x22 * a / 255f));
+            top.setAlpha(Math.round(0x30 * a / 255f));
+            invalidateSelf();
+        }
         @Override public void setColorFilter(android.graphics.ColorFilter cf) {
             fill.setColorFilter(cf); invalidateSelf();
         }
         @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
     }
 
-    /** 单个白色矢量图标：细线几何，线宽 ~7%，圆头圆角。 */
+    /** 单个白色矢量图标：细线几何，线宽 ~7%，圆头圆角。contentScale 把图形
+     *  缩在小 View 里画，外面留出的整块面积全给触控热区（车机手指友好）。 */
     static final class GlyphIconView extends View {
         private int kind;
+        private float contentScale = 1f;
         private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint fillP = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
@@ -427,6 +488,12 @@ public class DockBar extends LinearLayout {
             fillP.setColor(INK);
         }
 
+        /** 图形内容占比（0~1]：View 尺寸大、图形小 = 触控热区大。 */
+        GlyphIconView scale(float sc) {
+            contentScale = Math.max(0.4f, Math.min(1f, sc));
+            return this;
+        }
+
         public void setKind(int k) {
             if (kind != k) { kind = k; invalidate(); }
         }
@@ -434,7 +501,7 @@ public class DockBar extends LinearLayout {
         @Override protected void onDraw(Canvas cv) {
             int w = getWidth(), h = getHeight();
             if (w <= 0 || h <= 0) return;
-            float s = Math.min(w, h);
+            float s = Math.min(w, h) * contentScale;
             float cx = w / 2f, cy = h / 2f;
             stroke.setStrokeWidth(s * 0.08f);
             path.reset();

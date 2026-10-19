@@ -1,6 +1,7 @@
 package com.seagull.carlauncher;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.PictureInPictureParams;
 import android.content.Context;
 import android.content.Intent;
@@ -364,6 +365,30 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             } else {
                 launch(a.pkg);
             }
+        }
+        /** 长按 Dock 图标 = 管理入口（对齐 DesktopView dockMenu 口径）：
+         *  换默认窗口 / 全屏打开 / 从 Dock 拿下来。 */
+        @Override public void onAppLongPress(LauncherModel.App a) {
+            if (a == null || a.pkg == null || model == null) return;
+            int cur = model.windowOf(a.pkg);
+            String[] opts = {
+                    (cur == 1 ? "● " : "○ ") + "默认开在 1 号窗口",
+                    (cur == 2 ? "● " : "○ ") + "默认开在 2 号窗口",
+                    "全屏打开（当前窗口留着）",
+                    "从 Dock 拿下来"
+            };
+            new AlertDialog.Builder(HomeActivity.this)
+                    .setTitle(a.label)
+                    .setItems(opts, (d, which) -> {
+                        switch (which) {
+                            case 0: model.setDockWindow(a.pkg, cur == 1 ? 0 : 1); break;
+                            case 1: model.setDockWindow(a.pkg, cur == 2 ? 0 : 2); break;
+                            case 2: model.setDockWindow(a.pkg, 0); launch(a.pkg); break;
+                            default: model.toggleDock(a.key()); break;
+                        }
+                        if (dock != null) dock.bind(model);
+                    })
+                    .show();
         }
         @Override public void onHome() {
             if (pip != null) pip.showSplit();

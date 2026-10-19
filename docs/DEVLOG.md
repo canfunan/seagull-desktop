@@ -72,6 +72,21 @@ LrcCheck 15 项 / PrivCodecCheck 39 项 / StackListCheck 30 项全过；R 引用
 - 竖屏宽度预算（上面复盘第 4 条）。
 - 底栏状态（时间/电量/网络）只在 30s tick 与整屏重建时刷，秒级时钟不走这条。
 
+### 追加打磨（同批二段）
+
+- **Dock 长按菜单补缺**：底部 Dock 图标此前无管理入口（DesktopView 的 dockMenu
+  不在主路径上），长按补齐「换 1/2 号窗口 / 全屏打开 / 从 Dock 拿下来」，操作后
+  `dock.bind(model)` 即时重画。Listener 加 `onAppLongPress`。
+- **触控热区外扩**：menu/logo/播放/下一曲四键 View 加大（24→32、22→30、26→34dp），
+  GlyphIconView 加 `contentScale` 把图形缩在内部画（0.73~0.75），视觉尺寸不变、
+  热区整体大一圈 —— 车机手指友好，替代旧 MiniPlayer 的 12dp 外扩方案。
+- **窄屏横幅自动让位**：布局后实测「图标区+横幅」超出中段宽度就藏横幅
+  （fitPass + suppressedKey 防同一条媒体反复冒头），换歌或 onSizeChanged 后重试。
+  竖屏 400dp 宽不再裁掉横幅尾部按钮。
+- **网络标识诚实化**：无活跃网络 → "--"；有蜂窝链路但代际未知（无
+  READ_PHONE_STATE）→ 兜底 5G；WiFi 真实检测不变。不再在完全没网时硬编 5G。
+- **GlassDrawable.setAlpha** 三支画笔（fill/edge/top）按各自基色 alpha 等比同步。
+
 ---
 
 ## 批次 CG — 两句体验需求：槽 2「点击下方图标才进入」+ 底部导航栏整条换成苹果 CarPlay 风格
