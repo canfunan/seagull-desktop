@@ -27,6 +27,17 @@
 - Skin.c() 取色体系扩成主题包：配色 / 圆角 / 玻璃透明度 / 卡片描边整体切换
 - 验收：切换即时生效并持久化进 LauncherModel，主题间零硬编码色残留
 
+### 5. 本地音乐播放器
+
+- 扫描 /sdcard/Music 与 U 盘，自建 MediaPlayer + MediaSession，MiniPlayer / 歌词组件直接联动，本地 .lrc 复用现成解析器
+- 改动量最大（播放服务 + 扫描 + 列表 UI），值得独立批次单独出方案
+- 验收：播放/暂停/上下曲走 MiniPlayer；歌词同步滚动；重启后播放列表与进度保留
+
+### 6. 组件扩展
+
+- makeWidget 体系补日历（含农历）、倒计时、指南针三个自绘组件，与歌词/时钟同一套摆位缩放
+- 验收：三组件可进桌面、可拖摆、可缩放；刷新走原位更新，零 requestLayout 风暴（M5 教训）
+
 ## 候选池（未拍板，随时可挑）
 
 - 导航信息卡片：解析高德/百度常驻导航通知（转向/距离/路名）投 IslandView
@@ -37,3 +48,8 @@
 - 配置导出/导入：LauncherModel JSON 走 SeagullFileProvider 分享
 - 蓝牙来电卡片：BluetoothHeadset 监听 + root TelecomManager 接听挂断
 - HUD 夜间条：熄灯后时钟+歌词压成低亮度黑底条（环境光三档基建已在）
+- 应用冻结：root pm disable-user，长按冻结/解冻，冻结项从 dock 和列表消失
+- 尾号限行提示：天气卡加一行「今日限行 x/x」，本地城市规则
+- 一键日志导出：RootLog 拷 /sdcard/Seagull/ 带 commit 号，反馈排障用
+- 隐藏应用：dock 候选过滤 + pin 锁显示
+- 崩溃自恢复：uncaught handler 记 RootLog + 回落默认画布
