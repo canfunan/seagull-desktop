@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.Sensor;
@@ -26,11 +29,14 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 画中画面板（批次 N 重写）—— 左右两块画布，单焦点，卡片化，空态大按钮。
@@ -147,6 +153,30 @@ public final class PipBoard extends LinearLayout {
     /** 单焦点：只有它能收触摸。初始槽 1。 */
     private int focusSlot = 1;
 
+    /* ---------------- 批次 CF：不可缩放应用的快照预览 ---------------- */
+
+    /**
+     * 快照预览（vivo FusionApp「白名单分级」思路的用户态落地）：
+     *
+     * 应用分两种 ——
+     *   · 可安全 resize（resizeableActivity=true 或声明了 SCREEN_SIZE 类
+     *     configChanges，高德/百度地图等）：维持原路径，VD 跟画布 resize，
+     *     分屏布局永远正确；
+     *   · 不可缩放（resizeableActivity=false，网易云 3.1.0）：VD 建屏后尺寸
+     *     **终身锁定**为单应用画布尺寸，分屏时输出挂快照读面（ImageReader 拉帧
+     *     刷 ImageView）—— 应用侧零感知，Activity 不重建，歌词页/播放状态
+     *     「桌面往返」原地保留；单应用时输出切回 SurfaceView，1:1 实显 + 触摸透传。
+     *
+     * SurfaceView 的「非 1:1 缩放显示」整条链路不再存在 —— 批次 CE 之所以
+     * 「全乱了」，正是赌了这条链路的合成行为（非等比压缩 + 设备相关裁切）。
+     */
+    private static final long SNAP_INTERVAL_MS = 600;
+    private ImageView snapA, snapB;
+    /** snapOn[w] = 槽 w 正处于快照预览态（分屏 + frozen 槽）。 */
+    private final boolean[] snapOn = {false, false, false};
+    private boolean snapPumping;
+    private static final Map<String, Boolean> RESIZE_CACHE = new HashMap<>();
+
     /** 环境光三档得出的遮罩透明度。 */
     private float maskAlpha = MASK_MID;
 
@@ -195,6 +225,8 @@ public final class PipBoard extends LinearLayout {
         applyFocusVisuals(false);
         ui.postDelayed(this::redeployIfPossible, 300);
         ui.postDelayed(this::selfHeal, 600);
+        // 批次 CF：部署落地后对齐快照态（直接进桌面分屏时 frozen 槽要转快照预览）
+        ui.postDelayed(this::applySnapshotMode, 900);
         startRepin();   // 批次 AF：跳主屏后自动搬回（监听在线 8s 兜底拍，离线 2.5s）
         startWatch();   // 批次 AK：root 事件订阅，BUMP 触发自愈（毫秒级，替代靠拍等）
     }
@@ -208,9 +240,12 @@ public final class PipBoard extends LinearLayout {
 
     /** 退出只断 Surface —— 屏与应用留给 MirrorHost 常驻；没有活跃屏才收 token。 */
     public void onDestroy() {
-        // postDelayed(redeployIfPossible/selfHeal) 必须摘：300ms 内 finish 时它们
-        // 仍会对已销毁 Activity 的 SurfaceView 起后台线程
+        // postDelayed(redeployIfPossible/selfHeal/pumpSnapshots) 必须摘：300ms 内
+        // finish 时它们仍会对已销毁 Activity 的 SurfaceView 起后台线程
         ui.removeCallbacksAndMessages(null);
+        snapPumping = false;
+        snapOn[1] = false;
+        snapOn[2] = false;
         if (slotA != null) slotA.detachSurface();
         if (slotB != null) slotB.detachSurface();
         watching = false;
@@ -309,6 +344,14 @@ public final class PipBoard extends LinearLayout {
         SurfaceView view = which == 1 ? svA : svB;
         box.addView(view, new FrameLayout.LayoutParams(-1, -1));
 
+        // 批次 CF：快照预览层（盖在 SurfaceView 上，仅 frozen 槽的分屏态亮出）
+        ImageView snap = new ImageView(act);
+        snap.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        snap.setBackgroundColor(Color.BLACK);
+        snap.setVisibility(View.GONE);
+        box.addView(snap, 1, new FrameLayout.LayoutParams(-1, -1));
+        if (which == 1) snapA = snap; else snapB = snap;
+
         TextView hint = which == 1 ? hintA : hintB;
         hint.setText("长按选择应用");
         hint.setTextColor(Skin.c(R.color.text_dim));
@@ -400,6 +443,9 @@ public final class PipBoard extends LinearLayout {
                 if (s == null || wd <= 0 || ht <= 0) return;
                 cvW[w] = wd;
                 cvH[w] = ht;
+                // 批次 CF：快照态不响应 —— 分屏预览时输出必须留在快照读面上，
+                // 把 SurfaceView 的面挂回去预览就黑了（applySnapshotMode 统一管切换）
+                if (snapOn[w]) return;
                 attachTo(s, h.getSurface(), wd, ht);
             }
             @Override public void surfaceDestroyed(SurfaceHolder h) {
@@ -693,6 +739,8 @@ public final class PipBoard extends LinearLayout {
         applyKeybar(singleMode ? singleWhich : 0);
         applyFocusVisuals(false);
         reattachAll();
+        // 批次 CF：布局稳定后对齐快照态（frozen 槽：分屏→快照读面，单应用→SurfaceView）
+        ui.postDelayed(this::applySnapshotMode, 300);
     }
 
     /**
@@ -720,6 +768,127 @@ public final class PipBoard extends LinearLayout {
         }
         if (barA != null) barA.setVisibility(which == 1 ? View.VISIBLE : View.GONE);
         if (barB != null) barB.setVisibility(which == 2 ? View.VISIBLE : View.GONE);
+    }
+
+    /* ---------------- 批次 CF：快照预览核心 ---------------- */
+
+    /**
+     * frozen 槽的固定 VD 尺寸 = 单应用画布尺寸：全宽 × (全高 - 键条高)。
+     * 单应用态 SurfaceView 尺寸与此严格一致（applyKeybar 挤压同一高度）→
+     * 1:1 实显零换算；分屏态输出在快照读面，画布只显示等比缩小的 ImageView。
+     */
+    private int[] fixedVdSize() {
+        int w = getWidth() > 0 ? getWidth()
+                : designW(1) + designW(2) + dp(SPLIT_W);
+        int h = getHeight() > 0 ? getHeight() - dp(KEYBAR_DP)
+                : Math.max(1, act.getResources().getDisplayMetrics().heightPixels
+                        - dp(150) - dp(KEYBAR_DP));
+        return new int[]{Math.max(1, w), Math.max(1, h)};
+    }
+
+    /**
+     * 应用能否安全吃 VD resize？false → 冻结尺寸 + 快照预览。
+     * 判据：application 级 resizeableActivity=true 放行；否则 activity 必须声明
+     * ORIENTATION|SCREEN_SIZE|SMALLEST_SCREEN_SIZE 三位 configChanges 才放行
+     * （三位齐 = 应用承诺自己吃下所有几何变化，不重建）。拿不到信息一律按
+     * 可缩放走老路 —— 绝不破坏现有应用的现状。
+     */
+    private static boolean canResize(Context c, String pkg) {
+        synchronized (RESIZE_CACHE) {
+            Boolean hit = RESIZE_CACHE.get(pkg);
+            if (hit != null) return hit;
+            boolean can = true;
+            try {
+                PackageManager pm = c.getPackageManager();
+                Intent i = pm.getLaunchIntentForPackage(pkg);
+                if (i != null) {
+                    ActivityInfo ai = pm.getActivityInfo(i.getComponent(), 0);
+                    // ApplicationInfo.resizeableActivity 未进编译 jar（隐藏字段）→ 反射取，
+                    // 拿不到按「未声明」走（targetSdk≥24 默认可缩放，别冤枉正常应用）
+                    boolean declaredFalse = true;
+                    try {
+                        java.lang.reflect.Field f = android.content.pm.ApplicationInfo.class
+                                .getField("resizeableActivity");
+                        Object v = f.get(ai != null ? ai.applicationInfo : null);
+                        if (v instanceof Boolean && (Boolean) v) declaredFalse = false;
+                    } catch (Throwable reflectionMiss) {
+                        declaredFalse = false;   // 字段不存在 → 无法判定 → 走老路
+                    }
+                    if (declaredFalse) {
+                        int cc = ai != null ? ai.configChanges : 0;
+                        can = (cc & ActivityInfo.CONFIG_ORIENTATION) != 0
+                                && (cc & ActivityInfo.CONFIG_SCREEN_SIZE) != 0
+                                && (cc & ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE) != 0;
+                    }
+                }
+            } catch (Throwable t) {
+                can = true;   // 查询失败宁可走老路
+            }
+            RESIZE_CACHE.put(pkg, can);
+            Log.i(TAG, "canResize " + pkg + " = " + can
+                    + (can ? "" : " → 冻结 VD 尺寸 + 快照预览（防重建回首页）"));
+            return can;
+        }
+    }
+
+    /**
+     * 单应用 ↔ 分屏切换后（布局稳定一拍）对齐两槽的快照态。
+     * want = 分屏 + frozen 槽 + 已部署：输出挂快照读面，ImageView 亮出，泵帧启动。
+     * 切单应用：停泵 → 输出挂回 SurfaceView → ImageView 撤掉。
+     */
+    private void applySnapshotMode() {
+        boolean any = false;
+        for (int w = 1; w <= 2; w++) {
+            MirrorSlot s = slotOf(w);
+            ImageView snap = w == 1 ? snapA : snapB;
+            boolean want = !singleMode && s != null && s.resizeFrozen()
+                    && s.displayId() > 0 && notEmpty(pkgOf(w));
+            if (want == snapOn[w]) {
+                any |= want;
+                continue;
+            }
+            snapOn[w] = want;
+            if (want) {
+                s.setSnapshotMode(true);
+                if (snap != null) snap.setVisibility(View.VISIBLE);
+                any = true;
+                Log.i(TAG, "槽 " + w + " → 快照预览（VD 尺寸锁定，应用零重建）");
+            } else {
+                if (s != null && s.displayId() > 0) {
+                    Surface cur = (w == 1 ? svA : svB).getHolder().getSurface();
+                    if (cur != null && cur.isValid()) {
+                        // frozen：attachSurface 走冻结分支只挂面不 resize，且把
+                        // liveSurface 刷成当前有效面（快照切回实显挂的就是它）
+                        s.attachSurface(cur, s.vdW(), s.vdH(), s.vdDpi());
+                    } else {
+                        s.setSnapshotMode(false);
+                    }
+                }
+                if (snap != null) {
+                    snap.setVisibility(View.GONE);
+                    snap.setImageDrawable(null);
+                }
+            }
+        }
+        if (any && !snapPumping) {
+            snapPumping = true;
+            ui.postDelayed(this::pumpSnapshots, SNAP_INTERVAL_MS);
+        } else if (!any && snapPumping) {
+            snapPumping = false;
+        }
+    }
+
+    /** 快照泵：分屏期间 600ms 一拍拉帧刷 ImageView（预览卡片，低刷新足够）。 */
+    private void pumpSnapshots() {
+        if (!snapPumping) return;
+        for (int w = 1; w <= 2; w++) {
+            if (!snapOn[w]) continue;
+            MirrorSlot s = slotOf(w);
+            Bitmap b = s != null ? s.acquireSnapshot() : null;
+            ImageView snap = w == 1 ? snapA : snapB;
+            if (b != null && snap != null) snap.setImageBitmap(b);
+        }
+        ui.postDelayed(this::pumpSnapshots, SNAP_INTERVAL_MS);
     }
 
     /**
@@ -935,8 +1104,15 @@ public final class PipBoard extends LinearLayout {
         if (slot == null) return;
         String pkg = pkgOf(which);
         if (pkg == null || pkg.isEmpty()) { setHint(which, slot); return; }
+        // 批次 CF：先按应用能力定冻结位 —— 不可缩放应用（网易云）VD 尺寸终身锁定，
+        // 分屏走快照；可缩放应用（地图）一切照旧。
+        boolean frozen = !canResize(act, pkg);
+        slot.setResizeFrozen(frozen);
         SurfaceView svView = which == 1 ? svA : svB;
-        Surface surf = (svView != null && svView.getHolder().getSurface() != null
+        // 快照态部署必须喂快照读面：喂 SurfaceView 的面会把输出从快照切回实显，预览黑掉
+        Surface surf = (snapOn[which] && frozen && slot.snapshotSurface() != null)
+                ? slot.snapshotSurface()
+                : (svView != null && svView.getHolder().getSurface() != null
                 && svView.getHolder().getSurface().isValid()) ? svView.getHolder().getSurface() : null;
         // 【批次 AE】画布还没 Surface 时绝不盲部署：
         //   · VD 已在（换应用/重挂场景）→ deploy 内部幂等处理；
@@ -944,9 +1120,18 @@ public final class PipBoard extends LinearLayout {
         //     屏和任务都诞生在真实尺寸上。旧逻辑在这里用 designW 估的假尺寸 +
         //     null surface 建屏，正是「黑屏 + 应用被反复冷启动」的源头。
         if (surf == null) { setHint(which, slot); return; }
-        int w = svView != null && svView.getWidth() > 0 ? svView.getWidth() : designW(which);
-        int h = svView != null && svView.getHeight() > 0 ? svView.getHeight()
-                : Math.max(1, act.getResources().getDisplayMetrics().heightPixels - dp(150));
+        int w, h;
+        if (frozen) {
+            // 固定尺寸 = 单应用画布尺寸（全宽 × 全高-键条）：单应用 1:1 零缩放，
+            // 分屏快照等比缩小显示；建屏后终身不 resize（防重建的核心不变量）
+            int[] fs = fixedVdSize();
+            w = fs[0];
+            h = fs[1];
+        } else {
+            w = svView != null && svView.getWidth() > 0 ? svView.getWidth() : designW(which);
+            h = svView != null && svView.getHeight() > 0 ? svView.getHeight()
+                    : Math.max(1, act.getResources().getDisplayMetrics().heightPixels - dp(150));
+        }
         final Surface f = surf;
         final int fw = w, fh = h;
         final MirrorSlot s = slot;
@@ -972,6 +1157,12 @@ public final class PipBoard extends LinearLayout {
                 });
             }
         }, "pip-deploy" + which).start();
+        if (frozen) {
+            // 批次 CF：frozen 槽跳过铺满巡检 —— 它的修复动作是 force-stop 冷启动，
+            // 对网易云等于「回首页」，比「没铺满」严重得多。首部署后的竖屏烙印
+            // 由 frozen 密度拍（finishDeploy 内 2s 拍）修复，不靠这条。
+            return;
+        }
         // 【批次 AI/AJ】部署 8 秒后铺满巡检：两轮抖动（2s/4.5s 起，各持续 ~2.2s）
         // 都结束后才判定。窗口帧 < 屏尺寸 92% → 冷启动修复（模块 D 段已装时，
         // 新进程 attachBaseContext 会被改写成横屏，新进程必然铺满）。
@@ -1018,7 +1209,11 @@ public final class PipBoard extends LinearLayout {
     }
 
     /** 给外部（选了新应用后）调：部署指定槽。 */
-    public void deploySlotPublic(int which) { deploySlot(which); }
+    public void deploySlotPublic(int which) {
+        deploySlot(which);
+        // 批次 CF：新应用可能是 frozen（快照）也可能不是 —— 落地后重新对齐
+        ui.postDelayed(this::applySnapshotMode, 400);
+    }
 
     private void attachTo(MirrorSlot slot, Surface surface, int w, int h) {
         if (surface == null || !surface.isValid()) return;
@@ -1027,12 +1222,22 @@ public final class PipBoard extends LinearLayout {
         if (pkg == null || pkg.isEmpty()) { setHint(which, slot); return; }
         final MirrorSlot s = slot;
         final MediaProjection mp = projFor(which);
-        final int dpi = dpiFit(w, h);
+        // 批次 CF：frozen 槽任何建屏/回退路都喂固定尺寸（attachSurface 冻结分支
+        // 只挂面用不到尺寸，但 attachSurface 失败回退 deploy 时会用它建屏 ——
+        // 分屏半宽尺寸一旦建进去，frozen 的「终身锁定」就锁在错尺寸上了）
+        int fw = w, fh = h;
+        if (s.resizeFrozen()) {
+            int[] fs = fixedVdSize();
+            fw = fs[0];
+            fh = fs[1];
+        }
+        final int dpi = dpiFit(fw, fh);
+        final int ffw = fw, ffh = fh;
         new Thread(() -> {
             // 同槽串行，理由见 deploySlot
             synchronized (s) {
-                boolean ok = s.attachSurface(surface, w, h, dpi);
-                if (!ok) ok = s.deploy(mp, pkg, surface, w, h, dpi);
+                boolean ok = s.attachSurface(surface, ffw, ffh, dpi);
+                if (!ok) ok = s.deploy(mp, pkg, surface, ffw, ffh, dpi);
                 final boolean needProj = s.needsProjection();
                 final boolean fOk = ok;
                 ui.post(() -> {
@@ -1107,7 +1312,11 @@ public final class PipBoard extends LinearLayout {
         new Thread(() -> {
             String out = RootOps.ensureOnDisplay(act, pkg, d);
             if (out != null && !out.isEmpty()) Log.i(TAG, "点后自愈 槽 " + slotNo + ": " + out);
-            if (out != null && out.contains("已搬回")) ui.post(s::nudgeLayout);
+            // 批次 CF：frozen 槽搬回后绝不抖动 —— VD 尺寸锁定，窗口随 move-task
+            // 自动回原尺寸；一次 resize/密度变化对网易云就是一次重建回首页。
+            if (out != null && out.contains("已搬回") && !s.resizeFrozen()) {
+                ui.post(s::nudgeLayout);
+            }
         }, "pip-tap-heal" + which).start();
     }
 
@@ -1135,10 +1344,13 @@ public final class PipBoard extends LinearLayout {
                         String out = RootOps.ensureOnDisplay(act, pkg, s.displayId());
                         if (out != null && out.contains("已搬回")) {
                             Log.i(TAG, "巡检搬回 槽 " + i + ": " + out);
-                            ui.post(() -> {
-                                s.nudgeLayout();          // 批次 AH：搬回后强制重排铺满
-                                redeployIfPossible();
-                            });
+                            // 批次 CF：frozen 槽搬回后零扰动（见点后自愈同款注释）
+                            if (!s.resizeFrozen()) {
+                                ui.post(() -> {
+                                    s.nudgeLayout();          // 批次 AH：搬回后强制重排铺满
+                                    redeployIfPossible();
+                                });
+                            }
                         }
                     } catch (Throwable t) {
                         Log.w(TAG, "巡检 槽 " + i + " 异常: " + t);

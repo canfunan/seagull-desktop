@@ -1,7 +1,11 @@
 package com.seagull.carlauncher;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.PixelFormat;
 import android.hardware.display.VirtualDisplay;
+import android.media.Image;
+import android.media.ImageReader;
 import android.media.projection.MediaProjection;
 import android.os.Handler;
 import android.os.Looper;
@@ -56,6 +60,22 @@ public final class MirrorSlot implements CanvasSource {
     private String lastError = "";
     private String lastPkg = "";
     private String lastSig = "";
+
+    /**
+     * 批次 CF：true = 本槽应用不能安全吃 resize（resizeableActivity=false 且未声明
+     * SCREEN_SIZE/ORIENTATION 类 configChanges —— 网易云 3.1.0 反编译坐实：一 resize
+     * 就 Activity 重建、MainActivity 清空 fragment 状态回首页）。
+     * frozen 槽的 VD 建屏后尺寸终身不变，所有 resize 路径（deploy 重挂 / syncSize /
+     * attachSurface / 尺寸抖动）一律拦截；分屏预览改走快照读面，SurfaceView 只在
+     * 单应用 1:1 时挂输出。
+     */
+    private volatile boolean resizeFrozen;
+    /** 最近一次 SurfaceView 侧的有效 surface：快照切回实显时重挂它（frozen 槽输出切换全靠它）。 */
+    private volatile Surface liveSurface;
+    /** 快照读面（frozen 槽专属）：分屏预览时 VD 输出改挂这里，PipBoard 定时拉帧刷 ImageView。 */
+    private ImageReader snapReader;
+    /** true = VD 输出正挂在快照读面上（分屏预览态）。 */
+    private volatile boolean snapMode;
 
     /**
      * root 屏维护队列（批次 AL）：root 屏没有本地 VirtualDisplay 对象，
@@ -120,6 +140,21 @@ public final class MirrorSlot implements CanvasSource {
     /** 批次 AI：体检/铺满巡检要用 VD 逻辑尺寸。 */
     public int vdW() { return vdW; }
     public int vdH() { return vdH; }
+    public int vdDpi() { return vdDpi; }
+
+    /** 批次 CF：本槽是否冻结尺寸（不可缩放应用）。 */
+    public boolean resizeFrozen() { return resizeFrozen; }
+    public void setResizeFrozen(boolean frozen) { resizeFrozen = frozen; }
+
+    /**
+     * 快照读面（可能 null：还没建立）。PipBoard 在快照态部署/重挂时喂给 deploy
+     * 的必须是它 —— 喂 SurfaceView 的面会把输出从快照切回实显，预览就黑了。
+     */
+    public Surface snapshotSurface() {
+        ImageReader r = snapReader;
+        return r != null ? r.getSurface() : null;
+    }
+
     public boolean trusted() { return trusted; }
     public boolean needsProjection() { return needsProjection; }
     /** 批次 R：true = 这块屏由 MediaProjection 建出，投影一停屏就死。 */
@@ -195,6 +230,18 @@ public final class MirrorSlot implements CanvasSource {
 
         // 已有 root 屏、只是 surface/尺寸变了 → 守护进程 resize + 挂面，不重建
         if (rootBased && pkg.equals(lastPkg) && displayId > 0) {
+            // 批次 CF：frozen 槽绝不 resize —— 只换输出面（快照读面 ↔ SurfaceView）
+            if (resizeFrozen) {
+                final int id = displayId;
+                final Surface fs = surface;
+                liveSurface = fs;
+                ready = true;
+                lastSig = sig;
+                rootExecAsync(() -> PrivClient.surface(id, fs));
+                Log.i(TAG, "[" + name + "] frozen root 屏仅换面（尺寸锁定 "
+                        + vdW + "x" + vdH + "）");
+                return true;
+            }
             final int id = displayId, fw = w, fh = h, fdpi = dpi;
             final Surface fs = surface;
             ready = true;
@@ -219,6 +266,17 @@ public final class MirrorSlot implements CanvasSource {
         // 已有 VD、只是 surface/尺寸变了 → resize + setSurface，不重建（避免目标重启）
         VirtualDisplay existing = vd;
         if (existing != null && pkg.equals(lastPkg) && displayId > 0) {
+            // 批次 CF：frozen 槽绝不 resize —— 只换输出面
+            if (resizeFrozen) {
+                liveSurface = surface;
+                existing.setSurface(surface);
+                lastSig = sig;
+                // ready 必须跟着恢复：①提示层不能永久压在真画面上 ②触摸回注判 ready
+                ready = true;
+                Log.i(TAG, "[" + name + "] frozen VD 仅换面（尺寸锁定 "
+                        + vdW + "x" + vdH + "）");
+                return true;
+            }
             try {
                 existing.resize(w, h, dpi);
                 existing.setSurface(surface);
@@ -387,8 +445,14 @@ public final class MirrorSlot implements CanvasSource {
         ready = surface != null && surface.isValid();
         // 【批次 AH】搬已有任务进新屏后，应用窗口常停在旧尺寸 → 两拍"布局抖动"
         // 强制重排铺满（不杀进程、不丢导航/播放状态）。
-        scheduleNudge(2000);
-        scheduleNudge(4500);
+        // 【批次 CF】frozen 槽只拍密度（修竖屏烙印），尺寸拍/尺寸抖动全免 ——
+        // 网易云对尺寸变化零容忍（resizeableActivity=false，一 resize 就重建回首页）。
+        if (resizeFrozen) {
+            scheduleNudgeDensity(2000);
+        } else {
+            scheduleNudge(2000);
+            scheduleNudge(4500);
+        }
         Log.i(TAG, "[" + name + "] " + pkg + " 已部署到 displayId=" + displayId + " " + vdW + "x" + vdH
                 + " trusted=" + trusted + " root=" + rootBased + " ready=" + ready);
         return true;
@@ -465,6 +529,23 @@ public final class MirrorSlot implements CanvasSource {
     public boolean attachSurface(Surface surface, int w, int h, int dpi) {
         if (vd == null || displayId <= 0) return false;
         if (surface == null || !surface.isValid()) return false;
+        // 批次 CF：frozen 槽只挂面，尺寸/dpi 一律不动（SurfaceView 单应用 1:1 时
+        // 带来的 w/h 恰好等于建屏尺寸；分屏时输出在快照读面上，这路不该被走到）
+        if (resizeFrozen) {
+            try {
+                liveSurface = surface;
+                vd.setSurface(surface);
+                ready = true;
+                lastSig = lastPkg + "|" + System.identityHashCode(surface) + "|" + w + "x" + h;
+                Log.i(TAG, "[" + name + "] frozen surface 已挂载（尺寸锁定 "
+                        + vdW + "x" + vdH + "）displayId=" + displayId);
+                return true;
+            } catch (Throwable t) {
+                lastError = "frozen attachSurface 失败: " + t;
+                Log.w(TAG, lastError, t);
+                return false;
+            }
+        }
         try {
             vd.resize(w, h, dpi);
             vdW = w;
@@ -502,6 +583,9 @@ public final class MirrorSlot implements CanvasSource {
      *      像素尺寸，不触发应用 density 重配/重排。dpi 只在 deploy/attachSurface 定。
      */
     public void syncSize(int w, int h) {
+        // 批次 CF：frozen 槽 DOWN 校准直接短路 —— VD 尺寸终身锁定，触摸按
+        // vdW/vdH 与画布的固定比例换算（单应用 1:1，分屏不透传触摸）。
+        if (resizeFrozen) return;
         if (displayId <= 0 || w <= 0 || h <= 0) return;
         if (vdW == w && vdH == h) return;
         if (rootBased) {
@@ -624,6 +708,138 @@ public final class MirrorSlot implements CanvasSource {
         });
     }
 
+    /* ---------------- 批次 CF：frozen 槽的密度拍与快照预览 ---------------- */
+
+    /**
+     * frozen 槽专用：只跑密度拍（±8 再回，尺寸不动）。
+     *
+     * 密度拍的存在意义是修网易云「竖屏烙印」（见 nudgeLayout 注释）：D 段 hook 只在
+     * attachBaseContext 时生效，密度变化触发 activity 重建才让横屏判定跑上。frozen 槽
+     * 只在**首次部署/换应用**（finishDeploy）后拍一次 —— 那时用户还没进歌词页，重建
+     * 无感；「桌面往返」路径绝不调用本方法，重建链路被彻底切断。
+     */
+    private void scheduleNudgeDensity(long delayMs) {
+        new Handler(Looper.getMainLooper()).postDelayed(this::nudgeDensityOnly, delayMs);
+    }
+
+    private void nudgeDensityOnly() {
+        final int d = displayId, w = vdW, h = vdH, dpi = vdDpi;
+        if (d <= 0 || w <= 0 || h <= 0 || dpi <= 0) return;
+        if (rootBased) {
+            rootExecAsync(() -> {
+                try {
+                    PrivClient.resize(d, w, h, dpi + 8);
+                    Thread.sleep(1000);
+                    PrivClient.resize(d, w, h, dpi);
+                    Log.i(TAG, "[" + name + "] frozen 密度拍完成（尺寸锁定 " + w + "x" + h + "）");
+                } catch (Throwable t) {
+                    Log.w(TAG, "[" + name + "] frozen 密度拍失败: " + t);
+                }
+            });
+            return;
+        }
+        if (vd == null) return;
+        Handler hd = new Handler(Looper.getMainLooper());
+        try {
+            hd.postDelayed(() -> {
+                if (vd == null || displayId != d) return;
+                try { vd.resize(w, h, dpi + 8); } catch (Throwable ignore) {}
+            }, 0);
+            hd.postDelayed(() -> {
+                if (vd == null || displayId != d) return;
+                try { vd.resize(w, h, dpi); } catch (Throwable ignore) {}
+            }, 1000);
+            Log.i(TAG, "[" + name + "] frozen 密度拍 dpi " + dpi + "→" + (dpi + 8) + "→" + dpi);
+        } catch (Throwable t) {
+            Log.w(TAG, "[" + name + "] frozen 密度拍失败: " + t);
+        }
+    }
+
+    /**
+     * frozen 槽的输出面切换（PipBoard 在单应用 ↔ 分屏切换后调）。
+     *
+     * true = 分屏预览：VD 输出挂快照读面（ImageReader），PipBoard 定时
+     * {@link #acquireSnapshot()} 拉帧刷 ImageView。应用侧零感知 —— 它以为
+     * 还在一块终身不变的屏上跑，Activity 不重建、歌词页/播放状态原地保留。
+     * false = 单应用：输出挂回 SurfaceView（liveSurface），1:1 实显 + 触摸透传。
+     */
+    public void setSnapshotMode(boolean on) {
+        if (!resizeFrozen || displayId <= 0) return;
+        if (on) {
+            ImageReader r = snapReader;
+            if (r == null) {
+                try {
+                    r = ImageReader.newInstance(vdW, vdH, PixelFormat.RGBA_8888, 2);
+                } catch (Throwable t) {
+                    Log.w(TAG, "[" + name + "] 快照读面建立失败: " + t);
+                    return;
+                }
+                snapReader = r;
+            }
+            snapMode = true;
+            Surface snap = r.getSurface();
+            if (rootBased) {
+                final int d = displayId;
+                rootExecAsync(() -> PrivClient.surface(d, snap));
+            } else {
+                try { vd.setSurface(snap); } catch (Throwable t) {
+                    Log.w(TAG, "[" + name + "] 快照面挂载失败: " + t);
+                }
+            }
+            Log.i(TAG, "[" + name + "] 输出 → 快照读面 " + vdW + "x" + vdH);
+        } else {
+            snapMode = false;
+            Surface live = liveSurface;
+            if (rootBased) {
+                final int d = displayId;
+                rootExecAsync(() -> PrivClient.surface(d, live));
+            } else {
+                try { vd.setSurface(live); } catch (Throwable ignore) {}
+            }
+            Log.i(TAG, "[" + name + "] 输出 → 实显 surface");
+        }
+    }
+
+    /**
+     * 拉最新一帧快照（PipBoard 主线程定时调）。无新帧返回 null（ImageView 保持旧图）。
+     * rowStride 与 w*4 不一致（行对齐 padding）时按整行建图再裁剪，一次 copy 无逐像素循环。
+     */
+    public Bitmap acquireSnapshot() {
+        ImageReader r = snapReader;
+        if (r == null || !snapMode) return null;
+        Image img = null;
+        try {
+            img = r.acquireLatestImage();
+            if (img == null) return null;
+            Image.Plane p = img.getPlanes()[0];
+            java.nio.ByteBuffer buf = p.getBuffer();
+            buf.rewind();
+            int rowStride = p.getRowStride();
+            int w = img.getWidth(), h = img.getHeight();
+            Bitmap b = Bitmap.createBitmap(rowStride / 4, h, Bitmap.Config.ARGB_8888);
+            b.copyPixelsFromBuffer(buf);
+            if (rowStride / 4 != w) b = Bitmap.createBitmap(b, 0, 0, w, h);
+            return b;
+        } catch (Throwable t) {
+            Log.w(TAG, "[" + name + "] 快照拉帧失败: " + t);
+            return null;
+        } finally {
+            if (img != null) {
+                try { img.close(); } catch (Throwable ignore) {}
+            }
+        }
+    }
+
+    /** 拆屏/换应用时释放快照读面（teardownVd 调）。 */
+    private void releaseSnapshot() {
+        ImageReader r = snapReader;
+        snapReader = null;
+        liveSurface = null;
+        if (r != null) {
+            try { r.close(); } catch (Throwable ignore) {}
+        }
+    }
+
     /** 上一次喂进来的画布尺寸：CANCEL 补发（cancelStroke）时用同一坐标系。 */
     private volatile int svW, svH;
 
@@ -662,6 +878,8 @@ public final class MirrorSlot implements CanvasSource {
         final boolean wasRoot = rootBased;
         ready = false;
         rootBased = false;
+        snapMode = false;
+        releaseSnapshot();
         unregister(d);
         if (wasRoot && d > 0) {
             // root 屏：拆屏是守护进程往返，排队走（幂等；守护进程已死也安全）。
