@@ -1,5 +1,9 @@
 # 后续开发清单
 
+> **进行中：OneStep 借鉴落地系列** —— 计划/验收/复盘全在 `docs/UPDATE-CHECKLIST.md`
+> （K1 root 常驻服务 → K2 TRUSTED 屏 → K3 启动拦截 → K4 高德导航卡片 → K5 对齐+复盘），
+> 思路依据 `docs/ONESTEP-BORROWING.md`。本文件保留既有 P0~P2 清单，P2-19 起的模块验收照旧有效。
+
 > 基线：`FEATURE-MATRIX.md`（205 条，5 组 / 17 分区）
 > 顺序原则：先让「桌面」真的能用（纯公开 API），再加特色功能，最后做 root 增强层。
 >
