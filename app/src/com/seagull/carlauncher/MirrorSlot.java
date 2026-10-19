@@ -193,38 +193,47 @@ public final class MirrorSlot implements CanvasSource {
         if (pkg == null || pkg.trim().isEmpty()) { lastError = "未选择目标应用"; return false; }
         if (w <= 0 || h <= 0) { lastError = "锚点尺寸未就绪"; return false; }
 
-        // 已有 root 屏、只是 surface 变了 → 挂面即可，**绝不 resize**（批次 CE：尺寸固定化）
+        // 已有 root 屏、只是 surface/尺寸变了 → 守护进程 resize + 挂面，不重建
         if (rootBased && pkg.equals(lastPkg) && displayId > 0) {
-            final int id = displayId;
+            final int id = displayId, fw = w, fh = h, fdpi = dpi;
             final Surface fs = surface;
             ready = true;
             lastSig = sig;
             rootExecAsync(() -> {
-                // 批次 CE：VD 尺寸终身不变（网易云 3.1.0 反编译：resizeableActivity=false
-                // + 播放页无 configChanges + MainActivity 重建清 fragment —— 每次 resize
-                // 都是一场 Activity 重建风暴，歌词页必丢）。画布切换靠 SurfaceView 缩放，
-                // 触摸按簿记比例（vdW/画布W）换算，点哪儿是哪儿。
+                // 批次 CC：簿记只在 resize 确认后更新 —— 在途/失败期间触摸按旧尺寸比例
+                // 换算，与屏上被缩放的内容严格对齐（车联助手不变量，机制见 syncSize 注释）。
+                boolean ok = PrivClient.resize(id, fw, fh, fdpi);
                 PrivClient.surface(id, fs);
-                Log.i(TAG, "[" + name + "] root 屏重挂面（尺寸固定 " + vdW + "x" + vdH
-                        + "）displayId=" + id);
+                if (ok) {
+                    setSizeBookkeeping(fw, fh, fdpi);
+                    Log.i(TAG, "[" + name + "] root 屏 resized/reattached " + fw + "x" + fh
+                            + " on displayId=" + id);
+                } else {
+                    Log.w(TAG, "[" + name + "] root resize 失败（挂面已完成），触摸换算保持 "
+                            + vdW + "x" + vdH);
+                }
             });
             return true;
         }
 
-        // 已有 VD、只是 surface 变了 → setSurface 即可，不 resize 不重建（批次 CE）
+        // 已有 VD、只是 surface/尺寸变了 → resize + setSurface，不重建（避免目标重启）
         VirtualDisplay existing = vd;
         if (existing != null && pkg.equals(lastPkg) && displayId > 0) {
             try {
+                existing.resize(w, h, dpi);
                 existing.setSurface(surface);
+                vdW = w;
+                vdH = h;
+                vdDpi = dpi;
                 lastSig = sig;
-                // 【关键】挂面成功即画面已恢复，ready 必须跟着恢复，
+                // 【关键】resize 成功即画面已恢复，ready 必须跟着恢复，
                 // 否则：①提示层永久压在真画面上 ②触摸回注判 ready 永远 false → 点击失效
                 ready = true;
-                Log.i(TAG, "[" + name + "] 重挂面（尺寸固定 " + vdW + "x" + vdH
-                        + "）displayId=" + displayId);
+                Log.i(TAG, "[" + name + "] resized/reattached " + w + "x" + h
+                        + " on displayId=" + displayId);
                 return true;
             } catch (Throwable t) {
-                lastError = "挂面失败: " + t;
+                lastError = "resize 失败: " + t;
                 return false;
             }
         }
@@ -376,11 +385,10 @@ public final class MirrorSlot implements CanvasSource {
 
         lastSig = sig;
         ready = surface != null && surface.isValid();
-        // 【批次 AH→CE】部署后一拍"密度抖动"：修网易云旧 activity 的竖屏烙印
-        // （密度变化触发重建 → D 段 hook 重新判定朝向，进程不死、音乐不断）。
-        // 批次 CE 起不再有尺寸抖动 —— VD 尺寸终身不变，任何尺寸 resize 对网易云
-        // 都是重建风暴（歌词页/页面状态必丢）；也只抖这一拍，多一拍就多丢一次状态。
+        // 【批次 AH】搬已有任务进新屏后，应用窗口常停在旧尺寸 → 两拍"布局抖动"
+        // 强制重排铺满（不杀进程、不丢导航/播放状态）。
         scheduleNudge(2000);
+        scheduleNudge(4500);
         Log.i(TAG, "[" + name + "] " + pkg + " 已部署到 displayId=" + displayId + " " + vdW + "x" + vdH
                 + " trusted=" + trusted + " root=" + rootBased + " ready=" + ready);
         return true;
@@ -453,18 +461,19 @@ public final class MirrorSlot implements CanvasSource {
     /**
      * Surface 后到（SurfaceView 回调晚于建屏）：把已有 VD 的输出挂到这块 Surface 上。
      * 产品主路径用它 —— 先建屏 + 搬应用（不依赖 Surface 就绪），Surface 一到就出画面。
-     * 批次 CE：**只挂面，永不 resize** —— VD 尺寸终身不变（不变量见 PipBoard.fixedVdSize），
-     * 画布大小切换全靠 SurfaceView 缩放显示。
      */
     public boolean attachSurface(Surface surface, int w, int h, int dpi) {
         if (vd == null || displayId <= 0) return false;
         if (surface == null || !surface.isValid()) return false;
         try {
+            vd.resize(w, h, dpi);
+            vdW = w;
+            vdH = h;
+            vdDpi = dpi;
             vd.setSurface(surface);
             ready = true;
-            lastSig = lastPkg + "|" + System.identityHashCode(surface) + "|" + vdW + "x" + vdH;
-            Log.i(TAG, "[" + name + "] surface 已挂载（尺寸固定 " + vdW + "x" + vdH
-                    + "，画布 " + w + "x" + h + " 缩放显示）displayId=" + displayId);
+            lastSig = lastPkg + "|" + System.identityHashCode(surface) + "|" + w + "x" + h;
+            Log.i(TAG, "[" + name + "] surface 已挂载 " + w + "x" + h + " displayId=" + displayId);
             return true;
         } catch (Throwable t) {
             lastError = "attachSurface 失败: " + t;
@@ -493,14 +502,34 @@ public final class MirrorSlot implements CanvasSource {
      *      像素尺寸，不触发应用 density 重配/重排。dpi 只在 deploy/attachSurface 定。
      */
     public void syncSize(int w, int h) {
-        // 批次 CE：尺寸固定化后本方法退化为空操作。旧职责「DOWN 时校准 VD 与画布一致」
-        // 被新不变量取代：VD 建屏后终身不 resize（网易云 3.1.0 反编译坐实 —— 每次适配
-        // 性 resize 对它都是 Activity 重建风暴，歌词页/页面状态必丢）。画布↔屏的尺寸差
-        // 全靠 SurfaceView 缩放 + 触摸逐轴比例换算（onTouch 每手势现算 fx/fy）消化。
-        // 保留签名以兼容调用点（PipBoard.syncCanvasSize）。
+        if (displayId <= 0 || w <= 0 || h <= 0) return;
+        if (vdW == w && vdH == h) return;
+        if (rootBased) {
+            final int d = displayId, fdpi = vdDpi;
+            rootExecAsync(() -> {
+                // 在途/失败不改簿记：触摸换算继续按旧尺寸走，与屏上内容保持比例一致。
+                // 失败日志是「root resize 被 ROM 拒绝」的唯一可见信号，别吞。
+                if (PrivClient.resize(d, w, h, fdpi)) {
+                    setSizeBookkeeping(w, h, fdpi);
+                    Log.i(TAG, "[" + name + "] root 尺寸校准确认 → " + w + "x" + h);
+                } else {
+                    Log.w(TAG, "[" + name + "] root resize 失败，触摸换算保持 "
+                            + vdW + "x" + vdH);
+                }
+            });
+            return;
+        }
+        if (vd == null) return;
+        try {
+            vd.resize(w, h, vdDpi);
+            setSizeBookkeeping(w, h, vdDpi);
+            Log.i(TAG, "[" + name + "] VD 尺寸校准 → " + w + "x" + h + "@" + vdDpi + "dpi");
+        } catch (Throwable t) {
+            Log.w(TAG, "[" + name + "] VD 尺寸校准失败: " + t);
+        }
     }
 
-    /* ---------------- 批次 AJ/CE：密度抖动（修网易云竖屏烙印；尺寸终身不变） ---------------- */
+    /* ---------------- 批次 AH：布局抖动（搬入后强制重排铺满） ---------------- */
 
     /** deploy / attachSurface 时记录的 dpi，抖动回弹与后续校准时保持不变。 */
     private volatile int vdDpi;
@@ -521,7 +550,11 @@ public final class MirrorSlot implements CanvasSource {
     }
 
     /**
-     * VD 密度抖动：修网易云「搬入后竖屏渲染」的根 —— 反编译坐实（批次 AJ）：
+     * VD 抖动：强制画布里的应用重排/重建。批次 AJ 升级为两拍：
+     *
+     * 第 1 拍（尺寸 ±1px）：可缩放应用直接按新尺寸重排，铺满旧布局停摆类问题。
+     *
+     * 第 2 拍（密度 ±8 再回）：修网易云「不铺满」的根 —— 反编译坐实（批次 AJ）：
      * 网易云 iot 版 base/b.attachBaseContext 用 **Application 的 defaultDisplay
      * （永远是 display 0，手机主屏=竖屏）** 的宽高比自判朝向，ratio≤1.3 就
      * applyOverrideConfiguration 烙死 PORTRAIT，且 onConfigurationChanged 永不重算。
@@ -529,55 +562,64 @@ public final class MirrorSlot implements CanvasSource {
      * 但只对「attachBaseContext 时」生效 —— 搬任务路部署的是在手机上早已初始化的
      * 旧 activity，hook 没有机会跑。而它的 configChanges 不含 DENSITY：**密度一变，
      * activity 必重建**（重跑 attachBaseContext → D 段生效 → 横屏渲染），进程不死、
-     * 音乐不断。密度 ±8 肉眼无感。
-     *
-     * 批次 CE：尺寸抖动（±1px 拍）已删 —— VD 建屏后终身不 resize（不变量见
-     * PipBoard.fixedVdSize），任何尺寸变化对 resizeableActivity=false 的网易云
-     * 都是一次 Activity 重建（歌词页/页面状态必丢）。本方法只剩密度拍（尺寸参数
-     * 恒为建屏值），且**只在部署时**（scheduleNudge）调用 —— 搬回/巡检路径绝不
-     * 抖动，否则重建一次 = 用户正在看的页面当场归零（bug「桌面往返回首页」）。
+     * 音乐不断。密度 ±8 肉眼无感，两拍在 1s 内完成。
      */
     public void nudgeLayout() {
-        // root 屏：抖动整段排队走守护进程（专用线程里 sleep，不占别人的路）
+        // root 屏：两拍抖动整段排队走守护进程 resize（专用线程里 sleep，不占别人的路）
         if (rootBased) { nudgeRoot(); return; }
         final int d = displayId;
         final int w = vdW, h = vdH, dpi = vdDpi;
         if (vd == null || d <= 0 || w <= 0 || h <= 0 || dpi <= 0) return;
         android.os.Handler hd = new android.os.Handler(android.os.Looper.getMainLooper());
         try {
-            hd.postDelayed(() -> {
-                if (vd == null || displayId != d) return;
-                try { vd.resize(w, h, dpi + 8); } catch (Throwable ignore) {}
-            }, 300);
+            vd.resize(w, Math.max(64, h - 1), dpi);
             hd.postDelayed(() -> {
                 if (vd == null || displayId != d) return;
                 try { vd.resize(w, h, dpi); } catch (Throwable ignore) {}
-            }, 1300);
+            }, 400);
+            Log.i(TAG, "[" + name + "] 布局抖动(尺寸) " + w + "x" + Math.max(64, h - 1)
+                    + " → " + w + "x" + h);
+        } catch (Throwable t) {
+            Log.w(TAG, "[" + name + "] 布局抖动(尺寸)失败: " + t);
+        }
+        try {
+            hd.postDelayed(() -> {
+                if (vd == null || displayId != d) return;
+                try { vd.resize(w, h, dpi + 8); } catch (Throwable ignore) {}
+            }, 1200);
+            hd.postDelayed(() -> {
+                if (vd == null || displayId != d) return;
+                try { vd.resize(w, h, dpi); } catch (Throwable ignore) {}
+            }, 2200);
             Log.i(TAG, "[" + name + "] 密度抖动 dpi " + dpi + "→" + (dpi + 8) + "→" + dpi
-                    + "（尺寸不变；触发 activity 重建，让 D 段重新判定朝向）");
+                    + "（触发 activity 重建，让 D 段重新判定朝向）");
         } catch (Throwable t) {
             Log.w(TAG, "[" + name + "] 密度抖动失败: " + t);
         }
     }
 
-    /** 部署成功后的一拍密度抖动（2s）：给搬入/挂面留出完成时间。 */
+    /** 部署成功后的两拍抖动（2s/4.5s）：给应用留出搬入/挂面的完成时间。 */
     private void scheduleNudge(long delayMs) {
         new android.os.Handler(android.os.Looper.getMainLooper())
                 .postDelayed(this::nudgeLayout, delayMs);
     }
 
-    /** root 屏版密度抖动：密度 ±8 一对，尺寸恒为建屏值，走守护进程（串行队列）。 */
+    /** root 屏版布局抖动：尺寸 ±1px 与密度 ±8 两拍，全部走守护进程 resize（串行队列）。 */
     private void nudgeRoot() {
         final int d = displayId, w = vdW, h = vdH, dpi = vdDpi;
         if (d <= 0 || w <= 0 || h <= 0 || dpi <= 0) return;
         rootExecAsync(() -> {
             try {
+                PrivClient.resize(d, w, Math.max(64, h - 1), dpi);
+                Thread.sleep(400);
+                PrivClient.resize(d, w, h, dpi);
+                Thread.sleep(800);
                 PrivClient.resize(d, w, h, dpi + 8);
                 Thread.sleep(1000);
                 PrivClient.resize(d, w, h, dpi);
-                Log.i(TAG, "[" + name + "] root 屏密度抖动完成 " + w + "x" + h);
+                Log.i(TAG, "[" + name + "] root 屏布局抖动完成 " + w + "x" + h);
             } catch (Throwable t) {
-                Log.w(TAG, "[" + name + "] root 屏密度抖动失败: " + t);
+                Log.w(TAG, "[" + name + "] root 屏布局抖动失败: " + t);
             }
         });
     }
