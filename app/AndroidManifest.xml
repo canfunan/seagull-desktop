@@ -252,6 +252,12 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
+        <!-- 批次 U 虚拟屏画中画：自建 VD 承载高德，悬浮窗呈现，root input 转发。
+             不依赖 LSPosed（见 .monkeycode/specs/virtual-display-pip/）。 -->
+        <service
+            android:name=".PipOverlayService"
+            android:exported="false" />
+
         <!--
             APK 自更新：安装 intent 的 Uri 走 SeagullFileProvider（见同名 java，零依赖
             自绘 FileProvider）。targetSdk 33 下 Uri.fromFile() = FileUriExposedException。

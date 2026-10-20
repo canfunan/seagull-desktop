@@ -245,6 +245,20 @@ public class RootPanelActivity extends BaseActivity {
                     return new SysOps.R(true, out == null ? "（无输出）" : out);
                 })));
 
+        /* 虚拟屏画中画（批次 U）：海鸥自建 VirtualDisplay 承载车机高德，
+         * 悬浮窗呈现、自由拉伸、root input 转发触摸。零 hook、零 LSPosed 依赖，
+         * 与注入链完全解耦。规格见 .monkeycode/specs/virtual-display-pip/。 */
+        col.addView(section("虚拟屏画中画"));
+        col.addView(btn("启动高德画中画（虚拟屏）", () -> op("虚拟屏画中画", () -> {
+            try {
+                startForegroundService(new android.content.Intent(this, PipOverlayService.class));
+                return new SysOps.R(true, "服务已拉起：看悬浮窗顶栏状态行；"
+                        + "SurfaceView 区手势直达高德，右下角手柄自由拉伸。");
+            } catch (Throwable ex) {
+                return new SysOps.R(false, "拉起失败: " + ex);
+            }
+        })));
+
         log = new TextView(this);
         log.setTextColor(Skin.c(R.color.warn));
         log.setTextSize(11);
