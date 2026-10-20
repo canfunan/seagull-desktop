@@ -162,17 +162,14 @@ public class RootPanelActivity extends BaseActivity {
         col.addView(btn("读取 LSPosed 日志（框架/模块/高德）", () -> op("LSPosed 注入自检", () -> {
             String cmd = "echo ==框架目录==; "
                     + "ls /data/adb/lspd 2>/dev/null | head -4; "
-                    + "ls -d /data/adb/modules/*lsposed* 2>/dev/null; "
+                    + "ls -d /data/adb/modules/*lsposed* /data/adb/ksu/modules/*lsposed* 2>/dev/null; "
                     + "echo ==日志文件==; "
-                    + "ls /data/adb/lspd/log/ 2>/dev/null | head -6; "
+                    + "ls /data/adb/lspd/log/ 2>/dev/null | head -8; "
                     + "echo ==本模块注入记录==; "
-                    + "grep -h SeagullLsp /data/adb/lspd/log/modules.log "
-                    + "/data/adb/lspd/log/log-all.log /data/adb/log/lsposed/*.log 2>/dev/null "
-                    + "| tail -20; "
+                    + "grep -ah SeagullLsp /data/adb/lspd/log/modules*.log 2>/dev/null | tail -15; "
+                    + "grep -ah -iE 'seagull' /data/adb/lspd/log/verbose*.log 2>/dev/null | tail -10; "
                     + "echo ==高德注入记录==; "
-                    + "grep -h autonavi /data/adb/lspd/log/modules.log "
-                    + "/data/adb/lspd/log/log-all.log /data/adb/log/lsposed/*.log 2>/dev/null "
-                    + "| tail -6; "
+                    + "grep -ah -E 'GaodeHook|autonavi' /data/adb/lspd/log/modules*.log 2>/dev/null | tail -8; "
                     + "echo ==自检完==";
             String out = Caps.exec(cmd);
             if (out == null || out.trim().isEmpty()) {
