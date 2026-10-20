@@ -162,3 +162,34 @@ jobs:
           name: lx-music-car-apk
           path: /tmp/lx/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      # 跟海鸥桌面同款发布纪律：tag = v<versionName>，同 tag 反复覆盖资产，
+      # universal 包改名 lx-music-car.apk → releases/latest/download/lx-music-car.apk 固定下载。
+      # 跨仓发布用 CROSS_RELEASE_TOKEN（lx-music-car 仓库），没有则跳过（artifact 仍可取）。
+      - name: 挂到 lx 仓库 release（免登录固定下载入口）
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_RELEASE_TOKEN }}
+        run: |
+          set -e
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::未配 CROSS_RELEASE_TOKEN，跳过 release 发布（artifact 照常）"
+            exit 0
+          fi
+          AAPT2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          OUT=/tmp/lx/android/app/build/outputs/apk/release
+          APK=$(ls "$OUT"/*universal*.apk | head -1)
+          VER=$("$AAPT2" dump badging "$APK" | sed -nE "s/^package: .*versionName='([^']+)'.*/\1/p" | head -1)
+          [ -n "$VER" ] || { echo "读不到 versionName"; exit 1; }
+          TAG="v$VER"
+          R=caogenfunan123/lx-music-car
+          cp "$APK" /tmp/lx-music-car.apk
+          if gh release view "$TAG" -R "$R" >/dev/null 2>&1; then
+            gh release upload "$TAG" /tmp/lx-music-car.apk -R "$R" --clobber
+            echo "已覆盖 $R 的 $TAG 安装包"
+          else
+            gh release create "$TAG" /tmp/lx-music-car.apk -R "$R" \
+              --title "落雪车机版（CARLINK 直连）$TAG" \
+              --notes "含海鸥桌面歌词直连补丁，与海鸥桌面同一签名密钥。免登录下载：https://github.com/$R/releases/latest/download/lx-music-car.apk"
+          fi
+          echo "下载地址 https://github.com/$R/releases/latest/download/lx-music-car.apk"
