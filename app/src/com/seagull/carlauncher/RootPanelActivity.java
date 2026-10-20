@@ -179,6 +179,44 @@ public class RootPanelActivity extends BaseActivity {
             return new SysOps.R(true, out);
         })));
 
+        /* LSPosed 账本自检（批次 T）：日志只能证明"运行时注入过"，改不了配置。
+         * 这里直接读框架自己的模块配置库——海鸥在不在模块表里、enabled 是不是
+         * true、作用域有没有高德/SystemUI，全在这份配置里，是终审证据。 */
+        col.addView(btn("读 LSPosed 模块配置（海鸥启用了吗/作用域里有谁）",
+                () -> op("LSPosed 模块配置", () -> {
+            String cmd = "echo ==配置目录==; "
+                    + "ls -la /data/adb/lspd/config/ 2>/dev/null; "
+                    + "echo ==modules_config.json==; "
+                    + "cat /data/adb/lspd/config/modules_config.json 2>/dev/null | head -120; "
+                    + "echo ==配置库里的海鸥与作用域==; "
+                    + "for f in /data/adb/lspd/config/*.db; do "
+                    + "[ -f \"$f\" ] && echo \"[db: $f]\" && strings \"$f\" | "
+                    + "grep -aiE 'seagull|autonavi|systemui' | head -10; done; "
+                    + "echo ==配置完==";
+            String out = Caps.exec(cmd);
+            if (out == null || out.trim().isEmpty()) {
+                out = "（无输出：root 通道不通，或 /data/adb/lspd/config 不存在——"
+                        + "框架可能未激活）";
+            }
+            return new SysOps.R(true, out);
+        })));
+
+        /* 一键拉起 LSPosed 管理器：海鸥是桌面，没有独立入口可进框架界面；
+         * 车联当年多半是预配置好的，本模块的开关/作用域必须人来点。
+         * 管理器无桌面图标（隐藏应用），root am start 可直拉。 */
+        col.addView(btn("打开 LSPosed 管理器（点开关+勾作用域）", () -> op("LSPosed 管理器",
+                () -> {
+            String cmd = "am start -n org.lsposed.manager/"
+                    + "org.lsposed.manager.ui.activity.MainActivity 2>&1 "
+                    + "|| am start -n com.android.shell/.BogusActivity 2>/dev/null; "
+                    + "pm list packages 2>/dev/null | grep -i lsposed";
+            String out = Caps.exec(cmd);
+            if (out == null || out.trim().isEmpty()) {
+                out = "（拉起失败：管理器不在了。先确认 LSPosed 内核仍在运行）";
+            }
+            return new SysOps.R(true, out);
+        })));
+
         /* 车联助手 root 能力对齐（批次 S-RESTORE）：leting 用 su 注入按键到指定
          * display（其 PIP 的返回键/触摸注入同款命令）。这里挂个可点测的等价项。 */
         col.addView(section("车联助手对齐"));
