@@ -232,6 +232,19 @@ public class RootPanelActivity extends BaseActivity {
         col.addView(btn("向副屏(display 1)发返回键（root 注入）", () -> op("副屏返回键",
                 () -> SysOps.inputKeyeventOnDisplay(1, 4))));
 
+        /* 作用域应用三连（批次 T2）：LSPosed 只在进程 fork 时注入，勾完作用域后
+         * 已经活着的高德进程永远等不到注入。这里一键杀干净两个高德，重开即触发
+         * 新一轮 fork + 注入。杀完用户需手动重新打开高德。 */
+        col.addView(btn("强杀高德（车机版+公版，杀完手动重开）", () -> op("强杀高德",
+                () -> {
+                    String cmd = "am force-stop com.autonavi.amapauto 2>&1; "
+                            + "am force-stop com.autonavi.minimap 2>&1; "
+                            + "echo 剩余高德进程:; "
+                            + "pidof com.autonavi.amapauto com.autonavi.minimap 2>/dev/null || echo 无";
+                    String out = Caps.exec(cmd);
+                    return new SysOps.R(true, out == null ? "（无输出）" : out);
+                })));
+
         log = new TextView(this);
         log.setTextColor(Skin.c(R.color.warn));
         log.setTextSize(11);
