@@ -183,22 +183,46 @@ public class PipOverlayService extends Service {
                 return;
             }
             vdId = id;
-            SurfaceView v = sv();
-            if (v != null && v.getHolder().getSurface() != null
-                    && v.getHolder().getSurface().isValid()) {
-                VirtualPipController.attachSurface(v.getHolder().getSurface());
+            // SurfaceView 缓冲固定为 VD 分辨率：清晰且 resize 时不再反复重建 surface
+            final SurfaceView v = sv();
+            if (v != null) {
+                new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
+                        v.getHolder().setFixedSize(
+                                VirtualPipController.width(), VirtualPipController.height()));
             }
+            VirtualPipController.attachSurface(v != null ? v.getHolder().getSurface() : null);
             String err = VirtualPipController.launchAmap(this);
             if (err != null) {
                 setStatus(err, true);
-            } else {
-                String path = VirtualPipController.isRootDisplay()
-                        ? "root TRUSTED 屏" : "本地屏（若不显示属 ROM 限制）";
-                setStatus("VD#" + id + " " + VirtualPipController.width() + "x"
-                        + VirtualPipController.height() + " · " + path
-                        + " · 已拉起 " + VirtualPipController.pkg(), false);
+                return;
             }
+            String path = VirtualPipController.isRootDisplay()
+                    ? "root TRUSTED 屏" : "本地屏（若不显示属 ROM 限制）";
+            setStatus("VD#" + id + " " + VirtualPipController.width() + "x"
+                    + VirtualPipController.height() + " · " + path
+                    + " · 已拉起，探测中…", false);
+            // 黑屏二分探针：2.5s / 7s 两次量 VD 截屏体积，结论直接写状态行
+            android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+            h.postDelayed(() -> probe(), 2500);
+            h.postDelayed(() -> probe(), 7000);
         }, "seagull-vd-boot").start();
+    }
+
+    /** 后台跑探针，结论回状态行；顺带把 Surface 挂接结果一并报出。 */
+    private void probe() {
+        if (root == null || status == null) return;   // 服务已关，延时探针作废
+        final SurfaceView v = sv();
+        if (v != null && v.getHolder().getSurface() != null
+                && v.getHolder().getSurface().isValid()) {
+            VirtualPipController.attachSurface(v.getHolder().getSurface());
+        }
+        new Thread(() -> {
+            String r = VirtualPipController.probeContent();
+            String a = VirtualPipController.attachErr();
+            boolean err = "屏未建".equals(r) || r.startsWith("截屏失败") || r.startsWith("截屏不支持")
+                    || (a != null && r.startsWith("屏黑"));
+            setStatus(r + (a != null ? " · Surface:" + a : ""), err);
+        }, "seagull-vd-probe").start();
     }
 
     private SurfaceView sv() {

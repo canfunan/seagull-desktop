@@ -42,6 +42,7 @@ public final class VirtualPipController {
     private static boolean sRooted;         // true = 守护进程 TRUSTED 屏
 
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
+    private static volatile String sAttachErr;   // 最近一次 Surface 挂接结果（null=成功）
 
     private VirtualPipController() {}
 
@@ -99,19 +100,34 @@ public final class VirtualPipController {
         }
     }
 
+    /** 最近一次 Surface 挂接错误（null=成功）。黑屏二分用：屏内容有 ↔ Surface 没接上。 */
+    public static synchronized String attachErr() { return sAttachErr; }
+
     /**
      * Surface 挂接（两条路径自动分流）。
-     * root 屏走 PrivClient.surface —— 会过线协议，必须放后台线程；
+     * root 屏走 PrivClient.surface —— 会过线协议，必须放后台线程；结果记入 sAttachErr，
+     * 静默失败是黑屏排查的大坑（批次 V）。
      * 本地屏直接 setSurface，主线程安全。
      */
     public static synchronized void attachSurface(final Surface s) {
         if (sDisplayId < 0) return;
         if (sRooted) {
-            IO.execute(() -> PrivClient.surface(sDisplayId, s));
+            IO.execute(() -> {
+                try {
+                    boolean ok = PrivClient.surface(sDisplayId, s);
+                    sAttachErr = ok ? null : "Surface 挂接被守护进程拒绝";
+                    Log.i(TAG, "surface attach ok=" + ok + " s=" + (s != null));
+                } catch (Throwable t) {
+                    sAttachErr = "Surface 挂接异常: " + t;
+                    Log.w(TAG, "surface attach 异常", t);
+                }
+            });
         } else if (sVd != null) {
             try {
                 sVd.setSurface(s);
+                sAttachErr = null;
             } catch (Throwable t) {
+                sAttachErr = "setSurface 失败: " + t;
                 Log.w(TAG, "setSurface 失败", t);
             }
         }
@@ -147,7 +163,51 @@ public final class VirtualPipController {
         String out = Caps.exec("am start --display " + sDisplayId + " -n " + comp + " 2>&1");
         if (out == null) return "am start 失败（root 通道超时）";
         Log.i(TAG, "am start out=" + out.replace('\n', ' '));
+        String bad = amStartError(out);
+        return bad != null ? "am start: " + bad : null;
+    }
+
+    /** am start 输出校验：不再把 "Error" 当成功（黑屏排查时这种假成功最坑）。 */
+    private static String amStartError(String out) {
+        String[] lines = out.split("\n");
+        for (String l : lines) {
+            String t = l.trim();
+            String low = t.toLowerCase(java.util.Locale.ROOT);
+            if (low.startsWith("error") || low.contains("exception")
+                    || low.contains("permission denial") || low.contains("not started")) {
+                return t.length() > 120 ? t.substring(0, 120) : t;
+            }
+        }
         return null;
+    }
+
+    /**
+     * 黑屏二分探针：对 VD 直接 root 截屏，量 PNG 体积。
+     * 黑屏图高度可压缩（1280x720 纯黑约几 KB），有真实内容在 50KB 以上。
+     * 返回一句话结论，直接进悬浮窗状态行 —— 不用抓日志就能分清
+     * 「任务没落屏」（屏黑）还是「落了屏但 Surface 没接上」（屏有内容、窗口黑）。
+     */
+    public static String probeContent() {
+        int id;
+        synchronized (VirtualPipController.class) {
+            id = sDisplayId;
+        }
+        if (id < 0) return "屏未建";
+        String out = Caps.exec("screencap -d " + id
+                + " -p /data/local/tmp/seagull_vd.png 2>&1; wc -c < /data/local/tmp/seagull_vd.png 2>/dev/null; rm -f /data/local/tmp/seagull_vd.png");
+        if (out == null) return "探测超时";
+        String[] lines = out.trim().split("\n");
+        String num = lines[lines.length - 1].trim();
+        try {
+            long bytes = Long.parseLong(num);
+            if (bytes <= 0) return "截屏失败(" + (lines.length > 1 ? lines[0].trim() : "空文件") + ")";
+            return bytes < 50_000L
+                    ? "屏黑(" + (bytes / 1024) + "KB)→高德没落屏"
+                    : "屏有内容(" + (bytes / 1024) + "KB)";
+        } catch (NumberFormatException e) {
+            String first = lines[0].trim();
+            return "截屏不支持: " + (first.length() > 50 ? first.substring(0, 50) : first);
+        }
     }
 
     private static String resolveComponent(Context ctx, String pkg) {
