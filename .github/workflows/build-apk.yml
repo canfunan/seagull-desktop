@@ -96,7 +96,7 @@ jobs:
           echo "下载地址 https://github.com/$GITHUB_REPOSITORY/releases/latest/download/SeagullLauncher.apk"
 
   # 落雪音乐车机版（lx-music-car fork）+ CARLINK 直连补丁：
-  # 源码 = caogenfunan123/lx-music-car 的 carlink 分支（补丁常驻该分支，随分支头走）。
+  # 源码 = canfunan/lx-music-car 的 carlink 分支（补丁常驻该分支，随分支头走）。
   # 用海鸥桌面同一把签名密钥（SEAGULL_KEYSTORE_B64），覆盖安装无需卸载。
   lx-music-car:
     runs-on: ubuntu-latest
@@ -118,8 +118,12 @@ jobs:
       - name: 拉落雪源码（carlink 分支）
         run: |
           set -e
-          git clone --depth 1 --branch carlink \
-            https://github.com/caogenfunan123/lx-music-car.git /tmp/lx
+          # 匿名克隆（公共仓）：actions/checkout 注入的 GITHUB_TOKEN 凭据头
+          # 只对本仓有效，跨仓访问会 404 → git 堕入终端交互 → 无 TTY fatal。
+          # 两个空赋值分别关掉 credential.helper 与 extraheader。
+          git -c credential.helper= -c http.https://github.com/.extraheader= \
+            clone --depth 1 --branch carlink \
+            https://github.com/canfunan/lx-music-car.git /tmp/lx
 
       - name: 安装依赖
         working-directory: /tmp/lx
@@ -182,7 +186,7 @@ jobs:
           VER=$("$AAPT2" dump badging "$APK" | sed -nE "s/^package: .*versionName='([^']+)'.*/\1/p" | head -1)
           [ -n "$VER" ] || { echo "读不到 versionName"; exit 1; }
           TAG="v$VER"
-          R=caogenfunan123/lx-music-car
+          R=canfunan/lx-music-car
           cp "$APK" /tmp/lx-music-car.apk
           if gh release view "$TAG" -R "$R" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/lx-music-car.apk -R "$R" --clobber
