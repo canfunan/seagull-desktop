@@ -1,3 +1,2 @@
 com.seagull.carlauncher.XposedEntry
-com.example.gaodehook.HookEntry
-com.example.wangyihook.HookEntry
+com.seagull.carlauncher.AmapHookEntry
