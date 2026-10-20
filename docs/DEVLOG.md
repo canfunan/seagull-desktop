@@ -2652,3 +2652,6 @@ Manifest/杂项：
 - 协议文档 docs/CARLINK.md — action/extras 名冻结表、行变化才发/空行清显/封面变化才带三条纪律、桌面 5s 断流回落语义、落雪 LyricModule 接桥说明、v1 版本纪律（新 extra 一律可选）。
 - 自检 CarLinkCheck 24 项 — 修两处测试自身断言错：①时钟倒退用例预期反了（now<lastTs 恰说明广播刚到，应判新鲜）；②「新数组」回归断言写成空串（实际应等于行文本"A"）。教训：写新鲜度/槽位类用例先在纸上把边界语义过一遍再落笔。13 套自检全绿；javac --release 11 全量绿。
 - 待真机（验收表 19 项）：底栏进度推进与封面、音乐块歌词行/控制键/封面点按、落雪补丁包（另一仓库 CI）装上后行级同步、断流 5s 回落、关开关复原。
+- R4 落雪端补丁（lx-music-car fork carlink 分支 c6fbfab）— 评估期结论「行级时机在原生 LyricPlayer」落地：钩子挂 Lyric.setCurrentLyric（onPlay/onSetLyric/pauseLyric 全走这，行变化+清显一个口）；翻译取 extendedLyrics[0]（refreshLyric 先 translation 后 roma 的序保证），roma 行按内容比对剔除；st 用 LyricPlayer.isPlay（包级可见）。三个关键门全拆/绕：①LyricModule.lyric 懒建只在桌面歌词/蓝牙歌词开时发生——setLyric 改为懒建，直连不依赖任何 lx 开关；②refreshLyric 的 !isRunPlayer 早退会把解析链整个拦死（lines 永空→play 早退→零广播）——拆门，解析一歌一次成本可忽略；③pauseLyric 的清显也挂过 isRunPlayer——改为无条件（暂停/切歌广播空行，桌面清显，视图侧 isShowLyricView 门内行为零变化）。零 JS 改动。
+- R4 CI 出包 — 落雪构建挂进海鸥桌面 build-apk.yml 新 job：clone caogenfunan123/lx-music-car carlink 分支（补丁常驻分支头，随分支走）→ npm ci（Node 18=.nvmrc）→ 还原 SEAGULL_KEYSTORE_B64 → gradlew assembleRelease -PMYAPP_UPLOAD_*（同海鸥签名，覆盖安装免卸载；secret 未配退回 debug 签名）。SDK/NDK 用 runner 预装（lx 自家 CI 同款依赖）。产物 lx-music-car-apk。
+- 踩坑记录：lx 克隆 push 报 credential helper 500——桌面仓库的认证是 remote URL 内嵌 token（credential.helper 配置只是环境模板残留），lx 克隆照抄 set-url 后即通。

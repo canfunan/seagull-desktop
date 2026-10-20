@@ -40,9 +40,17 @@ getContext().sendBroadcast(i);
 
 ## 落雪音乐（lx-music-car）接入说明
 
-落雪端在 native 的 `LyricModule` 已有逐行回调（`setLyric(lyric, translation, roma)`
-与 `play(time)`），接桥时只需在行回调里组装上面的广播发出即可；翻译开关跟随
-`toggleTranslation` 状态。该补丁落在落雪仓库侧，由落雪 fork 的 CI 出包。
+补丁已落在 fork 仓库 `caogenfunan123/lx-music-car` 的 **carlink 分支**，海鸥桌面 CI
+每轮自动拉该分支出包，**与海鸥桌面同一把签名密钥**（覆盖安装免卸载），产物
+`lx-music-car-apk` 随 Actions artifact 交付。补丁内容：
+
+- `CarLinkSender`：按本协议发隐式广播（line/line_t/st，行变化才发，失败静默）
+- `Lyric.setCurrentLyric` 挂广播钩子：行变化即推，翻译取扩展行首条（roma 剔除）
+- `refreshLyric` 拆 `isRunPlayer` 门 + `LyricModule.setLyric` 懒建 Lyric：
+  桌面歌词/蓝牙歌词全关时解析链照常运行（直连不依赖任何 lx 内歌词开关）
+- `pauseLyric` 无条件清显一次（暂停/切歌空行，视图行为不变）
+
+无需在 lx 设置里开任何开关；装上即直连。
 
 ## 版本
 

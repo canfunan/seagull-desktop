@@ -75,6 +75,7 @@
 - [x] R3 直连封面——CoverCache.fromUri(key,uri) 新入口（LRU 命中/60s 负缓存/EX 后台解码），get() URI 分支重构共用 decodeAsync；音乐块 showRemoteMedia 无会话封面时回落直连封面（1.2s 一次性补绘+isAttachedToWindow 守卫）
 - [x] 设置——LauncherModel.lxLinkEnabled（默认 true，升级零操作）+歌词分区 toggleRow（bumpCfg+save）
 - [x] 协议文档 docs/CARLINK.md（action/extras 冻结表+桌面行为+落雪接桥说明+版本纪律）
+- [x] R4 落雪端补丁——lx-music-car fork carlink 分支（CarLinkSender 广播 + setCurrentLyric 钩子 + refreshLyric 拆 isRunPlayer 门 + setLyric 懒建 + pauseLyric 清显，零 JS 改动零 lx 开关依赖）；桌面 CI 加 lx-music-car job：拉 carlink 分支 npm ci+gradle 出包，与海鸥桌面同签（SEAGULL_KEYSTORE_B64），产物 lx-music-car-apk
 - [x] 自检：CarLinkCheck（新鲜窗 5/覆盖槽位 12/封面 5）——24 项全绿；13 套自检全绿
 
 ## 终局

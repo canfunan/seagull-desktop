@@ -94,3 +94,71 @@ jobs:
               --notes "批次 A~I 的自动构建。免登录下载：https://github.com/$GITHUB_REPOSITORY/releases/latest/download/SeagullLauncher.apk"
           fi
           echo "下载地址 https://github.com/$GITHUB_REPOSITORY/releases/latest/download/SeagullLauncher.apk"
+
+  # 落雪音乐车机版（lx-music-car fork）+ CARLINK 直连补丁：
+  # 源码 = caogenfunan123/lx-music-car 的 carlink 分支（补丁常驻该分支，随分支头走）。
+  # 用海鸥桌面同一把签名密钥（SEAGULL_KEYSTORE_B64），覆盖安装无需卸载。
+  lx-music-car:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: 装 Node 18（lx .nvmrc）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: 拉落雪源码（carlink 分支）
+        run: |
+          set -e
+          git clone --depth 1 --branch carlink \
+            https://github.com/caogenfunan123/lx-music-car.git /tmp/lx
+
+      - name: 安装依赖
+        working-directory: /tmp/lx
+        run: npm ci
+
+      - name: 还原海鸥签名密钥
+        env:
+          KS_B64: ${{ secrets.SEAGULL_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.SEAGULL_KS_PASS }}
+        run: |
+          set -e
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ]; then
+            printf '%s' "$KS_B64" | base64 -d > /tmp/lx/android/app/seagull-release.keystore
+            echo "SEAGULL_KS_PASS=$KS_PASS" >> "$GITHUB_ENV"
+            echo "用固定签名密钥（与海鸥桌面同签）"
+          else
+            echo "::warning::未配 SEAGULL_KEYSTORE_B64/SEAGULL_KS_PASS，落雪包退回 debug 签名"
+            echo "SEAGULL_KS_PASS=" >> "$GITHUB_ENV"
+          fi
+
+      - name: 编译 APK（JS bundle + gradle）
+        env:
+          DISABLE_SVG: 1
+        working-directory: /tmp/lx/android
+        run: |
+          set -e
+          if [ -n "$SEAGULL_KS_PASS" ]; then
+            ./gradlew assembleRelease \
+              -PMYAPP_UPLOAD_STORE_FILE=seagull-release.keystore \
+              -PMYAPP_UPLOAD_KEY_ALIAS=seagull-release \
+              -PMYAPP_UPLOAD_STORE_PASSWORD="$SEAGULL_KS_PASS" \
+              -PMYAPP_UPLOAD_KEY_PASSWORD="$SEAGULL_KS_PASS"
+          else
+            ./gradlew assembleRelease
+          fi
+
+      - name: 留档产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: lx-music-car-apk
+          path: /tmp/lx/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
