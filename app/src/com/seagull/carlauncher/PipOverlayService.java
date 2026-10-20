@@ -7,7 +7,6 @@ import android.app.Service;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
-import android.hardware.display.VirtualDisplay;
 import android.os.IBinder;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -42,7 +41,6 @@ public class PipOverlayService extends Service {
     private LinearLayout root;
     private TextView status;
     private WindowManager.LayoutParams lp;
-    private VirtualDisplay vd;
     private int vdId = -1;
     private int inputFails;
 
@@ -98,16 +96,17 @@ public class PipOverlayService extends Service {
         sv.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder h) {
-                if (vd != null) vd.setSurface(h.getSurface());
+                VirtualPipController.attachSurface(h.getSurface());
             }
 
             @Override
             public void surfaceChanged(SurfaceHolder h, int f, int w, int hh) {
-                if (vd != null) vd.setSurface(h.getSurface());
+                VirtualPipController.attachSurface(h.getSurface());
             }
 
             @Override
             public void surfaceDestroyed(SurfaceHolder h) {
+                VirtualPipController.attachSurface(null);
             }
         });
         sv.setOnTouchListener(this::onStageTouch);
@@ -178,18 +177,27 @@ public class PipOverlayService extends Service {
 
     private void bootVirtualDisplay() {
         new Thread(() -> {
-            vd = VirtualPipController.create(this, VirtualPipController.DEF_PKG);
-            if (vd == null) {
-                setStatus("虚拟屏创建失败", true);
+            int id = VirtualPipController.create(this, VirtualPipController.DEF_PKG);
+            if (id < 0) {
+                setStatus("虚拟屏创建失败（root 与本地均未成功）", true);
                 return;
             }
-            vdId = vd.getDisplay().getDisplayId();
-            if (sv() != null) vd.setSurface(sv().getHolder().getSurface());
+            vdId = id;
+            SurfaceView v = sv();
+            if (v != null && v.getHolder().getSurface() != null
+                    && v.getHolder().getSurface().isValid()) {
+                VirtualPipController.attachSurface(v.getHolder().getSurface());
+            }
             String err = VirtualPipController.launchAmap(this);
-            setStatus(err != null ? err
-                    : "VD#" + vdId + " " + VirtualPipController.width() + "x"
-                    + VirtualPipController.height() + " 已拉起 " + VirtualPipController.pkg(),
-                    err != null);
+            if (err != null) {
+                setStatus(err, true);
+            } else {
+                String path = VirtualPipController.isRootDisplay()
+                        ? "root TRUSTED 屏" : "本地屏（若不显示属 ROM 限制）";
+                setStatus("VD#" + id + " " + VirtualPipController.width() + "x"
+                        + VirtualPipController.height() + " · " + path
+                        + " · 已拉起 " + VirtualPipController.pkg(), false);
+            }
         }, "seagull-vd-boot").start();
     }
 

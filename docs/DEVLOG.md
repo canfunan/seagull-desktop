@@ -2668,3 +2668,9 @@ Manifest/杂项：
 - 背景：升 xposedminversion 102（880cf64）后用户回报 hook 仍不生效；用户确认 hook 能力蓝本=车联助手（com.leting 3.0.0，备份 canfunan/leting-carlink）
 - 做法：dexdump 逐指令译回 gaodehook.HookEntry（高德 7 hook）+ wangyihook.HookEntry（网易云手机/车机版 7 hook），类名/TAG/日志串/try 分层全对齐原版；xposed_init 三入口（XposedEntry + 两个克隆并存，A/C/C0/D 段保留）
 - 交付：/workspace/SeagullLauncher.apk（1.0.9f71341，原签 713305f0）；装后强杀高德/网易云看 GaodeHook:/WangyiHook: 日志
+
+## 批次 V（amapauto 纯 VD PiP 修正）：建屏主体与 Surface 挂接两处根因
+- 现象：批次 U（a1bc017）装最新包后悬浮窗仍看不到高德画面。
+- 根因①：VirtualPipController 在【应用进程内】用 PUBLIC 位建屏 —— 普通 uid 建的屏不受信，ActivityStarter 拒绝非属主上非信任屏，am start --display 落屏失败。本仓库已验证的路是 root 守护进程 uid 0 建 TRUSTED+PUBLIC 屏（RootMain CREATE / PrivClient.create，MirrorSlot 在用）。
+- 根因②：守护进程建的屏没有 VirtualDisplay 对象，setSurface() 根本不存在 —— Surface 必须走 PrivClient.surface(displayId, surface)（Parcel+Base64 行协议，RootMain SURFACE 事务）。
+- 修法：create() 先走 PrivClient.create（失败降回本地 PUBLIC 屏，保留批次 U 行为）；新增 attachSurface() 按建屏路径自动分流（root 屏过线协议、放后台线程防 ANR；本地屏直接 setSurface）；launchAmap() root 屏优先 PrivClient.launch（daemon setLaunchDisplayId，与 RootOps.launchOnDisplay 同款），退回 am start --display；release() 同步分流。PipOverlayService 三个 surface 回调全部改走 attachSurface，状态行显式标注 root TRUSTED 屏 / 本地屏，用户一眼看出走了哪条路。
