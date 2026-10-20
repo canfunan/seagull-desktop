@@ -2663,3 +2663,8 @@ Manifest/杂项：
 - S3 移除画布键条 — 用户反馈「进入画中画那个底栏去掉，固定桌面的底栏为统一底栏」。PipBoard 玻璃键条（返回/桌面/导航栏）整体下线：buildKeybar/keyButton/KEYBAR 常量/barA/barB/ExitListener/DockToggleListener 全删，keybarReserve() 恒 0（VD 恢复全高，fixedVdSize/applyKeybar 的 squeeze 参数链保留但恒 0，改结构风险最小）；createCard 键条挂载块删除；HomeActivity 的 setOnExitSlot/setOnToggleDock 注入与 toggleDock() 删除。语义落点：Dock 恒显（expandSlot 不再 setDockCollapsed(true)，单应用态底部就是 DockBar）——批次 AD 画布与底栏零缝隙设计天然成立；退回分屏走 DockBar logo onHome（showSplit+enableSwipe+setDockCollapsed(false)，与原键条桌面键语义完全一致，故 ExitListener 直接删而非并入）；RootOps.injectKey BACK 注入能力随键条下线（应用自带返回 UI 可用，退出=logo）。踩坑：清理 DockToggleListener 的 edit 顺带吞掉了夹在两条注释中间的 ExitListener 声明——git diff 逐行核对发现，grep 全文件零声明确认后顺势全删（键条没了，两个监听都成死代码）。
 - 自检 PlayerCheck 17 项 — 预设等长/色值向量/越界回落/名称回落/循环一致性/trackBg/fmtMs 七向量（0/负/进位/边界 599999→9:59、3599999→59:59）。14 套自检全绿；javac --release 11 全量绿。
 - 待真机（验收表 20 项）：底栏横幅自适应（长标题省略不消失）、播放器块拖动/捏合/换色/隐藏找回、单应用态画布无键条且 DockBar 恒在、logo 退回分屏。
+
+## 批次 S-RESTORE（9f71341）：一比一还原车联助手 hook
+- 背景：升 xposedminversion 102（880cf64）后用户回报 hook 仍不生效；用户确认 hook 能力蓝本=车联助手（com.leting 3.0.0，备份 canfunan/leting-carlink）
+- 做法：dexdump 逐指令译回 gaodehook.HookEntry（高德 7 hook）+ wangyihook.HookEntry（网易云手机/车机版 7 hook），类名/TAG/日志串/try 分层全对齐原版；xposed_init 三入口（XposedEntry + 两个克隆并存，A/C/C0/D 段保留）
+- 交付：/workspace/SeagullLauncher.apk（1.0.9f71341，原签 713305f0）；装后强杀高德/网易云看 GaodeHook:/WangyiHook: 日志
