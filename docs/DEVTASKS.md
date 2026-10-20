@@ -78,6 +78,12 @@
 - [x] R4 落雪端补丁——lx-music-car fork carlink 分支（CarLinkSender 广播 + setCurrentLyric 钩子 + refreshLyric 拆 isRunPlayer 门 + setLyric 懒建 + pauseLyric 清显，零 JS 改动零 lx 开关依赖）；桌面 CI 加 lx-music-car job：拉 carlink 分支 npm ci+gradle 出包，与海鸥桌面同签（SEAGULL_KEYSTORE_B64），产物 lx-music-car-apk
 - [x] 自检：CarLinkCheck（新鲜窗 5/覆盖槽位 12/封面 5）——24 项全绿；13 套自检全绿
 
+## 批次 S 统一底栏与独立播放器（2026-10-19 真机反馈三件套，spec: .monkeycode/specs/dock-player-widget）
+- [x] S1 底栏迷你播放器权重化——用户反馈「底栏没有小的播放器」：根因是 media 块 wrap-content 挤不过 apps 菜单（fitPass 实测超宽就把整条藏掉）。media 改 weight=1 占满中段剩余宽（恒等于剩余宽，永不超宽）；titleCol weight=1 弹性收缩+去 maxWidth；progTrack 改 MATCH_PARENT；fitPass/suppressedKey/onSizeChanged 机制整体删除
+- [x] S2 独立播放器块（壁纸页第七块）——row0[封面 44dp 点=playPause + 列[标题 15sp/来源 11sp]] + 歌词 12sp 单行（Lyrics.window）+ 时间 m:ss/m:ss 右对齐 + 进度条（槽宽×进度）+ ⏮⏯⏭ 36dp；数据源 MediaListenerService.snap（本地/蓝牙/落雪通吃）；空态「未在播放」控制键保留；1s 自驱 tick（onAttached 启 onDetached 停+enabled 门）；可拖/可捏合缩放（0.5~2.4 文本缩放）；换色 PlayerSkin 六预设（白绿蓝橙粉黄单色方案：文本/控制键/进度填充同色，槽恒 33% 透明白），长按菜单尺寸+换颜色+隐藏；组件管理清单第七行；GlyphIconView 加实例级 tint(int)；MediaListenerService 加 mediaPosMs()/mediaDurMs()；LauncherModel wallPlayer 五字段（X/Y/Scale/ColorIdx/Enabled）持久化
+- [x] S3 移除画布键条——用户反馈「进入画中画那个底栏去掉，固定桌面的底栏为统一底栏」：PipBoard 玻璃键条（返回/桌面/导航栏）下线（buildKeybar/keyButton/常量/barA/barB/ExitListener/DockToggleListener 全删，keybarReserve 恒 0 = VD 全高，applyKeybar squeeze 恒 0）；Dock 恒显（进单应用不再自动收起）；退回分屏走 DockBar logo onHome（同款语义：showSplit+解锁横滑+导航栏展开）；setDockCollapsed 保留（只剩回桌面展开路径）；RootOps BACK 注入能力随键条一并下线
+- [x] 自检：PlayerCheck（预设 10/fmtMs 向量 7）——17 项全绿；14 套自检全绿
+
 ## 终局
 - [x] 功能清单对齐（本文件逐项核对 + 真机验收项标注）——G-N 共 21 项全部勾选并核对落位说明与复盘行齐备（J-N 复盘行本次补录）；自检 8 项全绿（QuickbarCheck 垫片修复，见下）
 - [x] 三次大复盘（并行分组精读 → 亲自复核 → 自检交叉验证）+ 修复全部发现——三组并行精读报 30+ 条，逐条复核后修 19 处（P1 全修），P2 余量记录在案（见复盘记录末尾）
@@ -105,6 +111,7 @@
 | 17 | P OBD | 配对连接、熄火重连；OBD 车速 vs GPS 真值对比；转速/水温/电压显示；亏电提醒触发 |
 | 18 | Q 组件管理 | 负一屏长按重排/隐藏/空白长按找回；重启布局保持；壁纸页时钟块隐藏后经背景长按找回；两页全隐藏入口仍可用 |
 | 19 | R 音乐控制 | 底栏 ⏮/进度条/封面；音乐块歌词行+控制三键+封面点按暂停；落雪直连行变化同步到时钟块/音乐块/媒体卡；断流 5s 后回落原管线；关闭直连开关行为复原 |
+| 20 | S 统一底栏+播放器块 | 底栏横幅在中段剩余宽内自适应（长标题省略不消失）；壁纸页第七块播放器：拖动/捏合缩放/换色/隐藏/找回，时间进度随播放走；单应用铺满时画布无键条、DockBar 恒在，logo 退回分屏 |
 
 ## 复盘记录
 （每个功能完成后在此追加一行：功能 — 复盘结论）

@@ -340,6 +340,13 @@ public final class LauncherModel {
     public float wallMusY = 0.13f;
     public float wallMusScale = 1f;
     public boolean wallMusEnabled = false;
+    /* S2 独立播放器块：壁纸页第七块，专注控制（歌曲/歌词/进度/控制键），默认关。
+     * size = scale（捏合 0.5~2.4），color = PlayerSkin 预设下标。 */
+    public float wallPlayerX = 0.22f;
+    public float wallPlayerY = 0.62f;
+    public float wallPlayerScale = 1f;
+    public int wallPlayerColor = 0;
+    public boolean wallPlayerEnabled = false;
     /* N3 G值表块：默认右上（x=84%，y=28%），跟监控块错开 */
     public float wallGx = 0.84f;
     public float wallGy = 0.28f;
@@ -1127,6 +1134,12 @@ public final class LauncherModel {
             wmu.put("x", wallMusX); wmu.put("y", wallMusY); wmu.put("s", wallMusScale);
             wmu.put("on", wallMusEnabled);
             o.put("wallMus", wmu);
+            JSONObject wpl = new JSONObject();
+            wpl.put("x", wallPlayerX); wpl.put("y", wallPlayerY);
+            wpl.put("s", wallPlayerScale);
+            wpl.put("c", wallPlayerColor);
+            wpl.put("on", wallPlayerEnabled);
+            o.put("wallPlayer", wpl);
             JSONObject wg = new JSONObject();
             wg.put("x", wallGx); wg.put("y", wallGy); wg.put("s", wallGScale);
             wg.put("on", wallGEnabled);
@@ -1415,6 +1428,14 @@ public final class LauncherModel {
                 wallMusY = (float) wmu2.optDouble("y", 0.13);
                 wallMusScale = (float) wmu2.optDouble("s", 1.0);
                 wallMusEnabled = wmu2.optBoolean("on", false);
+            }
+            JSONObject wpl2 = o.optJSONObject("wallPlayer");
+            if (wpl2 != null) {
+                wallPlayerX = (float) wpl2.optDouble("x", 0.22);
+                wallPlayerY = (float) wpl2.optDouble("y", 0.62);
+                wallPlayerScale = (float) wpl2.optDouble("s", 1.0);
+                wallPlayerColor = wpl2.optInt("c", 0);
+                wallPlayerEnabled = wpl2.optBoolean("on", false);
             }
             JSONObject wg2 = o.optJSONObject("wallG");
             if (wg2 != null) {

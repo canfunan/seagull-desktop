@@ -84,13 +84,10 @@ public final class PipBoard extends LinearLayout {
     private static final float LUX_NIGHT = 20f;   // 低于它算夜间（带回差）
     private static final float LUX_DAY = 2000f;   // 高于它算白天强光
     /** 批次 AA：底部常驻键条高度。显示时挤压画布盒的底边距，应用窗口随 VD resize。 */
-    private static final int KEYBAR_DP = 40;
     /** 批次 CI：键条玻璃化后悬浮贴底 —— 左右/底边距露壁纸，与 DockBar 同语言。 */
-    private static final int KB_MARGIN_H = 10;
-    private static final int KB_MARGIN_B = 8;
 
     /** 键条占用的总高度：条高 + 底边距（画布挤压与 VD 定尺寸都用它，保证一致）。 */
-    private int keybarReserve() { return dp(KEYBAR_DP + KB_MARGIN_B); }
+    private int keybarReserve() { return 0; }   // 批次 S：键条移除，VD 全高
 
     private final Activity act;
     private final Host host;
@@ -115,7 +112,6 @@ public final class PipBoard extends LinearLayout {
     private SurfaceView svA, svB;
     private FrameLayout colA, colB;       // 两块画布的容器（单应用模式下隐藏其一）
     private FrameLayout boxA, boxB;       // 画布盒：Surface/提示/空态/遮罩都在里面，键条挤压它的底边距
-    private LinearLayout barA, barB;      // 批次 AA：底部常驻键条（返回/桌面），单应用铺满时才显示
     private View splitter;                // 中间可拖的分隔把手：拖它 = 改两块画布的占比
     private TextView hintA, hintB;        // 画布中央状态行（启动中…/需要录屏授权…）
     private View emptyA, emptyB;          // 空态大按钮（空画布才有）
@@ -142,16 +138,6 @@ public final class PipBoard extends LinearLayout {
 
     public void setOnEnterSlot(EnterListener l) { this.enterListener = l; }
     /** 批次 AA：键条「桌面」键 = 退回桌面分屏（宿主同步底栏高亮/翻页），没注入就本地 showSplit。 */
-    public interface ExitListener { void onExit(int which); }
-    private ExitListener exitListener;
-
-    public void setOnExitSlot(ExitListener l) { this.exitListener = l; }
-
-    /** 批次 BB：键条「导航栏」键 = 收起/唤出底部 Dock 导航栏（动作由宿主注入）。 */
-    public interface DockToggleListener { void onToggleDock(); }
-    private DockToggleListener dockToggleListener;
-
-    public void setOnToggleDock(DockToggleListener l) { this.dockToggleListener = l; }
     private final boolean[] longFired = {false, false, false};
     /** armed[i] = 本手势（从 DOWN 起）发生在这块画布已是焦点的时候，才允许外注入。 */
     private final boolean[] armed = {false, false, false};
@@ -442,18 +428,9 @@ public final class PipBoard extends LinearLayout {
             box.addView(gateB, new FrameLayout.LayoutParams(-1, -1));
         }
 
-        LinearLayout keybar = buildKeybar(which);
-        if (which == 1) barA = keybar; else barB = keybar;
         card.addView(box, new FrameLayout.LayoutParams(-1, -1));
-        // 批次 CI：玻璃键条悬浮贴底（左右 10 / 底 8 边距露壁纸），挤压量用 keybarReserve()
-        FrameLayout.LayoutParams klp =
-                new FrameLayout.LayoutParams(-1, dp(KEYBAR_DP), Gravity.BOTTOM);
-        klp.leftMargin = dp(KB_MARGIN_H);
-        klp.rightMargin = dp(KB_MARGIN_H);
-        klp.bottomMargin = dp(KB_MARGIN_B);
-        card.addView(keybar, klp);
-        keybar.setVisibility(View.GONE);   // 分屏（预览）模式没有键条；进入单应用才顶出来
-
+        // 批次 S：键条移除（用户反馈：固定桌面底栏为统一底栏），键条不再挂载；
+        // barA/barB 恒 null，applyKeybar 判空短路。VD 恢复全高（keybarReserve=0）。
         // 批次 AD：删掉焦点描边。两块画布之间那条亮线正是用户说的"框框 / 边框感"。
 
         // 单一触摸入口：焦点拦截 / 空态选择 / 手势转发全在这判
@@ -679,94 +656,12 @@ public final class PipBoard extends LinearLayout {
         }
     }
 
-    /* ------------------------- 键条（批次 AA） ------------------------- */
-
-    /**
-     * 底部常驻键条【返回 | 桌面】—— 只在单应用铺满时显示。
+    /* ------------------------- 键条（批次 AA~S） -------------------------
      *
-     * 为什么必须由桌面画：我们的画中画是 VirtualDisplay（flags=0 私有屏），
-     * 系统装饰（导航栏）只属于带 system decorations 的屏 —— SystemUI 不会在
-     * 私有 VD 上画导航栏，应用自己也没有「底部导航栏」这个形态（反编译：
-     * 车机版横屏=左侧栏、竖屏=顶部 Tab）。键条是画布内导航的唯一可靠入口：
-     *   · 返回 = input -d <id> keyevent 4（KEYCODE_BACK 注进应用）；
-     *   · 桌面 = 退回分屏主页（与 DockBar Logo 键同一路径），应用留在后台不杀。
-     * 键条是普通 View 层（PipBoard 纪律③：常驻 chrome 不被 App 覆盖），
-     * 应用自己的沉浸 flag、全屏请求都影响不到它。
+     * 批次 S 移除：单应用铺满时的玻璃键条（返回/桌面/导航栏）下线——桌面
+     * DockBar 为统一底栏（用户反馈）。VD 内应用可用自身返回 UI；退回分屏
+     * 走 DockBar logo。RootOps.injectKey 的 BACK 注入能力随键条一并下线。
      */
-    private LinearLayout buildKeybar(int which) {
-        LinearLayout bar = new LinearLayout(act);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        // 批次 CI：与 DockBar 同款磨砂玻璃（胶囊圆角），替代不透明深底
-        bar.setBackground(new GlassDrawable(20));
-        bar.setGravity(Gravity.CENTER);
-        bar.setClickable(true);   // 吃掉键条区域的触摸，别穿透进应用（尤其左右两键之间）
-        int vpad = dp(4);
-
-        TextView back = keyButton("返回");
-        back.setOnClickListener(v -> {
-            MirrorSlot s = slotOf(which);
-            final int d = s != null ? s.displayId() : -1;
-            if (d <= 0) return;
-            new Thread(() -> RootOps.injectKey(d, 4), "pip-key-back" + which).start();
-        });
-
-        View sep = new View(act);
-        LinearLayout.LayoutParams seplp = new LinearLayout.LayoutParams(dp(1), -1);
-        seplp.setMargins(dp(2), vpad, dp(2), vpad);
-        sep.setBackgroundColor(0x33FFFFFF);
-
-        TextView home = keyButton("桌面");
-        home.setOnClickListener(v -> {
-            if (exitListener != null) exitListener.onExit(which);
-            else showSplit();
-        });
-
-        // 批次 BB：第三个键「导航栏」—— 收起/唤出底部 Dock 导航栏。
-        // 单应用模式进来自动收起（应用拿满整屏），想用 Dock 点它唤出，再点收起。
-        View sep2 = new View(act);
-        LinearLayout.LayoutParams seplp2 = new LinearLayout.LayoutParams(dp(1), -1);
-        seplp2.setMargins(dp(2), vpad, dp(2), vpad);
-        sep2.setBackgroundColor(0x33FFFFFF);
-        TextView dockKey = keyButton("导航栏");
-        dockKey.setOnClickListener(v -> {
-            if (dockToggleListener != null) dockToggleListener.onToggleDock();
-        });
-
-        bar.addView(back, new LinearLayout.LayoutParams(0, -1, 1f));
-        bar.addView(sep, seplp);
-        bar.addView(home, new LinearLayout.LayoutParams(0, -1, 1f));
-        bar.addView(sep2, seplp2);
-        bar.addView(dockKey, new LinearLayout.LayoutParams(0, -1, 1f));
-        return bar;
-    }
-
-    /** 键条按钮：等宽、白字、车机可点的最小高度，按压出反馈色。 */
-    private TextView keyButton(String text) {
-        TextView b = new TextView(act);
-        b.setText(text);
-        b.setGravity(Gravity.CENTER);
-        b.setTextColor(0xF0FFFFFF);
-        b.setTextSize(13);
-        b.setClickable(true);
-        b.setHapticFeedbackEnabled(true);
-        GradientDrawable g = new GradientDrawable();
-        g.setColor(0x00000000);
-        g.setCornerRadius(dp(8));
-        b.setBackground(g);
-        b.setOnTouchListener((v, e) -> {
-            switch (e.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    b.setBackgroundColor(0x30FFFFFF);
-                    break;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    b.setBackground(null);
-                    break;
-            }
-            return false;   // 继续走 click
-        });
-        return b;
-    }
 
     /** 单应用模式：把某块画布铺满内容区。另一块只是隐藏，**不销毁、不杀进程**。 */
     public void showSingle(int which) {
@@ -826,24 +721,21 @@ public final class PipBoard extends LinearLayout {
      * SystemUI 导航栏，应用布局不知道要留边，只能物理让位）。
      */
     private void applyKeybar(int which) {
-        // 批次 CI：悬浮键条 = 条高 + 底边距，画布让出整块区域（玻璃条四周透壁纸）
-        int squeeze = which != 0 ? keybarReserve() : 0;
+        // 批次 S：键条已移除——画布不让位（squeeze 恒 0），barA/barB 恒 null
         if (boxA != null) {
             FrameLayout.LayoutParams pa = (FrameLayout.LayoutParams) boxA.getLayoutParams();
-            if (pa.bottomMargin != squeeze) {
-                pa.bottomMargin = squeeze;
+            if (pa.bottomMargin != 0) {
+                pa.bottomMargin = 0;
                 boxA.setLayoutParams(pa);
             }
         }
         if (boxB != null) {
             FrameLayout.LayoutParams pb = (FrameLayout.LayoutParams) boxB.getLayoutParams();
-            if (pb.bottomMargin != squeeze) {
-                pb.bottomMargin = squeeze;
+            if (pb.bottomMargin != 0) {
+                pb.bottomMargin = 0;
                 boxB.setLayoutParams(pb);
             }
         }
-        if (barA != null) barA.setVisibility(which == 1 ? View.VISIBLE : View.GONE);
-        if (barB != null) barB.setVisibility(which == 2 ? View.VISIBLE : View.GONE);
     }
 
     /* ---------------- 批次 CF：快照预览核心 ---------------- */

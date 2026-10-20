@@ -212,4 +212,34 @@ public class MediaListenerService extends NotificationListenerService {
     }
 
     private static boolean snapshotPlaying() { return snap.playing; }
+
+    /** 批次 S2：当前播放位置毫秒（外推同 mediaProgress）；无会话/无元数据返回 -1。 */
+    public static long mediaPosMs() {
+        try {
+            if (current == null || current.getPlaybackState() == null) return -1L;
+            PlaybackState ps = current.getPlaybackState();
+            long pos = ps.getPosition();
+            if (ps.getState() == PlaybackState.STATE_PLAYING
+                    && ps.getLastPositionUpdateTime() > 0) {
+                float speed = Math.max(0f, ps.getPlaybackSpeed());
+                pos += (long) ((System.currentTimeMillis()
+                        - ps.getLastPositionUpdateTime()) * speed);
+            }
+            return Math.max(0L, pos);
+        } catch (Throwable t) {
+            return -1L;
+        }
+    }
+
+    /** 批次 S2：当前曲目总时长毫秒；无会话/无时长返回 -1。 */
+    public static long mediaDurMs() {
+        try {
+            if (current == null || current.getMetadata() == null) return -1L;
+            long dur = current.getMetadata()
+                    .getLong(MediaMetadata.METADATA_KEY_DURATION);
+            return dur > 0 ? dur : -1L;
+        } catch (Throwable t) {
+            return -1L;
+        }
+    }
 }

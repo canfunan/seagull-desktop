@@ -98,6 +98,15 @@ public final class WallpaperPage extends FrameLayout {
     private final TextView musLyric;
     private final LinearLayout musCtrl;
     private final DockBar.GlyphIconView musBtnPlay;
+    /** S2 独立播放器块：专注控制（歌曲/来源/歌词/时间/进度/控制键），可换色缩放。 */
+    private final LinearLayout playerBox;
+    private final ImageView plArt;
+    private final TextView plTitle, plSource, plLyric, plTime;
+    private final View plFill;
+    private final FrameLayout plTrack;
+    private final LinearLayout plCtrl;
+    private final DockBar.GlyphIconView plPrev, plPlay, plNext;
+    private Runnable playerTick;
     private final LinearLayout gBox;
     private final TextView musL0, musL1, musL2, musL3;
     private final TextView monL1, monL2, monL3;
@@ -332,6 +341,101 @@ public final class WallpaperPage extends FrameLayout {
             musLyric.setText(line == null ? "" : line.trim());
         });
 
+        /* ---------------- S2 独立播放器块（第七块） ----------------
+         * 与 musBox（队列视角）并存，共用 MediaListenerService 数据源。
+         * 结构：row0[封面 44dp(点=playPause) + 列[标题 15sp / 来源 11sp]]
+         *       + 歌词 12sp + 时间 10sp 右对齐 + 进度条 + ⏮⏯⏭ 36dp。
+         * 空态显示「未在播放」，控制键保留可按（切歌后立刻有数据）。
+         * 换色 = PlayerSkin 单色方案（文本/控制键/进度填充同色）。
+         */
+        playerBox = new LinearLayout(c);
+        playerBox.setOrientation(LinearLayout.VERTICAL);
+        playerBox.setBackground(Skin.round(0x66000000, 18));
+        playerBox.setPadding(dp(10), dp(8), dp(10), dp(8));
+        LinearLayout plRow0 = new LinearLayout(c);
+        plRow0.setOrientation(LinearLayout.HORIZONTAL);
+        plRow0.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        plArt = new ImageView(c);
+        plArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        plArt.setOnClickListener(v -> MediaListenerService.playPause());
+        plRow0.addView(plArt, new LayoutParams(dp(44), dp(44)));
+        LinearLayout plCol = new LinearLayout(c);
+        plCol.setOrientation(LinearLayout.VERTICAL);
+        plTitle = tv(c, 15, R.color.leaf, true);
+        plTitle.setSingleLine(true);
+        plTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        plSource = tv(c, 11, R.color.text_dim, false);
+        plSource.setSingleLine(true);
+        plSource.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        plCol.addView(plTitle);
+        plCol.addView(plSource, topMargin(c, 2));
+        LinearLayout.LayoutParams pcp = new LinearLayout.LayoutParams(-2, -2);
+        pcp.leftMargin = dp(8);
+        plRow0.addView(plCol, pcp);
+        plLyric = tv(c, 12, R.color.text_dim, false);
+        plLyric.setSingleLine(true);
+        plLyric.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        plTime = tv(c, 10, R.color.text_dim, true);
+        LinearLayout.LayoutParams ptlp = new LinearLayout.LayoutParams(-1, -2);
+        ptlp.topMargin = dp(4);
+        plTime.setLayoutParams(ptlp);
+        plTrack = new FrameLayout(c);
+        plTrack.setBackground(Skin.round(PlayerSkin.trackBg(), 3));
+        plFill = new View(c);
+        plTrack.addView(plFill, new LayoutParams(0, dp(3)));
+        plTrack.setVisibility(GONE);
+        plCtrl = new LinearLayout(c);
+        plCtrl.setOrientation(LinearLayout.HORIZONTAL);
+        plCtrl.setGravity(android.view.Gravity.CENTER);
+        plPrev = new DockBar.GlyphIconView(c, DockBar.G_PREV).scale(0.74f);
+        plPrev.setContentDescription("上一曲");
+        plPrev.setOnClickListener(v -> MediaListenerService.prev());
+        plPlay = new DockBar.GlyphIconView(c, DockBar.G_PAUSE).scale(0.74f);
+        plPlay.setContentDescription("播放/暂停");
+        plPlay.setOnClickListener(v -> MediaListenerService.playPause());
+        plNext = new DockBar.GlyphIconView(c, DockBar.G_NEXT).scale(0.74f);
+        plNext.setContentDescription("下一曲");
+        plNext.setOnClickListener(v -> MediaListenerService.next());
+        LinearLayout.LayoutParams pkp = new LinearLayout.LayoutParams(dp(36), dp(36));
+        pkp.rightMargin = dp(14);
+        plCtrl.addView(plPrev, pkp);
+        plCtrl.addView(plPlay, pkp);
+        plCtrl.addView(plNext, pkp);
+        playerBox.addView(plRow0);
+        playerBox.addView(plLyric, topMargin(c, 4));
+        playerBox.addView(plTime);
+        LinearLayout.LayoutParams ptKlp = new LinearLayout.LayoutParams(-1, dp(3));
+        ptKlp.topMargin = dp(3);
+        playerBox.addView(plTrack, ptKlp);
+        playerBox.addView(plCtrl, topMargin(c, 6));
+        playerBox.setVisibility(GONE);
+        addView(playerBox, new LayoutParams(dp(180), -2, Gravity.TOP | Gravity.LEFT));
+        playerBox.setOnTouchListener(new Drag(playerBox,
+                (dx, dy) -> nudgeBlock(playerBox, dx, dy),
+                null,                       // 点按 = 默认选中态（出框和把手）
+                this::showPlayerMenu,
+                () -> saveBlockPos(playerBox, pos -> {
+                    model.wallPlayerX = pos[0]; model.wallPlayerY = pos[1];
+                }),
+                null,
+                () -> zoomBase = model.wallPlayerScale <= 0 ? 1f : model.wallPlayerScale,
+                f -> {
+                    float s = clampf(zoomBase * f, 0.5f, 2.4f);
+                    applyPlayerScale(s);
+                    model.wallPlayerScale = s;
+                },
+                () -> model.save()));
+        // S2 自驱 tick：块可见时 1s 刷新（时间/进度/播放态），onAttached 启 onDetached 停
+        playerTick = new Runnable() {
+            @Override public void run() {
+                if (model.wallPlayerEnabled && playerBox.getVisibility() == VISIBLE) {
+                    refreshPlayerBlock();
+                    postDelayed(this, 1000L);
+                }
+            }
+        };
+        applyPlayerColor(model.wallPlayerColor);
+
         // N3 G值表块：当前 G（低通）+ 峰值；点按菜单，长按总菜单
         gBox = new LinearLayout(c);
         gBox.setOrientation(LinearLayout.VERTICAL);
@@ -391,12 +495,13 @@ public final class WallpaperPage extends FrameLayout {
                 .show();
     }
 
-    /** Q 批次：六块显隐清单（含时钟块），点行切换（R3.2）。 */
+    /** Q 批次：块显隐清单（含时钟块），点行切换（S2 扩到七块）。 */
     private void manageBlocksDialog() {
-        String[] keys = {"clock", "gps", "cd", "mon", "mus", "g"};
-        String[] labels = {"时钟块", "行车块", "倒数块", "监控块", "音乐块", "G值表块"};
+        String[] keys = {"clock", "gps", "cd", "mon", "mus", "g", "player"};
+        String[] labels = {"时钟块", "行车块", "倒数块", "监控块", "音乐块", "G值表块", "播放器块"};
         boolean[] on = {model.wallClockEnabled, model.wallGpsEnabled, model.wallCdEnabled,
-                model.wallMonEnabled, model.wallMusEnabled, model.wallGEnabled};
+                model.wallMonEnabled, model.wallMusEnabled, model.wallGEnabled,
+                model.wallPlayerEnabled};
         String[] items = new String[keys.length];
         for (int i = 0; i < keys.length; i++) {
             items[i] = labels[i] + (on[i] ? "（已显示）" : "（已隐藏）");
@@ -418,6 +523,7 @@ public final class WallpaperPage extends FrameLayout {
                         case "mus": model.wallMusEnabled = !model.wallMusEnabled;
                             ensureMusicScanned(); break;
                         case "g": model.wallGEnabled = !model.wallGEnabled; break;
+                        case "player": model.wallPlayerEnabled = !model.wallPlayerEnabled; break;
                         default: break;
                     }
                     model.save();
@@ -426,6 +532,7 @@ public final class WallpaperPage extends FrameLayout {
                     refreshMonBlock();
                     refreshMusBlock();
                     refreshGBlock();
+                    refreshPlayerBlock();
                 })
                 .setNegativeButton("完成", null)
                 .show();
@@ -498,6 +605,7 @@ public final class WallpaperPage extends FrameLayout {
         if (!model.wallMonEnabled) show.add("显示监控块");
         if (!model.wallMusEnabled) show.add("显示音乐块");
         if (!model.wallGEnabled) show.add("显示G值块");
+        if (!model.wallPlayerEnabled) show.add("显示播放器块");
         String[] sizes = {"小", "标准", "大", "特大"};
         String[] more = {"组件管理…", "隐藏时钟块"};
         String[] opts = new String[sizes.length + show.size() + more.length];
@@ -526,11 +634,13 @@ public final class WallpaperPage extends FrameLayout {
                         else if (cmd.equals("显示监控块")) model.wallMonEnabled = true;
                         else if (cmd.equals("显示音乐块")) { model.wallMusEnabled = true; ensureMusicScanned(); }
                         else if (cmd.equals("显示G值块")) model.wallGEnabled = true;
+                        else if (cmd.equals("显示播放器块")) model.wallPlayerEnabled = true;
                         refreshGpsBlock();
                         refreshCdBlock();
                         refreshMonBlock();
                         refreshMusBlock();
                         refreshGBlock();
+                        refreshPlayerBlock();
                     }
                     model.save();
                 })
@@ -1047,6 +1157,121 @@ public final class WallpaperPage extends FrameLayout {
                 .show();
     }
 
+    /* ------------- S2 独立播放器块（第七块，可换色缩放） ------------- */
+
+    /** 尺寸：文本按 s 缩放（封面/控制键固定尺寸随单色块风格，与 mus 块一致）。 */
+    private void applyPlayerScale(float s) {
+        plTitle.setTextSize(15 * s);
+        plSource.setTextSize(11 * s);
+        plLyric.setTextSize(12 * s);
+        plTime.setTextSize(10 * s);
+        playerBox.post(() -> placeBlock(playerBox, model.wallPlayerX, model.wallPlayerY));
+    }
+
+    /** 换色：单色方案——文本/控制键/进度填充同色，进度槽恒透明白。 */
+    private void applyPlayerColor(int idx) {
+        int col = PlayerSkin.color(idx);
+        plTitle.setTextColor(col);
+        plSource.setTextColor(col);
+        plLyric.setTextColor(col);
+        plTime.setTextColor(col);
+        plPrev.tint(col);
+        plPlay.tint(col);
+        plNext.tint(col);
+        plFill.setBackground(Skin.round(col, 3));
+    }
+
+    /** 块刷新：会话数据源（MediaListenerService.snap，本地/蓝牙/落雪通吃）。 */
+    public void refreshPlayerBlock() {
+        if (!model.wallPlayerEnabled) {
+            playerBox.setVisibility(GONE);
+            if (playerTick != null) removeCallbacks(playerTick);
+            return;
+        }
+        playerBox.setVisibility(VISIBLE);
+        MediaListenerService.Snap s = MediaListenerService.snap();
+        boolean has = s != null && s.pkg != null && !s.pkg.isEmpty();
+        if (has) {
+            plTitle.setText(s.title != null && !s.title.isEmpty() ? s.title : "未知曲目");
+            plSource.setText(s.artist != null && !s.artist.isEmpty() ? s.artist : s.pkg);
+            plPlay.setKind(s.playing ? DockBar.G_PAUSE : DockBar.G_PLAY);
+        } else {
+            plTitle.setText("未在播放");
+            plSource.setText("手机 / 蓝牙 / 本地音乐");
+        }
+        // 歌词行：Direct 窗口或管线，取最后一行（与 musLyric sink 语义一致）
+        String[] lw = Lyrics.window(getContext(), model, 1);
+        plLyric.setText(lw != null && lw.length > 0 && lw[lw.length - 1] != null
+                ? lw[lw.length - 1].trim() : "");
+        // 封面：活动会话元数据 → CoverCache；本地音乐走 MusicService 艺术
+        Bitmap art = null;
+        android.media.session.MediaController mc = Lyrics.activeController(getContext());
+        if (has && mc != null && mc.getMetadata() != null) {
+            art = CoverCache.get(s.title == null ? "" : s.title,
+                    s.artist == null ? "" : s.artist, mc.getMetadata());
+        }
+        if (art == null && has) art = MusicService.currentArt();
+        if (art != null && !art.isRecycled()) {
+            plArt.setImageBitmap(art);
+            plArt.setVisibility(VISIBLE);
+        } else {
+            plArt.setImageBitmap(null);
+            plArt.setVisibility(GONE);
+        }
+        // 时间 + 进度：布局完成后按槽宽填充（DockBar.mediaTick 同款）
+        long dur = MediaListenerService.mediaDurMs();
+        long pos = MediaListenerService.mediaPosMs();
+        if (dur > 0 && pos >= 0) {
+            plTime.setVisibility(VISIBLE);
+            plTime.setText(PlayerSkin.fmtMs(pos) + " / " + PlayerSkin.fmtMs(dur));
+            plTrack.setVisibility(VISIBLE);
+            final float f = Math.max(0f, Math.min(1f, pos / (float) dur));
+            plTrack.post(() -> {
+                int w = plTrack.getWidth();
+                if (w > 0) plFill.setLayoutParams(
+                        new LayoutParams((int) (w * f), dp(3)));
+            });
+        } else {
+            plTime.setVisibility(GONE);
+            plTrack.setVisibility(GONE);
+        }
+    }
+
+    /** 长按菜单：尺寸四档 + 换色 + 隐藏。 */
+    private void showPlayerMenu() {
+        new AlertDialog.Builder(getContext())
+                .setTitle("播放器（按住拖动可移位置 · 双指捏合缩放）")
+                .setItems(new String[]{"小", "标准", "大", "特大", "换颜色…", "隐藏"}, (d, w) -> {
+                    if (w <= 3) {
+                        model.wallPlayerScale = w == 0 ? 0.7f : w == 1 ? 1f : w == 2 ? 1.3f : 1.6f;
+                        applyPlayerScale(model.wallPlayerScale);
+                    } else if (w == 4) {
+                        showPlayerColorDialog();
+                        return;
+                    } else {
+                        model.wallPlayerEnabled = false;
+                        refreshPlayerBlock();
+                    }
+                    model.save();
+                })
+                .show();
+    }
+
+    /** 换色单选：PlayerSkin 六预设，选中即刷。 */
+    private void showPlayerColorDialog() {
+        new AlertDialog.Builder(getContext())
+                .setTitle("播放器颜色")
+                .setSingleChoiceItems(PlayerSkin.NAMES, model.wallPlayerColor,
+                        (d, w) -> {
+                            model.wallPlayerColor = w;
+                            applyPlayerColor(w);
+                            model.save();
+                            d.dismiss();
+                        })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
     /* ---------------- N3 G值表块（加速度计，零权限） ---------------- */
 
     private void applyG() {
@@ -1490,6 +1715,7 @@ public final class WallpaperPage extends FrameLayout {
         try { host().startListening(); } catch (Throwable ignore) { }
         syncBlocks();
         if (model.wallGpsEnabled && LocationHelper.hasPermission(getContext())) startSensors();
+        if (playerTick != null) playerTick.run();   // S2 播放器块自驱 tick 启动
     }
 
     /** 设置页/菜单改动后的显隐总同步（幂等）：五块各刷一遍可见性。 */
@@ -1499,11 +1725,13 @@ public final class WallpaperPage extends FrameLayout {
         refreshMonBlock();
         refreshMusBlock();
         refreshGBlock();
+        refreshPlayerBlock();
     }
 
     @Override protected void onDetachedFromWindow() {
         if (gpsAttached) { LocationHelper.release(gpsListener); gpsAttached = false; }
         stopSensors();
+        if (playerTick != null) removeCallbacks(playerTick);
         try { if (host != null) host.stopListening(); } catch (Throwable ignore) { }
         super.onDetachedFromWindow();
     }

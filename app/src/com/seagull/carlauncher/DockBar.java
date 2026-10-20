@@ -140,7 +140,8 @@ public class DockBar extends LinearLayout {
         media.setBackground(Skin.round(BANNER_BG, 18));
         media.setPadding(dp(c, 8), dp(c, 5), dp(c, 4), dp(c, 5));
         media.setVisibility(GONE);
-        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-2, -2);
+        // 批次 S1：weight=1 占满中段剩余宽——横幅永不超宽（旧 fitPass「放不下整条藏」机制删除）
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(0, -2, 1f);
         mlp.leftMargin = dp(c, 10);
         center.addView(media, mlp);
         media.setOnClickListener(v -> { if (onBannerClick != null) onBannerClick.run(); });
@@ -148,7 +149,7 @@ public class DockBar extends LinearLayout {
         mediaIcon = new ImageView(c);
         media.addView(mediaIcon, new LinearLayout.LayoutParams(dp(c, 22), dp(c, 22)));
 
-        // R1：标题 + 细进度条（无时长隐藏）
+        // R1：标题 + 细进度条（无时长隐藏）；批次 S1：标题列 weight 弹性收缩
         LinearLayout titleCol = new LinearLayout(c);
         titleCol.setOrientation(VERTICAL);
         titleCol.setGravity(Gravity.CENTER_VERTICAL);
@@ -157,7 +158,6 @@ public class DockBar extends LinearLayout {
         mediaTitle.setTextSize(13);
         mediaTitle.setSingleLine(true);
         mediaTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        mediaTitle.setMaxWidth(dp(c, 108));
         mediaTitle.setPadding(dp(c, 7), 0, dp(c, 4), 0);
         titleCol.addView(mediaTitle, new LinearLayout.LayoutParams(-2, -2));
         progTrack = new FrameLayout(c);
@@ -165,12 +165,14 @@ public class DockBar extends LinearLayout {
         progFill = new View(c);
         progFill.setBackground(Skin.round(0xE6FFFFFF, 3));
         progTrack.addView(progFill, new FrameLayout.LayoutParams(0, dp(c, 3)));
-        LinearLayout.LayoutParams tclp = new LinearLayout.LayoutParams(dp(c, 96), dp(c, 3));
+        LinearLayout.LayoutParams tclp = new LinearLayout.LayoutParams(-1, dp(c, 3));
         tclp.topMargin = dp(c, 3);
         tclp.leftMargin = dp(c, 7);
         progTrack.setVisibility(GONE);
         titleCol.addView(progTrack, tclp);
-        media.addView(titleCol, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams mclp = new LinearLayout.LayoutParams(0, -2, 1f);
+        mclp.leftMargin = dp(c, 2);
+        media.addView(titleCol, mclp);
 
         GlyphIconView btnPrev = new GlyphIconView(c, G_PREV).scale(0.74f);
         btnPrev.setContentDescription("上一曲");
@@ -278,11 +280,6 @@ public class DockBar extends LinearLayout {
         lastSnap = s;
         String key = s.pkg + "|" + s.title;
         currentKey = key;
-        if (key.equals(suppressedKey)) {
-            media.setVisibility(GONE);   // 这条媒体已确认放不下，别再闪
-            removeCallbacks(mediaTick);
-            return;
-        }
         media.setVisibility(VISIBLE);
         if (!key.equals(coverKey)) {   // 换曲才复位图标；同曲保封面
             coverKey = null;
@@ -295,15 +292,12 @@ public class DockBar extends LinearLayout {
                 : s.pkg;
         mediaTitle.setText(line);
         btnPlay.setKind(s.playing ? G_PAUSE : G_PLAY);
-        removeCallbacks(fitPass);
-        post(fitPass);
         removeCallbacks(mediaTick);
         post(mediaTick);
     }
 
     private MediaListenerService.Snap lastSnap;
     private String currentKey;
-    private String suppressedKey;
     private String coverKey;
     private final FrameLayout progTrack;
     private final View progFill;
@@ -344,23 +338,6 @@ public class DockBar extends LinearLayout {
         }
     };
 
-    /** 布局后实测：中段放不下「图标区 + 横幅」就藏横幅，图标区保完整。 */
-    private final Runnable fitPass = new Runnable() {
-        @Override public void run() {
-            if (media.getVisibility() != VISIBLE) return;
-            int avail = center.getWidth();
-            if (avail <= 0) return;   // 还没布局完，等下一轮 tick 再试
-            int need = apps.getWidth()
-                    + ((LinearLayout.LayoutParams) media.getLayoutParams()).leftMargin
-                    + media.getWidth();
-            if (need > avail) {
-                suppressedKey = currentKey;
-                media.setVisibility(GONE);
-                removeCallbacks(mediaTick);
-            }
-        }
-    };
-
     /** 时间 / 电量 / 网络一跳（30s 一次足够）。 */
     public void tick() {
         Context c = getContext();
@@ -379,17 +356,7 @@ public class DockBar extends LinearLayout {
 
     @Override protected void onDetachedFromWindow() {
         removeCallbacks(mediaTick);
-        removeCallbacks(fitPass);
         super.onDetachedFromWindow();
-    }
-
-    /** Dock 尺寸变化（旋转/换肤重建）：清掉窄屏让位标记，重新尝试横幅。 */
-    @Override protected void onSizeChanged(int w, int h, int ow, int oh) {
-        super.onSizeChanged(w, h, ow, oh);
-        if (w != ow && lastSnap != null) {
-            suppressedKey = null;
-            bindMedia(lastSnap);
-        }
     }
 
     /* ---------------- 数据 ---------------- */
@@ -515,6 +482,14 @@ public class DockBar extends LinearLayout {
         /** 图形内容占比（0~1]：View 尺寸大、图形小 = 触控热区大。 */
         GlyphIconView scale(float sc) {
             contentScale = Math.max(0.4f, Math.min(1f, sc));
+            return this;
+        }
+
+        /** 批次 S2：实例级着色（独立播放器组件换色用；不影响 DockBar 的 INK 默认）。 */
+        GlyphIconView tint(int color) {
+            stroke.setColor(color);
+            fillP.setColor(color);
+            invalidate();
             return this;
         }
 
