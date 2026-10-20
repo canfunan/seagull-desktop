@@ -182,6 +182,12 @@ public class RootPanelActivity extends BaseActivity {
             return new SysOps.R(true, out);
         })));
 
+        /* 车联助手 root 能力对齐（批次 S-RESTORE）：leting 用 su 注入按键到指定
+         * display（其 PIP 的返回键/触摸注入同款命令）。这里挂个可点测的等价项。 */
+        col.addView(section("车联助手对齐"));
+        col.addView(btn("向副屏(display 1)发返回键（root 注入）", () -> op("副屏返回键",
+                () -> SysOps.inputKeyeventOnDisplay(1, 4))));
+
         log = new TextView(this);
         log.setTextColor(Skin.c(R.color.warn));
         log.setTextSize(11);

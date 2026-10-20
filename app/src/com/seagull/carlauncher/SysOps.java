@@ -164,6 +164,32 @@ public final class SysOps {
         return run("am force-stop " + pkg);
     }
 
+    /* ---------------- 车联助手 root 能力对齐（批次 S-RESTORE）----------------
+     * leting（com.leting 3.0.0）dex 里共 6 处 su -c，归成两类能力：
+     * 指定 display 启动组件（am start --display N -f 0x10104000 -n，API 被拒时的
+     * 兜底）与向指定 display 注入按键（input -d N keyevent，其 CarWithX-PIP 的
+     * 触摸/返回注入）。这里同款补齐，供桌面在 API 被拒时走同一条兜底路。 */
+
+    /** 组件名：包名 + '/' + 类名，类名允许点。 */
+    private static boolean safeComponent(String p) {
+        if (p == null) return false;
+        int s = p.indexOf('/');
+        if (s <= 0 || s == p.length() - 1) return false;
+        return safePkg(p.substring(0, s)) && p.substring(s + 1).matches("[a-zA-Z0-9_./]+");
+    }
+
+    /** 指定 display 启动组件（leting 同款兜底）。 */
+    public static R amStartOnDisplay(int displayId, String component) {
+        if (displayId < 0 || !safeComponent(component)) return new R(false, "参数不合法");
+        return run("am start --display " + displayId + " -f 0x10104000 -n " + component);
+    }
+
+    /** 向指定 display 注入按键事件（leting PIP 同款）。 */
+    public static R inputKeyeventOnDisplay(int displayId, int keycode) {
+        if (displayId < 0 || keycode < 0) return new R(false, "参数不合法");
+        return run("input -d " + displayId + " keyevent " + keycode);
+    }
+
     /* ---------------- 信息 ---------------- */
 
     public static String envInfo(Context ctx) {
