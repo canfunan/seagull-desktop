@@ -163,13 +163,22 @@ public class RootPanelActivity extends BaseActivity {
             String cmd = "echo ==框架目录==; "
                     + "ls /data/adb/lspd 2>/dev/null | head -4; "
                     + "ls -d /data/adb/modules/*lsposed* /data/adb/ksu/modules/*lsposed* 2>/dev/null; "
+                    + "echo ==本机地图进程==; "
+                    + "pidof com.autonavi.minimap com.autonavi.amapauto 2>/dev/null; "
+                    + "ps -A 2>/dev/null | grep -iE 'autonavi|carlinkit' | head -8; "
+                    + "echo ==显示器列表==; "
+                    + "dumpsys display 2>/dev/null | grep -m6 -E 'mDisplayId|Display\\{'; "
+                    + "echo ==KSU模块清单==; "
+                    + "ls /data/adb/modules/ 2>/dev/null; "
+                    + "echo ==antitelemetry脚本内容==; "
+                    + "cat /data/adb/modules/seagull_antitelemetry/post-fs-data.sh 2>/dev/null | head -40; "
                     + "echo ==日志文件==; "
                     + "ls /data/adb/lspd/log/ 2>/dev/null | head -8; "
                     + "echo ==本模块注入记录==; "
                     + "grep -ah SeagullLsp /data/adb/lspd/log/modules*.log 2>/dev/null | tail -15; "
                     + "grep -ah -iE 'seagull' /data/adb/lspd/log/verbose*.log 2>/dev/null | tail -10; "
                     + "echo ==高德注入记录==; "
-                    + "grep -ah -E 'GaodeHook|autonavi' /data/adb/lspd/log/modules*.log 2>/dev/null | tail -8; "
+                    + "grep -ah -E 'GaodeHook|AmapPipHook|handleLoadPackage: com.autonavi' /data/adb/lspd/log/modules*.log 2>/dev/null | tail -8; "
                     + "echo ==自检完==";
             String out = Caps.exec(cmd);
             if (out == null || out.trim().isEmpty()) {
