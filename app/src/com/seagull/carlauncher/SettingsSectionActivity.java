@@ -998,6 +998,10 @@ public class SettingsSectionActivity extends BaseActivity {
         toggleRow("状态栏歌词", model.lyricStatusBar, () -> { model.lyricStatusBar = !model.lyricStatusBar; LauncherModel.bumpCfg(); });
         toggleRow("通知文字歌词", model.lyricNotification, () -> { model.lyricNotification = !model.lyricNotification; LauncherModel.bumpCfg(); });
         toggleRow("车载蓝牙歌词（媒体信息）", model.lyricBluetooth, () -> { model.lyricBluetooth = !model.lyricBluetooth; });
+        toggleRow("落雪直连（广播歌词）", model.lxLinkEnabled, () -> {
+            model.lxLinkEnabled = !model.lxLinkEnabled;
+            LauncherModel.bumpCfg();
+        });
         actionRow("这首歌词不对（换版本）", "在搜到的版本里轮换", v -> {
             Lyrics.nextVersion(this);
             toast("换了一版");

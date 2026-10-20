@@ -2642,3 +2642,13 @@ Manifest/杂项：
 - Q3 壁纸页 — 背景长按从「直接添加小组件」升级为入口菜单（添加小组件=原行为 / 组件管理）；组件管理六块清单含时钟块（新 wallClockEnabled 门，applyClock 统一控制，农历行随钟走）；时钟菜单追加 组件管理/隐藏时钟块 两项，原找回项保留。块全隐藏后空白长按仍可用（监听在页面根上）。
 - 自检 NegCardsCheck 20 项 — 修一个设计错误：纯奇偶位分列会把日志卡（flat 第 5 位、偶数）分进左列，与原版右列 3 卡布局冲突；改成交替发牌+末位余数进右列（colOf 挂 total 参数），并加用例锁死默认分列。教训：分列规则必须拿真实布局当测试向量，不能拍脑袋写完再"验证"。12 套自检全绿。
 - 交互偏离记录：负一屏移动用「长按→菜单→上移/下移」而非真拖拽（对齐全应用 AlertDialog 菜单习惯，跨列拖拽复杂度高收益低）；壁纸页六块真拖拽本就有（Drag 管线），本次只补时钟块隐藏与统一管理入口。
+
+## 批次 R 音乐控制与直连歌词（底栏播放器 + 音乐块播放器化 + CARLINK 直连）
+- R1 底栏迷你播放器 — btnPrev（G_PREV=左竖条+右三角，G_NEXT 镜像）插播放键前；标题列改竖排 LinearLayout[title, track]，进度条 3dp 自绘（track 圆角底+fill 直接改 LayoutParams.width），无时长/无会话 GONE；mediaTick 1s runnable 只在横幅 VISIBLE 时续跳（bindMedia VISIBLE 分支 post、GONE/抑制/detach 全 removeCallbacks，防幽灵跳）；进度=PlaybackState pos+速度×(now-lastUpdate) 外推（mediaProgress 0~1，无时长 -1）；封面走 CoverCache.get（artwork 位图+URI 双路已就绪），coverKey 记当前键——换曲才复位应用图标，同曲 1s 轮询不闪图标；MediaListenerService 加 meta()/mediaProgress() 静态读。
+- R1.5 音乐块播放器化 — 封面 22→28dp+点按=playPause（封面区当播放键，零新增控件）；musLyric 12sp 单行歌词（Lyrics.Sink 注册，构造挂 onLyric 最后一槽 setText，空文本自然收起）；musCtrl 控制行 ⏮⏯⏭（GlyphIconView 30dp 热区 0.74 scale），本地队列或远端会话存在才露，纯空闲收起；播放态图标随 refreshMusBlock（本地 isPlaying/远端 PlaybackState）更新。
+- R2 直连接收层 — CarLink 纯静态（JVM 可测）：ACTION com.seagull.carlauncher.CAR_LYRIC、extras line/line_t/pos/st/title/artist/cover、FRESH_MS=5000；fresh（ts=0 或超窗不新鲜，时钟倒退=刚收到算新鲜）；override（开关+新鲜双门，n 槽全空、翻译占倒数第二(n≥2)、当前行占最后——消费方统一把最后一槽当当前行；空行=全空清显；fallback 原数组永不被改写）。Lyrics.Direct volatile 四字段+registerReceiver（start() 注册一次，重复调用幂等，注册失败置 null 静默）；window() 头部单点覆盖——push 侧 sinks 与外部直调者（时钟块 tick）全部自动吃到，管线内零散布。
+- R3 直连封面 — CoverCache.fromUri(key,uri) 新入口（LRU 命中→60s 负缓存→EX 后台解码），get() 原 URI 分支抽 decodeAsync 共用（行为零变化）；音乐块 showRemoteMedia 无会话封面时回落直连封面：fromUri 发起解码+musArt.postDelayed 1.2s 一次性补绘（isAttachedToWindow 守卫，重复 refresh 叠加 post 也只是 LRU 命中，无害）。
+- 设置/开关 — LauncherModel.lxLinkEnabled 默认 true（老用户升级零操作，optBoolean 兜底），歌词分区 toggleRow「落雪直连（广播歌词）」bumpCfg+save（cfg 缓存代际失效，window 读侧立即生效）。
+- 协议文档 docs/CARLINK.md — action/extras 名冻结表、行变化才发/空行清显/封面变化才带三条纪律、桌面 5s 断流回落语义、落雪 LyricModule 接桥说明、v1 版本纪律（新 extra 一律可选）。
+- 自检 CarLinkCheck 24 项 — 修两处测试自身断言错：①时钟倒退用例预期反了（now<lastTs 恰说明广播刚到，应判新鲜）；②「新数组」回归断言写成空串（实际应等于行文本"A"）。教训：写新鲜度/槽位类用例先在纸上把边界语义过一遍再落笔。13 套自检全绿；javac --release 11 全量绿。
+- 待真机（验收表 19 项）：底栏进度推进与封面、音乐块歌词行/控制键/封面点按、落雪补丁包（另一仓库 CI）装上后行级同步、断流 5s 回落、关开关复原。

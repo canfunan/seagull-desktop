@@ -179,5 +179,37 @@ public class MediaListenerService extends NotificationListenerService {
         catch (Throwable t) { Log.w(TAG, "next 失败: " + t); }
     }
 
+    /** R1：当前会话 metadata（封面/时长来源）；无会话返回 null。 */
+    public static MediaMetadata meta() {
+        try { return current == null ? null : current.getMetadata(); }
+        catch (Throwable t) { return null; }
+    }
+
+    /**
+     * R1：进度 0~1（位置快照 + 速度×流逝时间外推）；无时长/无会话返回 -1。
+     * 底栏 1s tick 自取，不另建回调。
+     */
+    public static float mediaProgress() {
+        try {
+            if (current == null) return -1f;
+            MediaMetadata md = current.getMetadata();
+            PlaybackState ps = current.getPlaybackState();
+            if (md == null || ps == null) return -1f;
+            long dur = md.getLong(MediaMetadata.METADATA_KEY_DURATION);
+            if (dur <= 0) return -1f;
+            long pos = ps.getPosition();
+            if (ps.getState() == PlaybackState.STATE_PLAYING
+                    && ps.getLastPositionUpdateTime() > 0) {
+                float speed = Math.max(0f, ps.getPlaybackSpeed());
+                pos += (long) ((System.currentTimeMillis()
+                        - ps.getLastPositionUpdateTime()) * speed);
+            }
+            float f = pos / (float) dur;
+            return Math.max(0f, Math.min(1f, f));
+        } catch (Throwable t) {
+            return -1f;
+        }
+    }
+
     private static boolean snapshotPlaying() { return snap.playing; }
 }

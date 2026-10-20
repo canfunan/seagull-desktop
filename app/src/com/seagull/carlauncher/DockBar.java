@@ -1,6 +1,7 @@
 package com.seagull.carlauncher;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Outline;
 import android.graphics.Paint;
@@ -11,9 +12,12 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewOutlineProvider;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+
+import android.media.MediaMetadata;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -55,11 +59,12 @@ public class DockBar extends LinearLayout {
     private static final int BANNER_BG = 0x2EFFFFFF;
 
     /** 白色细线几何图标：四格菜单 / 海鸥 Logo / 播放三键。 */
-    private static final int G_APPS = 0;
-    private static final int G_LOGO = 1;
-    private static final int G_PLAY = 2;
-    private static final int G_PAUSE = 3;
-    private static final int G_NEXT = 4;
+    static final int G_APPS = 0;
+    static final int G_LOGO = 1;
+    static final int G_PLAY = 2;
+    static final int G_PAUSE = 3;
+    static final int G_NEXT = 4;
+    static final int G_PREV = 5;
 
     private final Listener listener;
     private LauncherModel model;
@@ -143,14 +148,34 @@ public class DockBar extends LinearLayout {
         mediaIcon = new ImageView(c);
         media.addView(mediaIcon, new LinearLayout.LayoutParams(dp(c, 22), dp(c, 22)));
 
+        // R1：标题 + 细进度条（无时长隐藏）
+        LinearLayout titleCol = new LinearLayout(c);
+        titleCol.setOrientation(VERTICAL);
+        titleCol.setGravity(Gravity.CENTER_VERTICAL);
         mediaTitle = new TextView(c);
         mediaTitle.setTextColor(INK);
         mediaTitle.setTextSize(13);
         mediaTitle.setSingleLine(true);
         mediaTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        mediaTitle.setMaxWidth(dp(c, 118));
+        mediaTitle.setMaxWidth(dp(c, 108));
         mediaTitle.setPadding(dp(c, 7), 0, dp(c, 4), 0);
-        media.addView(mediaTitle, new LinearLayout.LayoutParams(-2, -2));
+        titleCol.addView(mediaTitle, new LinearLayout.LayoutParams(-2, -2));
+        progTrack = new FrameLayout(c);
+        progTrack.setBackground(Skin.round(0x33FFFFFF, 3));
+        progFill = new View(c);
+        progFill.setBackground(Skin.round(0xE6FFFFFF, 3));
+        progTrack.addView(progFill, new FrameLayout.LayoutParams(0, dp(c, 3)));
+        LinearLayout.LayoutParams tclp = new LinearLayout.LayoutParams(dp(c, 96), dp(c, 3));
+        tclp.topMargin = dp(c, 3);
+        tclp.leftMargin = dp(c, 7);
+        progTrack.setVisibility(GONE);
+        titleCol.addView(progTrack, tclp);
+        media.addView(titleCol, new LinearLayout.LayoutParams(-2, -2));
+
+        GlyphIconView btnPrev = new GlyphIconView(c, G_PREV).scale(0.74f);
+        btnPrev.setContentDescription("上一曲");
+        btnPrev.setOnClickListener(v -> MediaListenerService.prev());
+        media.addView(btnPrev, new LinearLayout.LayoutParams(dp(c, 34), dp(c, 34)));
 
         btnPlay = new GlyphIconView(c, G_PAUSE).scale(0.74f);
         btnPlay.setContentDescription("播放/暂停");
@@ -247,6 +272,7 @@ public class DockBar extends LinearLayout {
         if (s == null || s.pkg == null || s.pkg.isEmpty()) {
             lastSnap = null;
             media.setVisibility(GONE);
+            removeCallbacks(mediaTick);
             return;
         }
         lastSnap = s;
@@ -254,10 +280,16 @@ public class DockBar extends LinearLayout {
         currentKey = key;
         if (key.equals(suppressedKey)) {
             media.setVisibility(GONE);   // 这条媒体已确认放不下，别再闪
+            removeCallbacks(mediaTick);
             return;
         }
         media.setVisibility(VISIBLE);
-        mediaIcon.setImageDrawable(mediaAppIcon(s.pkg));
+        if (!key.equals(coverKey)) {   // 换曲才复位图标；同曲保封面
+            coverKey = null;
+            mediaIcon.setTag(null);
+            mediaIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            mediaIcon.setImageDrawable(mediaAppIcon(s.pkg));
+        }
         String line = s.title != null && !s.title.isEmpty()
                 ? s.title + (s.artist != null && !s.artist.isEmpty() ? " · " + s.artist : "")
                 : s.pkg;
@@ -265,11 +297,52 @@ public class DockBar extends LinearLayout {
         btnPlay.setKind(s.playing ? G_PAUSE : G_PLAY);
         removeCallbacks(fitPass);
         post(fitPass);
+        removeCallbacks(mediaTick);
+        post(mediaTick);
     }
 
     private MediaListenerService.Snap lastSnap;
     private String currentKey;
     private String suppressedKey;
+    private String coverKey;
+    private final FrameLayout progTrack;
+    private final View progFill;
+
+    /** R1：横幅可见时 1s 一跳——进度推进 + 封面补位（异步解码下轮上屏）。 */
+    private final Runnable mediaTick = new Runnable() {
+        @Override public void run() {
+            if (media.getVisibility() != VISIBLE) return;
+            float f = MediaListenerService.mediaProgress();
+            if (f < 0) {
+                progTrack.setVisibility(GONE);
+            } else {
+                progTrack.setVisibility(VISIBLE);
+                int tw = progTrack.getWidth() - progTrack.getPaddingLeft()
+                        - progTrack.getPaddingRight();
+                if (tw > 0) {
+                    FrameLayout.LayoutParams flp =
+                            (FrameLayout.LayoutParams) progFill.getLayoutParams();
+                    int w = Math.max(dp(getContext(), 2), Math.round(tw * f));
+                    if (flp.width != w) { flp.width = w; progFill.setLayoutParams(flp); }
+                }
+            }
+            MediaListenerService.Snap s = MediaListenerService.snap();
+            MediaMetadata md = MediaListenerService.meta();
+            Bitmap art = md == null ? null : CoverCache.get(s.title, s.artist, md);
+            if (art != null && !art.isRecycled()) {
+                mediaIcon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                mediaIcon.setImageBitmap(art);
+                mediaIcon.setTag("cover");
+                coverKey = currentKey;
+            } else if (mediaIcon.getTag() != null) {
+                mediaIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                mediaIcon.setImageDrawable(mediaAppIcon(s.pkg));
+                mediaIcon.setTag(null);
+                coverKey = null;
+            }
+            postDelayed(this, 1000L);
+        }
+    };
 
     /** 布局后实测：中段放不下「图标区 + 横幅」就藏横幅，图标区保完整。 */
     private final Runnable fitPass = new Runnable() {
@@ -283,6 +356,7 @@ public class DockBar extends LinearLayout {
             if (need > avail) {
                 suppressedKey = currentKey;
                 media.setVisibility(GONE);
+                removeCallbacks(mediaTick);
             }
         }
     };
@@ -301,6 +375,12 @@ public class DockBar extends LinearLayout {
     public void applySkin() {
         bind(model);
         tick();
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        removeCallbacks(mediaTick);
+        removeCallbacks(fitPass);
+        super.onDetachedFromWindow();
     }
 
     /** Dock 尺寸变化（旋转/换肤重建）：清掉窄屏让位标记，重新尝试横幅。 */
@@ -486,6 +566,16 @@ public class DockBar extends LinearLayout {
                     float x1 = cx - s * 0.14f, x2 = cx + s * 0.14f;
                     cv.drawLine(x1, cy - s * 0.26f, x1, cy + s * 0.26f, stroke);
                     cv.drawLine(x2, cy - s * 0.26f, x2, cy + s * 0.26f, stroke);
+                    break;
+                }
+                case G_PREV: {
+                    // 上一曲：左竖条 + 实心三角（G_NEXT 镜像）
+                    cv.drawLine(cx - s * 0.26f, cy - s * 0.26f, cx - s * 0.26f, cy + s * 0.26f, stroke);
+                    path.moveTo(cx + s * 0.30f, cy - s * 0.24f);
+                    path.lineTo(cx - s * 0.12f, cy);
+                    path.lineTo(cx + s * 0.30f, cy + s * 0.24f);
+                    path.close();
+                    cv.drawPath(path, fillP);
                     break;
                 }
                 case G_NEXT:

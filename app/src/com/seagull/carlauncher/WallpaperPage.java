@@ -95,6 +95,9 @@ public final class WallpaperPage extends FrameLayout {
     private final LinearLayout monBox;
     private final LinearLayout musBox;
     private final ImageView musArt;
+    private final TextView musLyric;
+    private final LinearLayout musCtrl;
+    private final DockBar.GlyphIconView musBtnPlay;
     private final LinearLayout gBox;
     private final TextView musL0, musL1, musL2, musL3;
     private final TextView monL1, monL2, monL3;
@@ -256,7 +259,7 @@ public final class WallpaperPage extends FrameLayout {
                 },
                 () -> model.save()));
 
-        // M5 播放列表块：当前曲 + 队列两行 + 提示行；点按开选歌页，长按菜单
+        // M5 播放列表块：封面 + 当前曲 + 歌词行 + 控制行 + 队列两行 + 提示行
         musBox = new LinearLayout(c);
         musBox.setOrientation(LinearLayout.VERTICAL);
         // O2 封面缩略图行：封面 + 当前曲行同行；无封面时缩略图 GONE
@@ -265,15 +268,41 @@ public final class WallpaperPage extends FrameLayout {
         musRow0.setGravity(android.view.Gravity.CENTER_VERTICAL);
         musArt = new ImageView(c);
         musArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        musRow0.addView(musArt, new LayoutParams(dp(22), dp(22)));
+        // R2 封面点按 = 播放/暂停（28dp 可点面积）
+        musArt.setOnClickListener(v -> MediaListenerService.playPause());
+        musRow0.addView(musArt, new LayoutParams(dp(28), dp(28)));
         musL0 = tv(c, 15, R.color.leaf, true);          // 状态行：当前曲
         LinearLayout.LayoutParams mlp0 = new LinearLayout.LayoutParams(-2, -2);
         mlp0.leftMargin = dp(6);
         musRow0.addView(musL0, mlp0);
+        // R2 直连/管线歌词行（空文本自然收起）
+        musLyric = tv(c, 12, R.color.text_dim, false);
+        musLyric.setSingleLine(true);
+        musLyric.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        // R2 控制行：⏮ ⏯ ⏭（本地队列或远端会话存在才露）
+        musCtrl = new LinearLayout(c);
+        musCtrl.setOrientation(LinearLayout.HORIZONTAL);
+        musCtrl.setGravity(android.view.Gravity.CENTER);
+        DockBar.GlyphIconView cPrev = new DockBar.GlyphIconView(c, DockBar.G_PREV).scale(0.74f);
+        cPrev.setContentDescription("上一曲");
+        cPrev.setOnClickListener(v -> MediaListenerService.prev());
+        musBtnPlay = new DockBar.GlyphIconView(c, DockBar.G_PAUSE).scale(0.74f);
+        musBtnPlay.setContentDescription("播放/暂停");
+        musBtnPlay.setOnClickListener(v -> MediaListenerService.playPause());
+        DockBar.GlyphIconView cNext = new DockBar.GlyphIconView(c, DockBar.G_NEXT).scale(0.74f);
+        cNext.setContentDescription("下一曲");
+        cNext.setOnClickListener(v -> MediaListenerService.next());
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(dp(30), dp(30));
+        clp.rightMargin = dp(10);
+        musCtrl.addView(cPrev, clp);
+        musCtrl.addView(musBtnPlay, clp);
+        musCtrl.addView(cNext, clp);
         musL1 = tv(c, 12, R.color.text_dim, true);      // 队列 +1
         musL2 = tv(c, 12, R.color.text_dim, true);      // 队列 +2
         musL3 = tv(c, 11, R.color.text_dim, true);      // 提示行
         musBox.addView(musRow0);
+        musBox.addView(musLyric, topMargin(c, 3));
+        musBox.addView(musCtrl, topMargin(c, 4));
         musBox.addView(musL1, topMargin(c, 3));
         musBox.addView(musL2, topMargin(c, 3));
         musBox.addView(musL3, topMargin(c, 5));
@@ -296,6 +325,12 @@ public final class WallpaperPage extends FrameLayout {
                     model.wallMusScale = s;
                 },
                 () -> model.save()));
+        // R2 歌词行 sink：1s 管线（或直连广播）推一行，单行显示
+        Lyrics.addSink((w, title, artist) -> {
+            if (w == null || w.length == 0) return;
+            String line = w[w.length - 1];
+            musLyric.setText(line == null ? "" : line.trim());
+        });
 
         // N3 G值表块：当前 G（低通）+ 峰值；点按菜单，长按总菜单
         gBox = new LinearLayout(c);
@@ -886,6 +921,7 @@ public final class WallpaperPage extends FrameLayout {
 
     private void applyMusScale(float s) {
         musL0.setTextSize(15 * s);
+        musLyric.setTextSize(12 * s);
         musL1.setTextSize(12 * s);
         musL2.setTextSize(12 * s);
         musL3.setTextSize(11 * s);
@@ -910,6 +946,8 @@ public final class WallpaperPage extends FrameLayout {
             }
             musL0.setText((MusicService.isPlaying() ? "▶ " : "⏸ ")
                     + MusicLib.label(cur));
+            musCtrl.setVisibility(VISIBLE);
+            musBtnPlay.setKind(MusicService.isPlaying() ? DockBar.G_PAUSE : DockBar.G_PLAY);
             musL1.setText(i + 1 < q.size() ? "下首 " + MusicLib.label(q.get(i + 1)) : "队列到头，播完循环");
             musL2.setText(i + 2 < q.size() ? "再下 " + MusicLib.label(q.get(i + 2)) : "");
             musL3.setText("点按选歌 · 长按菜单");
@@ -924,7 +962,12 @@ public final class WallpaperPage extends FrameLayout {
             musL3.setText("点按选歌 · 长按菜单");
             // O2 蓝牙兜底：曲名 + 封面（CoverCache 异步解码，下一秒 tick 补上）
             android.media.session.MediaController mc = Lyrics.activeController(getContext());
-            if (mc != null) showRemoteMedia(mc);
+            if (mc != null) {
+                musCtrl.setVisibility(VISIBLE);
+                showRemoteMedia(mc);
+            } else {
+                musCtrl.setVisibility(GONE);
+            }
         }
     }
 
@@ -938,7 +981,27 @@ public final class WallpaperPage extends FrameLayout {
         boolean playing = false;
         android.media.session.PlaybackState ps = mc.getPlaybackState();
         if (ps != null) playing = ps.getState() == android.media.session.PlaybackState.STATE_PLAYING;
+        musBtnPlay.setKind(playing ? DockBar.G_PAUSE : DockBar.G_PLAY);
         Bitmap art = CoverCache.get(t, a, md);
+        if (art == null || art.isRecycled()) {
+            // R3 直连封面回落：落雪广播带 cover URI，后台解码后 1.2s 一次性补上
+            art = null;
+            if (Lyrics.directLive()) {
+                String dcv = Lyrics.directCover();
+                if (dcv != null && !dcv.isEmpty()) {
+                    final String ck = t + "|" + (a == null ? "" : a) + "|carlink";
+                    CoverCache.fromUri(ck, dcv);
+                    musArt.postDelayed(() -> {
+                        if (!musArt.isAttachedToWindow()) return;
+                        Bitmap b2 = CoverCache.fromUri(ck, dcv);
+                        if (b2 != null && !b2.isRecycled()) {
+                            musArt.setImageBitmap(b2);
+                            musArt.setVisibility(VISIBLE);
+                        }
+                    }, 1200L);
+                }
+            }
+        }
         if (art != null && !art.isRecycled()) {
             musArt.setImageBitmap(art);
             musArt.setVisibility(VISIBLE);

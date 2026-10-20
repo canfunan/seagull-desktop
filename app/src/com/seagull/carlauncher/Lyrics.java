@@ -76,6 +76,50 @@ public final class Lyrics {
 
     private Lyrics() {}
 
+    /* ==================== R3 落雪直连（CARLINK） ==================== */
+
+    /** 直连最新状态；ts=0 表示从未收到。广播频率=行变化，无轮询。 */
+    private static final class Direct {
+        volatile String line = "";
+        volatile String lineT = "";
+        volatile String cover = "";
+        volatile long ts;
+    }
+    private static final Direct DIRECT = new Direct();
+    private static android.content.BroadcastReceiver linkRx;
+
+    private static void registerLink(Context app) {
+        if (linkRx != null) return;
+        linkRx = new android.content.BroadcastReceiver() {
+            @Override public void onReceive(Context c, android.content.Intent i) {
+                try {
+                    DIRECT.line = i.getStringExtra(CarLink.EXTRA_LINE);
+                    if (DIRECT.line == null) DIRECT.line = "";
+                    String lt = i.getStringExtra(CarLink.EXTRA_LINE_T);
+                    DIRECT.lineT = lt == null ? "" : lt;
+                    String cv = i.getStringExtra(CarLink.EXTRA_COVER);
+                    if (cv != null && !cv.isEmpty()) DIRECT.cover = cv;
+                    DIRECT.ts = System.currentTimeMillis();
+                } catch (Throwable t) {
+                    Log.w(TAG, "直连广播解析失败", t);
+                }
+            }
+        };
+        android.content.IntentFilter f = new android.content.IntentFilter(CarLink.ACTION);
+        try {
+            app.registerReceiver(linkRx, f);
+        } catch (Throwable t) {
+            Log.w(TAG, "直连接收器注册失败", t);
+            linkRx = null;
+        }
+    }
+
+    /** 直连封面（新鲜时可用；调用方 CoverCache.fromUri 解码）。 */
+    public static String directCover() { return DIRECT.cover; }
+
+    /** 直连是否新鲜（UI 层问询封面/覆盖有效性）。 */
+    public static boolean directLive() { return CarLink.fresh(DIRECT.ts, System.currentTimeMillis()); }
+
     /** 歌词展示方（组件条、菜园、媒体卡片）实现它，每跳收到一次当前窗口。 */
     public interface Sink { void onLyric(String[] window, String title, String artist); }
 
@@ -85,7 +129,10 @@ public final class Lyrics {
 
     /** 桌面 onResume 调；onPause 可以不管（1s 一跳开销可忽略）。 */
     public static void start(Context ctx) {
-        if (ctx != null) appCtx = ctx.getApplicationContext();
+        if (ctx != null) {
+            appCtx = ctx.getApplicationContext();
+            registerLink(appCtx);   // R3：直连广播随管线启停注册一次
+        }
         if (running) return;
         running = true;
         lastTick = System.currentTimeMillis();
@@ -98,13 +145,20 @@ public final class Lyrics {
     }
 
     /** 给任意展示方取当前窗口（0=自动行数）。10.15 卡片与菜园共用这一个出口。 */
-    public static String[] window(Context ctx, int wantLines) {
-        return window(ctx, cfg(ctx), wantLines);   // 审计 M3：同走配置快照
-    }
-
-    /** 每秒跳一次的地方只 new 一次模型（读存档要解 JSON，一秒三次太浪费）。 */
     public static String[] window(Context ctx, LauncherModel m, int wantLines) {
         int n = wantLines > 0 ? wantLines : linesOf(m, ctx);
+        // R3 直连行级覆盖：开关开+广播新鲜才生效，其余原管线（单点出口，
+        // push 的 sink 广播与时钟块等外部直调者全部自动吃到）
+        boolean fresh = CarLink.fresh(DIRECT.ts, System.currentTimeMillis());
+        if (m != null && m.lxLinkEnabled) {
+            return CarLink.override(pipeline(n), n,
+                    DIRECT.line, DIRECT.lineT, true, fresh);
+        }
+        return pipeline(n);
+    }
+
+    /** 原管线窗口（直接从当前 lrc 状态切 n 行，中心对齐当前句）。 */
+    private static String[] pipeline(int n) {
         String[] src = cur_lyric.lines;
         if (src.length == 0) return new String[0];
         String[] out = new String[n];

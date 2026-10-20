@@ -403,6 +403,7 @@ public final class LauncherModel {
     public final List<String> negOrder = new ArrayList<>();
     public final List<String> negHidden = new ArrayList<>();
     public boolean wallClockEnabled = true;   // Q 批次：时钟块显隐（组件管理可切换）
+    public boolean lxLinkEnabled = true;      // R3：落雪直连广播歌词（默认开，升级零操作）
     public final List<Wall> wallLib = new ArrayList<>();
     public int fontScale = 100;                // 全局字号 50~150
 
@@ -1138,6 +1139,7 @@ public final class LauncherModel {
             o.put("negOrder", new JSONArray(negOrder));
             o.put("negHidden", new JSONArray(negHidden));
             o.put("wallClockEnabled", wallClockEnabled);
+            o.put("lxLinkEnabled", lxLinkEnabled);
             /* 屏幕 */
             o.put("marginH", marginH);
             o.put("marginV", marginV);
@@ -1443,6 +1445,7 @@ public final class LauncherModel {
                 }
             }
             wallClockEnabled = o.optBoolean("wallClockEnabled", true);
+            lxLinkEnabled = o.optBoolean("lxLinkEnabled", true);
             fontScale = o.optInt("fontScale", 100);
             JSONArray wa = o.optJSONArray("wallLib");
             if (wa != null) {

@@ -68,6 +68,15 @@
 - [x] Q3 壁纸页块管理——背景长按升级入口菜单（添加小组件=原行为 / 组件管理）；组件管理六块清单（含时钟块，点行切换+对应 refresh）；时钟菜单追加 组件管理/隐藏时钟块；applyClock 挂 wallClockEnabled 门（农历行随钟走）
 - [x] 自检：NegCardsCheck（归一 5 用例/move 边界 4/隐藏清洗 2/列分配 5/标签 valid 3）——20 项全绿；12 套自检全绿
 
+## 批次 R 音乐控制与直连歌词（2026-10-19 拍板，spec: .monkeycode/specs/music-control）
+- [x] R1 底栏迷你播放器——btnPrev（G_PREV 新图形=左竖条+右三角）插播放键前；标题列改竖排+3dp 自绘进度 track（fill 直接改 LayoutParams.width，无时长 GONE）；mediaTick 1s（横幅 VISIBLE 才 post，GONE/抑制/detach 都 removeCallbacks）——进度=PlaybackState 位置+速度×流逝外推，封面=CoverCache.get（meta artwork 位图+URI 双路），换曲才复位应用图标（coverKey 防闪）；MediaListenerService 加 meta()/mediaProgress()
+- [x] R1.5 壁纸音乐块播放器化——封面 22→28dp+点按=playPause；musLyric 12sp 单行歌词（Lyrics.Sink 注册，onDetachedFromWindow 摘除）；musCtrl 控制行 ⏮⏯⏭（GlyphIconView 30dp 热区，本地队列或远端会话存在才露，无会话收起）
+- [x] R2 直连接收层——CarLink 纯静态（ACTION/extras 常量+FRESH_MS=5000+fresh/override/coverUsable）；Lyrics.Direct volatile 状态+registerReceiver 随 start() 注册一次；window() 头部单点覆盖（开关+新鲜双门，sink 广播与时钟块等外部直调者全部自动吃到，push 侧零改动）
+- [x] R3 直连封面——CoverCache.fromUri(key,uri) 新入口（LRU 命中/60s 负缓存/EX 后台解码），get() URI 分支重构共用 decodeAsync；音乐块 showRemoteMedia 无会话封面时回落直连封面（1.2s 一次性补绘+isAttachedToWindow 守卫）
+- [x] 设置——LauncherModel.lxLinkEnabled（默认 true，升级零操作）+歌词分区 toggleRow（bumpCfg+save）
+- [x] 协议文档 docs/CARLINK.md（action/extras 冻结表+桌面行为+落雪接桥说明+版本纪律）
+- [x] 自检：CarLinkCheck（新鲜窗 5/覆盖槽位 12/封面 5）——24 项全绿；13 套自检全绿
+
 ## 终局
 - [x] 功能清单对齐（本文件逐项核对 + 真机验收项标注）——G-N 共 21 项全部勾选并核对落位说明与复盘行齐备（J-N 复盘行本次补录）；自检 8 项全绿（QuickbarCheck 垫片修复，见下）
 - [x] 三次大复盘（并行分组精读 → 亲自复核 → 自检交叉验证）+ 修复全部发现——三组并行精读报 30+ 条，逐条复核后修 19 处（P1 全修），P2 余量记录在案（见复盘记录末尾）
@@ -94,6 +103,7 @@
 | 16 | O4 崩溃 | 连续崩溃后重启画布回落默认布局+一次性提示；日志导出含 crash 文件 |
 | 17 | P OBD | 配对连接、熄火重连；OBD 车速 vs GPS 真值对比；转速/水温/电压显示；亏电提醒触发 |
 | 18 | Q 组件管理 | 负一屏长按重排/隐藏/空白长按找回；重启布局保持；壁纸页时钟块隐藏后经背景长按找回；两页全隐藏入口仍可用 |
+| 19 | R 音乐控制 | 底栏 ⏮/进度条/封面；音乐块歌词行+控制三键+封面点按暂停；落雪直连行变化同步到时钟块/音乐块/媒体卡；断流 5s 后回落原管线；关闭直连开关行为复原 |
 
 ## 复盘记录
 （每个功能完成后在此追加一行：功能 — 复盘结论）

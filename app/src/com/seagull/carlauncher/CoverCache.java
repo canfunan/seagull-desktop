@@ -62,6 +62,21 @@ public final class CoverCache {
         }
         final String uri = md.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI);
         if (uri == null || uri.isEmpty()) return null;
+        return decodeAsync(key, uri);
+    }
+
+    /** R3：直连封面入口（键由调用方给；直连键带 |carlink 后缀防与 metadata 键串）。 */
+    public static Bitmap fromUri(String key, String uri) {
+        if (key == null || key.isEmpty() || uri == null || uri.isEmpty()) return null;
+        Bitmap hit = CACHE.get(key);
+        if (hit != null) return hit;
+        Long neg = NEG.get(key);
+        if (neg != null && System.currentTimeMillis() - neg < NEG_MS) return null;
+        return decodeAsync(key, uri);
+    }
+
+    /** 后台单线程解码 URI（content:///http(s)/本地路径），完成入缓存失败进负缓存。 */
+    private static Bitmap decodeAsync(final String key, final String uri) {
         EX.execute(() -> {
             try {
                 ContentResolver cr = sCtx.getContentResolver();
