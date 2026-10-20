@@ -168,6 +168,35 @@ public final class VirtualPipController {
         return null;
     }
 
+    /** 副屏物理分辨率：非默认屏里面积最大的一块；没有就 1280x720@160。 */
+    private static int[] pickSize(Context ctx) {
+        try {
+            DisplayManager dm = (DisplayManager) ctx.getSystemService(Context.DISPLAY_SERVICE);
+            Display best = null;
+            long area = 0;
+            for (Display d : dm.getDisplays()) {
+                if (d.getDisplayId() == Display.DEFAULT_DISPLAY) continue;
+                DisplayMetrics m = new DisplayMetrics();
+                d.getRealMetrics(m);
+                long a = (long) m.widthPixels * m.heightPixels;
+                if (a > area) {
+                    area = a;
+                    best = d;
+                }
+            }
+            if (best != null) {
+                DisplayMetrics m = new DisplayMetrics();
+                best.getRealMetrics(m);
+                if (m.widthPixels > 0 && m.heightPixels > 0) {
+                    return new int[]{m.widthPixels, m.heightPixels, m.densityDpi};
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "pickSize 回退", t);
+        }
+        return new int[]{1280, 720, 160};
+    }
+
     public static synchronized void release() {
         if (sDisplayId < 0) return;
         if (sRooted) {
