@@ -154,6 +154,34 @@ public class RootPanelActivity extends BaseActivity {
             return new SysOps.R(true, sb.toString());
         })));
 
+        /* LSPosed 注入自检（批次 S-DIAG）：直接读框架日志，回答三件事——
+         * ① 框架在不在（/data/adb/lspd 与模块目录）；② 本模块有没有被注入
+         * （SeagullLsp 的 handleLoadPackage 行）；③ 高德在不在注入名单。
+         * 只读不动任何配置。 */
+        col.addView(section("LSPosed 注入自检"));
+        col.addView(btn("读取 LSPosed 日志（框架/模块/高德）", () -> op("LSPosed 注入自检", () -> {
+            String cmd = "echo ==框架目录==; "
+                    + "ls /data/adb/lspd 2>/dev/null | head -4; "
+                    + "ls -d /data/adb/modules/*lsposed* 2>/dev/null; "
+                    + "echo ==日志文件==; "
+                    + "ls /data/adb/lspd/log/ 2>/dev/null | head -6; "
+                    + "echo ==本模块注入记录==; "
+                    + "grep -h SeagullLsp /data/adb/lspd/log/modules.log "
+                    + "/data/adb/lspd/log/log-all.log /data/adb/log/lsposed/*.log 2>/dev/null "
+                    + "| tail -20; "
+                    + "echo ==高德注入记录==; "
+                    + "grep -h autonavi /data/adb/lspd/log/modules.log "
+                    + "/data/adb/lspd/log/log-all.log /data/adb/log/lsposed/*.log 2>/dev/null "
+                    + "| tail -6; "
+                    + "echo ==自检完==";
+            String out = Caps.exec(cmd);
+            if (out == null || out.trim().isEmpty()) {
+                out = "（无输出：root 通道不通或日志路径不存在——把上面「框架目录」为空"
+                        + "理解为 LSPosed 未装/未激活）";
+            }
+            return new SysOps.R(true, out);
+        })));
+
         log = new TextView(this);
         log.setTextColor(Skin.c(R.color.warn));
         log.setTextSize(11);
