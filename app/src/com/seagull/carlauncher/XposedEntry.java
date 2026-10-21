@@ -1299,6 +1299,21 @@ public class XposedEntry implements IXposedHookLoadPackage {
                             b.setPackage(Constants.SELF_PACKAGE);
                             b.putExtra("component", cn.flattenToString());
                             b.putExtra("displayId", id);
+                            // 原启动 flags 一起带过去：接收器 root 直启时用原样 flag
+                            // （am start 默认 NEW_TASK 会把应用内部导航变成新开任务，
+                            // 打断返回栈/UI 状态 —— 网易云实测点了某些界面就黑屏、
+                            // 挂载失效的根因）。应用语义保真，root 照样过归属检查。
+                            b.putExtra("flags", flags);
+                            // 完整 intent URI（v7）：只带 component 会丢 intent 的数据
+                            // （extras/data）—— splash→主 Activity 无数据所以没事，
+                            // 但应用内部导航带数据（点哪首歌/开哪个页），root 直启只有
+                            // component 时 Activity 拿不到数据 → 崩/黑屏。
+                            // toUri(URI_INTENT_SCHEME) 是标准序列化，am start 直接吃。
+                            try {
+                                b.putExtra("uri", intent.toUri(Intent.URI_INTENT_SCHEME));
+                            } catch (Throwable ignore) {
+                                // 个别 intent 带不可序列化 extras，退回 component 路径
+                            }
                             bc.sendBroadcast(b);
                             log("C0 建任务启动改道 app-root: " + cn.flattenToString());
                         } catch (Throwable t) {
