@@ -1211,7 +1211,8 @@ public final class WallpaperPage extends FrameLayout {
         if (has) {
             plTitle.setText(s.title != null && !s.title.isEmpty() ? s.title : "未知曲目");
             plSource.setText(s.artist != null && !s.artist.isEmpty() ? s.artist : s.pkg);
-            plPlay.setKind(s.playing ? DockBar.G_PAUSE : DockBar.G_PLAY);
+            plPlay.setKind(MediaListenerService.playing(controlTarget())
+                    ? DockBar.G_PAUSE : DockBar.G_PLAY);
         } else {
             plTitle.setText("未在播放");
             plSource.setText("手机 / 蓝牙 / 本地音乐");
