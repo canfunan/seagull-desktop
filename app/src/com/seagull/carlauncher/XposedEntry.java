@@ -531,6 +531,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
                         } catch (Throwable ignored) {
                             // 个别 ROM 上此处窗口还没挂，忽略即可
                         }
+                        beat(a);
                     }
                 });
 
@@ -1007,6 +1008,26 @@ public class XposedEntry implements IXposedHookLoadPackage {
     }
 
     // ===================== 配置 / 工具 =====================
+
+    /**
+     * 注入心跳（批次 W4）：hook 进程第一次 Activity onCreate 时向桌面发显式广播，
+     * 桌面 RootPanel 诊断行显示「已注入 ✓」—— 用户不必抓 logcat 就能区分
+     * 「模块没被 LSPosed 注入」（最常见：作用域没勾/更新后没重启目标应用）和
+     * 「注入了但 hook 没起效」。60s 去重；任何异常吞掉，绝不影响宿主进程。
+     */
+    private static volatile long lastBeat;
+
+    private static void beat(Activity a) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastBeat < 60_000L) return;
+        lastBeat = now;
+        try {
+            android.content.Intent i = new android.content.Intent(HookDiagnostics.ACTION);
+            i.setPackage("com.seagull.carlauncher");
+            i.putExtra(HookDiagnostics.EXTRA_PKG, a.getPackageName());
+            a.getApplicationContext().sendBroadcast(i);
+        } catch (Throwable ignore) {}
+    }
 
     private static int desiredOrientation() {
         String v = prop(PROP_ORIENTATION, "1");

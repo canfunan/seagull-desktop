@@ -100,6 +100,8 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         } catch (Throwable t) {
             android.util.Log.w("SeagullHome", "包广播注册失败", t);
         }
+        // 批次 W4：收 hook 进程（高德/网易云）的注入心跳，RootPanel 诊断行用
+        HookDiagnostics.register(this);
     }
 
     /**
@@ -229,6 +231,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         Weather.onUpdated = null;           // K1：静态钩子别持死旧桌面
         NavNotiParser.setListener(null);    // L1：同上
         try { if (pkgReceiver != null) unregisterReceiver(pkgReceiver); } catch (Throwable ignore) {}
+        HookDiagnostics.unregister(this);
         super.onDestroy();
     }
 

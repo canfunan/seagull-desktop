@@ -110,6 +110,7 @@ public class AmapHookEntry implements IXposedHookLoadPackage {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
                     forceLandscape((Activity) param.thisObject, "onCreate");
+                    beat((Activity) param.thisObject);
                     tick(2, "onCreate asserted " + who(param.thisObject));
                 }
             });
@@ -210,6 +211,26 @@ public class AmapHookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("forceLandscape[" + why + "] addFlags 异常: " + t);
         }
+    }
+
+    /**
+     * 注入心跳：向桌面发一条显式广播（无权限要求），让「模块到底被 LSPosed
+     * 注入没有」在桌面 RootPanel 诊断行看得见 —— 不再依赖用户抓 logcat。
+     * 60s 去重；hook 进程内任何异常一律吞掉，绝不影响宿主。
+     */
+    private static volatile long lastBeat;
+    private static final String DESKTOP_PKG = "com.seagull.carlauncher";
+
+    private static void beat(Activity act) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastBeat < 60_000L) return;
+        lastBeat = now;
+        try {
+            android.content.Intent i = new android.content.Intent(HookDiagnostics.ACTION);
+            i.setPackage(DESKTOP_PKG);
+            i.putExtra(HookDiagnostics.EXTRA_PKG, PKG_PHONE);
+            act.getApplicationContext().sendBroadcast(i);
+        } catch (Throwable ignore) {}
     }
 
     private static boolean isPortrait(int o) {
