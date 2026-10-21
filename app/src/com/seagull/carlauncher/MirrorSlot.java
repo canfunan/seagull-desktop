@@ -482,6 +482,11 @@ public final class MirrorSlot implements CanvasSource {
         }
         Log.i(TAG, "[" + name + "] " + pkg + " 已部署到 displayId=" + displayId + " " + vdW + "x" + vdH
                 + " trusted=" + trusted + " root=" + rootBased + " ready=" + ready);
+        // 【批次 PIP·H6b】把画布尺寸写进 prop：模块 H6 尺寸伪装读它覆写
+        // DisplayMetrics.widthPixels/heightPixels。治百度 ScreenUtils 拿
+        // 主屏（display 0）metrics 算尺寸、地图在画布上被裁剪的坑。
+        final int pw = vdW, ph = vdH;
+        rootExecAsync(() -> SysOps.setProp("persist.seagull.car.vdsize", pw + "x" + ph));
         return true;
     }
 
