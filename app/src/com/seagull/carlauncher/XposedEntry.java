@@ -1141,6 +1141,20 @@ public class XposedEntry implements IXposedHookLoadPackage {
     private static final String KEY_LAUNCH_DISPLAY_ID = "android.activity.launchDisplayId";
 
     /**
+     * ActivityOptions 的 launchTaskId 键（API 21 起稳定）。值 = 调用方 Activity
+     * 的 taskId，系统把启动的 Activity 直接投递进那个任务。
+     *
+     * 为什么用字符串常量而不是 ActivityOptions.setLaunchTaskId()：setLaunchTaskId
+     * 在部分 SDK 上是 @hide/@SystemApi，桩 jar 编不过；bundle 键字符串从 API 21
+     * 至今未变，直接 putInt 最稳。
+     *
+     * 用途（批次 PIP·C0 v3）：singleTask 应用按 affinity 包名找任务，跨包
+     * affinity（百度 naviauto → baidumaps）会把启动甩到默认屏；钉住宿主
+     * 任务后启动必须进画布上的调用方任务。
+     */
+    private static final String KEY_LAUNCH_TASK_ID = "android.activity.launchTaskId";
+
+    /**
      * C0 总闸（批次 AG）：hook Instrumentation.execStartActivity —— 应用进程内
      * 所有 Activity 启动（Activity.startActivityForResult、ContextImpl.startActivity、
      * Service/Application 侧拉起）最终都经过它。一条 hook = 全路径覆盖，
@@ -1212,14 +1226,20 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 Context who = null;
                 Intent intent = null;
                 Bundle options = null;
+                int optIdx = -1;
                 Object[] args = param.args;
                 // options 槽定位：已知签名里 options 都带 Bundle（值可能为 null
-                // —— null instanceof 不成立，不能纯按类型扫）。从尾部扫 Bundle。
+                // —— null instanceof 不成立，不能纯按类型扫）。从尾部扫 Bundle，
+                // 没有且末参是 null 时认定末参就是 options 槽（options 恒为末参）。
                 for (int i = args.length - 1; i >= 0; i--) {
                     if (args[i] instanceof Bundle) {
                         options = (Bundle) args[i];
+                        optIdx = i;
                         break;
                     }
+                }
+                if (optIdx < 0 && args.length > 0 && args[args.length - 1] == null) {
+                    optIdx = args.length - 1;
                 }
                 for (int i = 0; i < args.length; i++) {
                     Object a = args[i];
@@ -1232,16 +1252,25 @@ public class XposedEntry implements IXposedHookLoadPackage {
                         : (who != null ? displayIdOf(who) : -1);
                 if (id <= 0) return;   // 启动方在主屏：不干预
 
-                // 【批次 PIP·C0 重写】画布（非默认屏）上的启动统一策略：
-                // 剥掉建任务类 flag（NEW_TASK/CLEAR_TASK/NEW_DOCUMENT），让 Activity
-                // 进调用方的现有任务。系统只在「给新任务选屏」时才继承/合成
-                // launchDisplayId 并触发 SafeActivityOptions 的
-                // isCallerAllowedToLaunchOnDisplay 检查（AOSP 标准：显式 displayId
-                // 指向调用方无归属的屏即 SecurityException）—— 同任务内启动压根
-                // 不走那条路，检查不触发。私有画布上的跨包启动（百度 naviauto →
-                // baidumaps.MapsActivity 实测被拒 → splash 走完黑屏）从根上消失。
-                // 旧版「同包注入 displayId」逻辑整体退役：进现有任务天然落在画布上，
-                // 不需要注入，注入反而会重新触发归属检查。
+                // 【批次 PIP·C0 v3】画布（非默认屏）上的启动三连：
+                //
+                // ① 剥建任务 flag（NEW_TASK/CLEAR_TASK/NEW_DOCUMENT）：
+                //    系统只在「给新任务选屏」时才继承/合成 launchDisplayId 并触发
+                //    SafeActivityOptions.isCallerAllowedToLaunchOnDisplay 检查
+                //    （AOSP 标准：显式 displayId 指向调用方无归属的屏即拒）——
+                //    不建新任务就根本不走那条路。私有画布上的跨包启动
+                //    （百度 naviauto → baidumaps.MapsActivity 实测被拒）从根上消失。
+                //
+                // ② 钉宿主任务（launchTaskId = 调用方任务的 id）：
+                //    singleTask 应用按 **affinity 包名** 找任务，跨包 affinity
+                //    （百度 MapsActivity 的 affinity=com.baidu.baidumaps ≠ splash
+                //    所在 com.baidu.naviauto 任务）会把启动甩到默认屏/旧栈上
+                //    （实测：地图进了 splash 任务后整个任务被搬到 d0、letterbox、
+                //    拆除，自愈在画布上找不到）。显式 launchTaskId 压过 affinity
+                //    重定向，启动必须进调用方这个画布任务。
+                //
+                // ③ 剥 options 里残留的 launchDisplayId：
+                //    ①之后不该有 displayId，有就删，杜绝归属检查。
                 ComponentName cn = intent.getComponent();
                 int flags = intent.getFlags();
                 int strip = flags & (Intent.FLAG_ACTIVITY_NEW_TASK
@@ -1249,11 +1278,33 @@ public class XposedEntry implements IXposedHookLoadPackage {
                         | Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
                 if (strip != 0) {
                     intent.setFlags(flags & ~strip);
-                    log("C0 剥建任务flag 0x" + Integer.toHexString(strip)
-                            + " → 进现有任务 (" + (cn != null ? cn.getClassName() : intent.toString()) + ")");
                 }
-                if (options != null) {
+                // ② 钉宿主任务：Activity.getTaskId() 拿调用方（splash）的任务
+                int taskId = -1;
+                if (srcAct != null) {
+                    try {
+                        taskId = srcAct.getTaskId();
+                    } catch (Throwable ignored) {
+                    }
+                }
+                if (taskId >= 0 && optIdx >= 0) {
+                    if (options == null) {
+                        options = new Bundle();
+                        param.args[optIdx] = options;
+                    }
                     options.remove(KEY_LAUNCH_DISPLAY_ID);
+                    options.putInt(KEY_LAUNCH_TASK_ID, taskId);
+                    log("C0 剥flag 0x" + Integer.toHexString(strip)
+                            + " 钉宿主任务 taskId=" + taskId + " ("
+                            + (cn != null ? cn.getClassName() : intent.toString()) + ")");
+                } else {
+                    if (options != null) {
+                        options.remove(KEY_LAUNCH_DISPLAY_ID);
+                    }
+                    if (strip != 0) {
+                        log("C0 剥建任务flag 0x" + Integer.toHexString(strip)
+                                + " → 进现有任务 (" + (cn != null ? cn.getClassName() : intent.toString()) + ")");
+                    }
                 }
             } catch (Throwable t) {
                 log("C0 execStartActivity 处理异常: " + t);
