@@ -38,8 +38,11 @@ public class CanvasLaunchReceiver extends BroadcastReceiver {
             Log.w(TAG, "组件名非法，拒绝: " + comp);
             return;
         }
-        SysOps.R r = SysOps.exec("am start --display " + displayId + " -n " + comp);
-        Log.i(TAG, "root 直启到画布 d" + displayId + ": " + comp
-                + " ok=" + (r != null && r.ok));
+        // Caps.exec 走 su -c（root 身份）：root(uid 0) 带 INTERNAL_SYSTEM_WINDOW
+        // 过 vivo 归属检查，组件直接落进画布屏。
+        String out = Caps.exec("am start --display " + displayId + " -n " + comp);
+        boolean ok = out != null && !out.toLowerCase().contains("exception");
+        Log.i(TAG, "root 直启到画布 d" + displayId + ": " + comp + " ok=" + ok
+                + (out != null ? " | " + out.trim() : ""));
     }
 }
