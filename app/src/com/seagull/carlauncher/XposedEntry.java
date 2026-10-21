@@ -1276,7 +1276,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
                         : (srcAct != null ? srcAct.getPackageName() : null);
 
                 // 【批次 PIP·C0 v4】跨包启动改道（百度 naviauto → baidumaps.MapsActivity）：
-                // singleTask + 跨包 affinity（affinity 按包名 = com.baidu.baidumaps，
+                // singleTask + 跨包 affinity（affinity 按类包名 = com.baidu.baidumaps，
                 // ≠ splash 所在 com.baidu.naviauto 任务）让「进调用方任务」的钉法
                 // 必然失败（系统静默丢弃 → splash 卡死在画布上，用户实测症状）；
                 // 带 displayId 又撞 vivo 归属检查（私有画布 FLAG_PRIVATE 非零直接拒）。
@@ -1285,22 +1285,31 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 // INTERNAL_SYSTEM_WINDOW 过归属检查，实测 MapsActivity 落进
                 // 画布上 splash 的任务、0 拒绝、正常渲染）。
                 // 同包启动不走这条路（剥 flag 进现有任务即可）。
-                if (cn != null && selfPkg != null && !cn.getPackageName().equals(selfPkg)) {
-                    Context bc = who != null ? who : srcAct;
-                    if (bc != null) {
-                        try {
-                            Intent b = new Intent(CanvasLaunchReceiver.ACTION);
-                            b.setPackage(Constants.SELF_PACKAGE);
-                            b.putExtra("component", cn.flattenToString());
-                            b.putExtra("displayId", id);
-                            bc.sendBroadcast(b);
-                            log("C0 跨包启动改道 app-root: " + cn.flattenToString());
-                        } catch (Throwable t) {
-                            log("C0 广播失败: " + t);
+                //
+                // 跨包判定注意：ComponentName.getPackageName() 返回的是 **intent 的
+                // package**（百度这里也是 com.baidu.naviauto），不是 Activity 类
+                // 所在的包 —— 必须按**类名的包前缀**判（com.baidu.baidumaps.MapsActivity
+                // 的类包 = com.baidu.baidumaps ≠ com.baidu.naviauto）。
+                if (cn != null && selfPkg != null && cn.getClassName() != null) {
+                    String cls = cn.getClassName();
+                    boolean samePkg = cls.equals(selfPkg) || cls.startsWith(selfPkg + ".");
+                    if (!samePkg) {
+                        Context bc = who != null ? who : srcAct;
+                        if (bc != null) {
+                            try {
+                                Intent b = new Intent(CanvasLaunchReceiver.ACTION);
+                                b.setPackage(Constants.SELF_PACKAGE);
+                                b.putExtra("component", cn.flattenToString());
+                                b.putExtra("displayId", id);
+                                bc.sendBroadcast(b);
+                                log("C0 跨包启动改道 app-root: " + cn.flattenToString());
+                            } catch (Throwable t) {
+                                log("C0 广播失败: " + t);
+                            }
                         }
+                        param.setResult(null);   // 取消原启动（singleTask 跨包必然失败）
+                        return;
                     }
-                    param.setResult(null);   // 取消原启动（singleTask 跨包必然失败）
-                    return;
                 }
 
                 int flags = intent.getFlags();
