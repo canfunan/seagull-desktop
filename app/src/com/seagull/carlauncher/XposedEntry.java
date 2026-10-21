@@ -297,9 +297,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
      */
     private void hookDensitySpoof(ClassLoader cl) {
         final int dpi = carDensity();
-        // 画布尺寸伪装（H6b）：读不到就只伪装密度，行为与旧版一致
-        final int[] vdSize = carVdSize();
-        if (dpi <= 0 && vdSize == null) return;   // 两者都关 = 完全关闭
+        if (dpi <= 0 && carVdSize() == null) return;   // 两者都关 = 完全关闭
         // density < 0 表示只伪装尺寸不动密度（滑杆关着但画布尺寸开着）
         final float density = dpi > 0 ? dpi / 160f : -1f;
         XposedHelpers.findAndHookMethod("android.content.res.Resources", cl,
@@ -307,7 +305,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         try {
-                            applyDensity((DisplayMetrics) param.getResult(), density, dpi, vdSize);
+                            applyDensity((DisplayMetrics) param.getResult(), density, dpi);
                         } catch (Throwable ignored) {
                         }
                     }
@@ -319,7 +317,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
                                 try {
-                                    applyDensity((DisplayMetrics) param.args[0], density, dpi, vdSize);
+                                    applyDensity((DisplayMetrics) param.args[0], density, dpi);
                                 } catch (Throwable ignored) {
                                 }
                             }
@@ -332,8 +330,9 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 + (vdSize != null ? " 尺寸=" + vdSize[0] + "x" + vdSize[1] : ""));
     }
 
-    private static void applyDensity(DisplayMetrics dm, float density, int dpi, int[] vdSize) {
+    private static void applyDensity(DisplayMetrics dm, float density, int dpi) {
         if (dm == null) return;
+        int[] vdSize = carVdSize();   // 每次自取（内部 5s TTL）—— 捕获快照会在画布 resize 后失效
         // getDisplayMetrics 是热路径（每次布局 inflate 都走）：已经是目标值就别重复写，
         // 让钩子开销只剩一次字段比较。
         if ((density < 0 || (dm.densityDpi == dpi && dm.density == density))
@@ -354,20 +353,35 @@ public class XposedEntry implements IXposedHookLoadPackage {
         }
     }
 
-    /** 画布尺寸伪装值（prop "WxH"）。读不到/格式错返回 null（只伪装密度）。 */
+    private static volatile int[] vdSizeCached;
+    private static volatile long vdSizeAt;
+
+    /**
+     * 画布尺寸伪装值（prop "WxH"）。读不到/格式错返回 null（只伪装密度）。
+     * 5s TTL：prop 由海鸥 app 部署/resize 时写入，画布一 resize（如 1114→2275）
+     * 旧值就失效 —— 安装时只读一次会让百度这类按 metrics 排版的应用按旧尺寸
+     * 裁 layout（复盘 6）。热路径不能每次 fork su 读 prop，5s 刷新是延迟与
+     * 开销的平衡点。
+     */
     private static int[] carVdSize() {
+        long now = System.currentTimeMillis();
+        if (now - vdSizeAt < 5_000) return vdSizeCached;
+        int[] out = null;
         try {
             String v = prop(PROP_VDSIZE, "");
             v = v.trim();
             int x = v.indexOf('x');
-            if (x <= 0 || x >= v.length() - 1) return null;
-            int w = Integer.parseInt(v.substring(0, x).trim());
-            int h = Integer.parseInt(v.substring(x + 1).trim());
-            if (w < 320 || w > 4096 || h < 240 || h > 4096) return null;
-            return new int[]{w, h};
+            if (x > 0 && x < v.length() - 1) {
+                int w = Integer.parseInt(v.substring(0, x).trim());
+                int h = Integer.parseInt(v.substring(x + 1).trim());
+                if (w >= 320 && w <= 4096 && h >= 240 && h <= 4096) out = new int[]{w, h};
+            }
         } catch (Throwable t) {
-            return null;
+            out = null;
         }
+        vdSizeCached = out;
+        vdSizeAt = now;
+        return out;
     }
 
     /** 密度滑杆值（0 = 关闭）。读不到按关闭处理，绝不乱改。 */
