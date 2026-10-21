@@ -8,12 +8,12 @@ public final class XposedHelpers {
 
     private XposedHelpers() { }
 
-    public static XC_MethodHook findAndHookMethod(Class<?> clazz, String methodName,
+    public static XC_MethodHook.Unhook findAndHookMethod(Class<?> clazz, String methodName,
             Object... parameterTypesAndCallback) {
         return null;
     }
 
-    public static XC_MethodHook findAndHookMethod(String className, ClassLoader classLoader,
+    public static XC_MethodHook.Unhook findAndHookMethod(String className, ClassLoader classLoader,
             String methodName, Object... parameterTypesAndCallback) {
         return null;
     }
