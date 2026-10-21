@@ -140,7 +140,7 @@ public class DockBar extends LinearLayout {
         media.setOrientation(HORIZONTAL);
         media.setGravity(Gravity.CENTER_VERTICAL);
         media.setBackground(Skin.round(BANNER_BG, 18));
-        media.setPadding(dp(c, 8), dp(c, 5), dp(c, 4), dp(c, 5));
+        media.setPadding(dp(c, 5), dp(c, 2), dp(c, 3), dp(c, 2));
         media.setVisibility(GONE);
         // 批次 S1：weight=1 占满中段剩余宽——横幅永不超宽（旧 fitPass「放不下整条藏」机制删除）
         LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(0, -2, 1f);
@@ -149,7 +149,7 @@ public class DockBar extends LinearLayout {
         media.setOnClickListener(v -> { if (onBannerClick != null) onBannerClick.run(); });
 
         mediaIcon = new ImageView(c);
-        media.addView(mediaIcon, new LinearLayout.LayoutParams(dp(c, 22), dp(c, 22)));
+        media.addView(mediaIcon, new LinearLayout.LayoutParams(dp(c, 18), dp(c, 18)));
 
         // R1：标题 + 细进度条（无时长隐藏）；批次 S1：标题列 weight 弹性收缩
         LinearLayout titleCol = new LinearLayout(c);
@@ -157,19 +157,19 @@ public class DockBar extends LinearLayout {
         titleCol.setGravity(Gravity.CENTER_VERTICAL);
         mediaTitle = new TextView(c);
         mediaTitle.setTextColor(INK);
-        mediaTitle.setTextSize(13);
+        mediaTitle.setTextSize(12);
         mediaTitle.setSingleLine(true);
         mediaTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
         mediaTitle.setPadding(dp(c, 7), 0, dp(c, 4), 0);
         titleCol.addView(mediaTitle, new LinearLayout.LayoutParams(-2, -2));
         lyricLine = new TextView(c);
         lyricLine.setTextColor(0x99FFFFFF);
-        lyricLine.setTextSize(11);
+        lyricLine.setTextSize(10);
         lyricLine.setSingleLine(true);
         lyricLine.setEllipsize(android.text.TextUtils.TruncateAt.MARQUEE);
         lyricLine.setMarqueeRepeatLimit(-1);   // 无限滚动
         lyricLine.setHorizontallyScrolling(true);
-        lyricLine.setPadding(dp(c, 7), dp(c, 1), dp(c, 4), 0);
+        lyricLine.setPadding(dp(c, 7), 0, dp(c, 4), 0);
         lyricLine.setVisibility(GONE);
         titleCol.addView(lyricLine, new LinearLayout.LayoutParams(-2, -2));
         progTrack = new FrameLayout(c);
@@ -186,23 +186,23 @@ public class DockBar extends LinearLayout {
         mclp.leftMargin = dp(c, 2);
         media.addView(titleCol, mclp);
 
-        GlyphIconView btnPrev = new GlyphIconView(c, G_PREV).scale(0.74f);
+        GlyphIconView btnPrev = new GlyphIconView(c, G_PREV).scale(0.62f);
         btnPrev.setContentDescription("上一曲");
         btnPrev.setOnClickListener(v ->
                 MediaListenerService.control(controlPkg, "prev"));
-        media.addView(btnPrev, new LinearLayout.LayoutParams(dp(c, 34), dp(c, 34)));
+        media.addView(btnPrev, new LinearLayout.LayoutParams(dp(c, 26), dp(c, 26)));
 
-        btnPlay = new GlyphIconView(c, G_PAUSE).scale(0.74f);
+        btnPlay = new GlyphIconView(c, G_PAUSE).scale(0.62f);
         btnPlay.setContentDescription("播放/暂停");
         btnPlay.setOnClickListener(v ->
                 MediaListenerService.control(controlPkg, "playpause"));
-        media.addView(btnPlay, new LinearLayout.LayoutParams(dp(c, 34), dp(c, 34)));
+        media.addView(btnPlay, new LinearLayout.LayoutParams(dp(c, 26), dp(c, 26)));
 
-        GlyphIconView btnNext = new GlyphIconView(c, G_NEXT).scale(0.74f);
+        GlyphIconView btnNext = new GlyphIconView(c, G_NEXT).scale(0.62f);
         btnNext.setContentDescription("下一曲");
         btnNext.setOnClickListener(v ->
                 MediaListenerService.control(controlPkg, "next"));
-        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(dp(c, 34), dp(c, 34));
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(dp(c, 26), dp(c, 26));
         nlp.leftMargin = dp(c, 2);
         media.addView(btnNext, nlp);
 
