@@ -1272,6 +1272,37 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 // ③ 剥 options 里残留的 launchDisplayId：
                 //    ①之后不该有 displayId，有就删，杜绝归属检查。
                 ComponentName cn = intent.getComponent();
+                String selfPkg = who != null ? who.getPackageName()
+                        : (srcAct != null ? srcAct.getPackageName() : null);
+
+                // 【批次 PIP·C0 v4】跨包启动改道（百度 naviauto → baidumaps.MapsActivity）：
+                // singleTask + 跨包 affinity（affinity 按包名 = com.baidu.baidumaps，
+                // ≠ splash 所在 com.baidu.naviauto 任务）让「进调用方任务」的钉法
+                // 必然失败（系统静默丢弃 → splash 卡死在画布上，用户实测症状）；
+                // 带 displayId 又撞 vivo 归属检查（私有画布 FLAG_PRIVATE 非零直接拒）。
+                // 破局：取消原启动，把组件广播给海鸥 app —— app 以 root 身份
+                // `am start --display <画布> -n <组件>` 直启（root 带
+                // INTERNAL_SYSTEM_WINDOW 过归属检查，实测 MapsActivity 落进
+                // 画布上 splash 的任务、0 拒绝、正常渲染）。
+                // 同包启动不走这条路（剥 flag 进现有任务即可）。
+                if (cn != null && selfPkg != null && !cn.getPackageName().equals(selfPkg)) {
+                    Context bc = who != null ? who : srcAct;
+                    if (bc != null) {
+                        try {
+                            Intent b = new Intent(CanvasLaunchReceiver.ACTION);
+                            b.setPackage(Constants.SELF_PACKAGE);
+                            b.putExtra("component", cn.flattenToString());
+                            b.putExtra("displayId", id);
+                            bc.sendBroadcast(b);
+                            log("C0 跨包启动改道 app-root: " + cn.flattenToString());
+                        } catch (Throwable t) {
+                            log("C0 广播失败: " + t);
+                        }
+                    }
+                    param.setResult(null);   // 取消原启动（singleTask 跨包必然失败）
+                    return;
+                }
+
                 int flags = intent.getFlags();
                 int strip = flags & (Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_CLEAR_TASK
