@@ -141,9 +141,18 @@ public final class Caps {
         long now = android.os.SystemClock.elapsedRealtime();
         Boolean cached = sBridgeOn;
         if (cached != null && now - sBridgeAt < 10_000) return cached;
-        boolean on = false;
+        // 默认开（2026-10-21）：root 建 TRUSTED 屏 + setLaunchDisplayId 落屏是挂载主路径
+        // （野菜公签版同构，NEXUS 实验分支实测 amapauto 落屏成功）。系统 PiP 标志那条
+        // （system_server 钩子）已弃 —— 本机 vivo ROM 上注入不稳（包名 system、
+        // imageless 降级、scope 被裁），不值得再投入。
+        // 显式 setprop persist.seagull.rootbridge 0 才关，回退旧三路。
+        // 注意：getprop 对未设置的属性返回空串（不是 null），必须把空串当"未设置"，
+        // 否则默认值会被空串判成关（NEXUS 首版就踩了这个坑）。
+        boolean on = true;
         String out = exec("getprop persist.seagull.rootbridge");
-        if (out != null) on = out.trim().equals("1");
+        if (out != null && !out.trim().isEmpty()) {
+            on = out.trim().equals("1");
+        }
         sBridgeOn = on;
         sBridgeAt = now;
         return on;
