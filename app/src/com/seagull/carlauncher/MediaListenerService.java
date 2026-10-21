@@ -35,7 +35,31 @@ public class MediaListenerService extends NotificationListenerService {
         public String title = "";
         public String artist = "";
         public boolean playing;
+        /** 当前歌词行（通知文本里带歌词的音乐 app，如落雪；无则空）。 */
+        public String lyric = "";
+        /** 歌词更新时间（System.currentTimeMillis，UI 做渐隐/换行动画用）。 */
+        public long lyricAt;
     }
+
+    /** 底栏播放器要控制的音乐包（挂载哪个控制哪个 + 手机版同源）。 */
+    private static final String[] MUSIC_PKGS = {
+            "cn.toside.music.mobile",          // 落雪音乐
+            "com.tencent.qqmusiccar",          // QQ音乐车机版
+            "com.tencent.qqmusic",             // QQ音乐手机版
+            "com.kugou.android.auto",          // 酷狗车机版
+            "com.kugou.android",               // 酷狗手机版
+            "com.netease.cloudmusic.iot",      // 网易云车机版
+            "com.netease.cloudmusic",          // 网易云手机版
+    };
+
+    /**
+     * 通知文本键位（野菜桌面普通版同款策略）：歌词行在音乐 app 的通知
+     * text/bigText 里（落雪直接放当前歌词行；其余 app 放歌名/歌手 —— 与
+     * title 相同则不算歌词）。按优先级取第一个非空且不等于 title 的。
+     */
+    private static final String[] LYRIC_KEYS = {
+            "android.bigText", "android.text", "android.subText", "android.infoText"
+    };
 
     private static volatile Snap snap = new Snap();
     private static volatile boolean connected;
@@ -72,6 +96,43 @@ public class MediaListenerService extends NotificationListenerService {
     @Override public void onNotificationPosted(StatusBarNotification sbn) {
         // 通知正文不进 logcat（批次 V 教训）；L1 导航通知解析也只取结果、不落日志
         NavNotiParser.feed(sbn);
+        // 歌词提取（批次 MB）：音乐包的通知文本里捞当前歌词行 —— 只存结果不落日志
+        try { feedLyric(sbn); } catch (Throwable ignored) {}
+    }
+
+    /** 音乐包通知 → 歌词行进 Snap。 */
+    private static void feedLyric(StatusBarNotification sbn) {
+        if (sbn == null) return;
+        String pkg = sbn.getPackageName();
+        if (pkg == null || !isMusicPkg(pkg)) return;
+        android.app.Notification n = sbn.getNotification();
+        if (n == null || n.extras == null) return;
+        CharSequence title = n.extras.getCharSequence("android.title");
+        String titleStr = title == null ? null : title.toString().trim();
+        for (String key : LYRIC_KEYS) {
+            CharSequence v = n.extras.getCharSequence(key);
+            if (v == null) continue;
+            String line = v.toString().trim();
+            if (line.isEmpty()) continue;
+            // 通知文本=歌名/歌手（非歌词）时跳过：歌词行必须与标题不同
+            if (titleStr != null && line.equals(titleStr)) continue;
+            if (line.length() > 200) continue;   // 长文本多半是整段歌词，取首行
+            int nl = line.indexOf('\n');
+            if (nl > 0) line = line.substring(0, nl).trim();
+            if (line.isEmpty() || line.equals(snap.lyric)) continue;
+            Snap s = new Snap();
+            s.pkg = snap.pkg; s.title = snap.title; s.artist = snap.artist;
+            s.playing = snap.playing;
+            s.lyric = line; s.lyricAt = System.currentTimeMillis();
+            snap = s;
+            return;
+        }
+    }
+
+    public static boolean isMusicPkg(String pkg) {
+        if (pkg == null) return false;
+        for (String m : MUSIC_PKGS) if (m.equals(pkg)) return true;
+        return false;
     }
 
     @Override public void onNotificationRemoved(StatusBarNotification sbn) {
@@ -161,6 +222,11 @@ public class MediaListenerService extends NotificationListenerService {
 
     /* ---------------- transport control（不经过画布） ---------------- */
 
+    /** 按包播放/暂停（底栏/大卡：挂载哪个控制哪个）。 */
+    public static void playPause(String pkg) {
+        control(pkg, "playpause");
+    }
+
     public static void playPause() {
         try {
             if (current == null) return;
@@ -177,6 +243,57 @@ public class MediaListenerService extends NotificationListenerService {
     public static void next() {
         try { if (current != null) current.getTransportControls().skipToNext(); }
         catch (Throwable t) { Log.w(TAG, "next 失败: " + t); }
+    }
+
+    /**
+     * 按包名找活跃媒体会话（批次 MB：画中画挂载哪个播放器就控制哪个）。
+     * refresh() 的 current 是「正在播放的那个」—— 挂载 A 放 B 时 current 可能
+     * 是 B，控制会打错人。这里按包精确定位；找不到回退 current。
+     */
+    public static MediaController controllerFor(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return current;
+        if (appCtx == null || !connected) return current;
+        try {
+            MediaSessionManager msm =
+                    (MediaSessionManager) appCtx.getSystemService(Context.MEDIA_SESSION_SERVICE);
+            if (msm == null) return current;
+            List<MediaController> list =
+                    msm.getActiveSessions(new ComponentName(appCtx, MediaListenerService.class));
+            for (MediaController c : list) {
+                if (pkg.equals(c.getPackageName())) return c;
+            }
+        } catch (Throwable ignored) {
+        }
+        return current;
+    }
+
+    /** 底栏播放器按钮：对指定包（挂载的那个）下发传输控制。 */
+    public static void control(String pkg, String action) {
+        try {
+            MediaController c = controllerFor(pkg);
+            if (c == null) return;
+            MediaController.TransportControls tc = c.getTransportControls();
+            if (tc == null) return;
+            switch (action) {
+                case "play":  tc.play();  break;
+                case "pause": tc.pause(); break;
+                case "next":  tc.skipToNext(); break;
+                case "prev":  tc.skipToPrevious(); break;
+                case "playpause": {
+                    // 按目标控制器自身的播放态翻转（不是全局 snap —— 挂载 A 放 B
+                    // 时 snap.playing 可能是 B 的）
+                    PlaybackState ps = null;
+                    try { ps = c.getPlaybackState(); } catch (Throwable ignored) {}
+                    boolean playing = ps != null
+                            && ps.getState() == PlaybackState.STATE_PLAYING;
+                    if (playing) tc.pause(); else tc.play();
+                    break;
+                }
+                default:      break;
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "control(" + pkg + "," + action + ") 失败: " + t);
+        }
     }
 
     /** R1：当前会话 metadata（封面/时长来源）；无会话返回 null。 */
