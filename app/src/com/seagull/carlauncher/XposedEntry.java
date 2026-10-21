@@ -94,6 +94,32 @@ public class XposedEntry implements IXposedHookLoadPackage {
             "com.tencent.qqmusic",           // QQ 音乐
     };
 
+    /**
+     * 车机版应用通用名单（批次 CAR）—— 加一行包名即完成适配，零 per-app 代码。
+     * 命中即获得全套通用钩子：H1 分屏谎报 / H3+H5 PiP 挂载 / H4 配置吸收 /
+     * C0 画布内启动不跳走 / system_server 侧 PiP 标志强制。
+     * 方向劫持（H2）不在这里，见 CAR_LANDSCAPE —— 车机版方向声明五花八门
+     * （百度汽车版 3 个 portrait 登录页、网易云车机版 8 个 portrait 页面），
+     * 无脑全横会炸设置/登录流，必须按包单独决定。
+     */
+    private static final String[] CAR_PKGS = {
+            "com.tencent.qqmusiccar",        // QQ音乐车机版
+            "com.kugou.android.auto",        // 酷狗音乐车机版
+            "cn.kuwo.kwmusiccarsnp",         // 酷我音乐车机版
+            "com.baidu.naviauto",            // 百度地图汽车版
+    };
+
+    /**
+     * 需要整体强制横屏的车机版（音乐类：全部 activity 都不声明方向，
+     * 在手机竖屏上会整个竖过来）。导航/有 portrait 关键页面的不进这张表，
+     * 其主界面方向由各自 manifest 的 USER 声明 + 系统方向锁决定。
+     */
+    private static final String[] CAR_LANDSCAPE = {
+            "com.tencent.qqmusiccar",
+            "com.kugou.android.auto",
+            "cn.kuwo.kwmusiccarsnp",
+    };
+
     /** 方向开关（对齐 WFreeHook 的 prop 口径）：0 跟随 / 1 横屏(默认) / 2 竖屏。 */
     private static final String PROP_ENABLE = "persist.seagull.wf";
     private static final String PROP_ORIENTATION = "persist.seagull.wf.orientation";
@@ -155,16 +181,21 @@ public class XposedEntry implements IXposedHookLoadPackage {
         }
 
         if (!hit(pkg)) return;
-        log("已挂载 " + pkg + " → H1/H2/H3 窗口语义");
+        log("已挂载 " + pkg + " → 窗口语义 + PiP" + (hitLandscape(pkg) ? " + 横屏" : ""));
         try {
             hookMultiWindowPretence();
         } catch (Throwable t) {
             log("H1 失败: " + t);
         }
-        try {
-            hookOrientationOverride();
-        } catch (Throwable t) {
-            log("H2 失败: " + t);
+        // H2 方向劫持只对 hitLandscape 生效（TARGETS + CAR_LANDSCAPE）：
+        // 车机版里百度汽车版/网易云车机版有显式 portrait 的登录设置页，
+        // 强行横屏会把那些页面扯变形，让它们保持 manifest 自己的方向声明。
+        if (hitLandscape(pkg)) {
+            try {
+                hookOrientationOverride();
+            } catch (Throwable t) {
+                log("H2 失败: " + t);
+            }
         }
         try {
             hookPictureInPicture();
@@ -1161,8 +1192,23 @@ public class XposedEntry implements IXposedHookLoadPackage {
         XposedBridge.log(TAG + ": " + msg);
     }
 
+    /** 窗口语义 + PiP 的命中判定：TARGETS ∪ CAR_PKGS（PiP 标志钩子也用它）。 */
     private static boolean hit(String pkg) {
         for (String t : TARGETS) {
+            if (t.equals(pkg)) return true;
+        }
+        for (String t : CAR_PKGS) {
+            if (t.equals(pkg)) return true;
+        }
+        return false;
+    }
+
+    /** 方向劫持的命中判定：TARGETS ∪ CAR_LANDSCAPE（只横屏化确认安全的包）。 */
+    private static boolean hitLandscape(String pkg) {
+        for (String t : TARGETS) {
+            if (t.equals(pkg)) return true;
+        }
+        for (String t : CAR_LANDSCAPE) {
             if (t.equals(pkg)) return true;
         }
         return false;
