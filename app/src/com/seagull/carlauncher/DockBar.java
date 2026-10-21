@@ -142,8 +142,9 @@ public class DockBar extends LinearLayout {
         media.setBackground(Skin.round(BANNER_BG, 18));
         media.setPadding(dp(c, 5), dp(c, 2), dp(c, 3), dp(c, 2));
         media.setVisibility(GONE);
-        // 批次 S1：weight=1 占满中段剩余宽——横幅永不超宽（旧 fitPass「放不下整条藏」机制删除）
-        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(0, -2, 1f);
+        // 横幅长度收口（用户反馈「太长」）：wrap 内容宽 + 标题/歌词各自 maxWidth，
+        // 横幅只占歌名+图标+三键的实际宽度，不再 weight=1 占满 dock 中段整宽
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-2, -2);
         mlp.leftMargin = dp(c, 10);
         center.addView(media, mlp);
         media.setOnClickListener(v -> { if (onBannerClick != null) onBannerClick.run(); });
@@ -161,6 +162,7 @@ public class DockBar extends LinearLayout {
         mediaTitle.setSingleLine(true);
         mediaTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
         mediaTitle.setPadding(dp(c, 7), 0, dp(c, 4), 0);
+        mediaTitle.setMaxWidth(dp(c, 210));   // 横幅长度收口：歌名最长 210dp
         titleCol.addView(mediaTitle, new LinearLayout.LayoutParams(-2, -2));
         lyricLine = new TextView(c);
         lyricLine.setTextColor(0x99FFFFFF);
@@ -170,6 +172,7 @@ public class DockBar extends LinearLayout {
         lyricLine.setMarqueeRepeatLimit(-1);   // 无限滚动
         lyricLine.setHorizontallyScrolling(true);
         lyricLine.setPadding(dp(c, 7), 0, dp(c, 4), 0);
+        lyricLine.setMaxWidth(dp(c, 210));   // 横幅长度收口：歌词行走马灯窗口 210dp
         lyricLine.setVisibility(GONE);
         titleCol.addView(lyricLine, new LinearLayout.LayoutParams(-2, -2));
         progTrack = new FrameLayout(c);
@@ -182,7 +185,7 @@ public class DockBar extends LinearLayout {
         tclp.leftMargin = dp(c, 7);
         progTrack.setVisibility(GONE);
         titleCol.addView(progTrack, tclp);
-        LinearLayout.LayoutParams mclp = new LinearLayout.LayoutParams(0, -2, 1f);
+        LinearLayout.LayoutParams mclp = new LinearLayout.LayoutParams(-2, -2);
         mclp.leftMargin = dp(c, 2);
         media.addView(titleCol, mclp);
 
