@@ -106,16 +106,18 @@ public class MediaListenerService extends NotificationListenerService {
                 Log.w(TAG, "反射授权失败，回落 setting: " + t);
             }
             if (!granted) {
+                // 回落：root 直写 setting（su settings put）—— 用户要求走 root 级授权，
+                // app 自身写 secure setting 可能被拒，root 必成。
                 try {
-                    String cur = Settings.Secure.getString(
-                            ctx.getContentResolver(), "enabled_notification_listeners");
+                    String cur = Caps.exec("settings get secure enabled_notification_listeners");
                     String flat = cn.flattenToString();
-                    String nv = (cur == null || cur.isEmpty()) ? flat
-                            : (cur.contains(flat) ? cur : cur + ":" + flat);
-                    Settings.Secure.putString(
-                            ctx.getContentResolver(), "enabled_notification_listeners", nv);
-                    Log.i(TAG, "通知监听自授权回落 setting 写入完成");
-                } catch (Throwable ignore) {
+                    String nv = (cur == null || cur.trim().isEmpty()
+                            || "null".equals(cur.trim())) ? flat
+                            : (cur.contains(flat) ? cur.trim() : cur.trim() + ":" + flat);
+                    Caps.exec("settings put secure enabled_notification_listeners '" + nv + "'");
+                    Log.i(TAG, "通知监听自授权回落 root setting 写入完成: " + nv);
+                } catch (Throwable t) {
+                    Log.w(TAG, "root setting 回落也失败: " + t);
                 }
             }
         } catch (Throwable ignored) {
