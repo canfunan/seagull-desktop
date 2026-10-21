@@ -87,13 +87,24 @@ public class MediaListenerService extends NotificationListenerService {
     public static void ensureAccess(Context ctx) {
         if (ctx == null) return;
         ComponentName cn = new ComponentName(ctx, MediaListenerService.class);
+        String flat = cn.flattenToString();
         try {
             NotificationManager nm =
                     (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
             if (nm == null) return;
+            boolean granted = false;
             try {
-                if (nm.isNotificationListenerAccessGranted(cn)) return;   // 已授权
+                granted = nm.isNotificationListenerAccessGranted(cn);
             } catch (Throwable ignored) {
+            }
+            if (granted) {
+                // 复盘·回归修复：access 在 ≠ binding 活 —— pm install / 杀进程后绑定
+                // 会死，vivo 对死绑有限流（"a previous rebind attempt was made"，
+                // 退避期内系统拒不重绑）→ 监听连不上 → 横幅无数据、控制打空。
+                // disallow+allow 组合重置限流触发重绑（幂等，代价 2 条 root 命令）。
+                Caps.exec("cmd notification disallow_listener " + flat);
+                Caps.exec("cmd notification allow_listener " + flat);
+                return;
             }
             boolean granted = false;
             try {
@@ -112,7 +123,7 @@ public class MediaListenerService extends NotificationListenerService {
                 // 反射在 Android 14 隐藏 API 拦截下必然 NoSuchMethodException，
                 // 这条是实际生效路径；settings put 只是最后兜底（vivo 缓存不刷）。
                 try {
-                    String out = Caps.exec("cmd notification allow_listener " + cn.flattenToString());
+                    String out = Caps.exec("cmd notification allow_listener " + flat);
                     Log.i(TAG, "通知监听自授权回落 cmd allow_listener: " + out);
                 } catch (Throwable t) {
                     Log.w(TAG, "cmd allow_listener 失败，回落 setting: " + t);
