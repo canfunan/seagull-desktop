@@ -245,10 +245,8 @@ public class RootPanelActivity extends BaseActivity {
                     return new SysOps.R(true, out == null ? "（无输出）" : out);
                 })));
 
-        /* 虚拟屏画中画（批次 U 建，批次 W 按车联助手管线复刻 + 推荐应用点选）：
-         * 车联助手模型 = 在它界面里点推荐应用即开画中画。这里同款：
-         * 推荐应用区点谁就画谁，没点选则按 装没装 自动探测（手机版高德优先 ——
-         * 批次 W 教训：写死车机版，没装 amapauto 的设备每次必败）。 */
+        /* 虚拟屏画中画（批次 W3 = 车联助手模型：画中画嵌在桌面 Activity 里，
+         * 不需要悬浮窗授权；点推荐应用 → 回桌面即出现）。 */
         col.addView(section("虚拟屏画中画"));
         col.addView(btn("启动画中画（自动选应用）", () -> op("虚拟屏画中画", () -> {
             VirtualPipController.setTarget(null);
@@ -313,17 +311,12 @@ public class RootPanelActivity extends BaseActivity {
         }).start();
     }
 
-    /** 拉起画中画悬浮窗（目标应用已由 setTarget 定好，自动选时传 null）。
-     *  已在跑的旧服务先停掉 —— 否则 VD 还挂在旧目标上，换推荐应用不生效。 */
+    /** 开画中画（目标应用已由 setTarget 定好）：置开关后回桌面，
+     *  HomeActivity.onResume 会把 VdPipView 挂到桌面最上层（车联同款流程）。 */
     private SysOps.R startPip() {
-        try {
-            stopService(new android.content.Intent(this, PipOverlayService.class));
-            startForegroundService(new android.content.Intent(this, PipOverlayService.class));
-            return new SysOps.R(true, "服务已拉起：看悬浮窗顶栏状态行；"
-                    + "SurfaceView 区手势直达目标应用，右下角手柄自由拉伸。");
-        } catch (Throwable ex) {
-            return new SysOps.R(false, "拉起失败: " + ex);
-        }
+        VirtualPipController.setEnabled(true);
+        finish();
+        return new SysOps.R(true, "已回桌面 —— 画中画嵌在桌面里，状态在画中画顶栏。");
     }
 
     private void append(String s) {

@@ -263,11 +263,8 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
-        <!-- 批次 U 虚拟屏画中画：自建 VD 承载高德，悬浮窗呈现，root input 转发。
-             不依赖 LSPosed（见 .monkeycode/specs/virtual-display-pip/）。 -->
-        <service
-            android:name=".PipOverlayService"
-            android:exported="false" />
+        <!-- 批次 W3 起画中画改为桌面内嵌视图（VdPipView，车联同款），
+             不再需要悬浮窗服务 —— PipOverlayService 已删除。 -->
 
         <!--
             APK 自更新：安装 intent 的 Uri 走 SeagullFileProvider（见同名 java，零依赖

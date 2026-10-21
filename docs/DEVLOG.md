@@ -2726,3 +2726,28 @@ Manifest/杂项：
 - 悬浮窗状态行带目标包名：`VD#N com.autonavi.minimap · 部署中…`。
 - `xposed_scope` 补车联 3.0.0 同款条目（miui.carlink / baidu.carlife.xiaomi /
   samsung.android.carlink / luna.music），LSPosed 推荐作用域与其对齐。
+
+## 批次 W3 —— 像素级复刻补完：画中画从「悬浮窗服务」改为「桌面内嵌视图」
+
+用户怒评「像素级复刻你咋就听不懂」点醒最后一块拼图：**车联助手的画中画是
+自家 Activity 里的一个视图（b1/c PipUI / PIP1 布局），不是系统悬浮窗**。
+W2 的悬浮窗服务在三个关键面上全是车联的反面：
+
+| | 车联助手 | W2 悬浮窗服务（已删） |
+|---|---|---|
+| 承载 | Activity 内 SurfaceView（PIP1：横屏 60% 宽全高/竖屏全屏） | TYPE_APPLICATION_OVERLAY 独立窗口 |
+| 悬浮窗授权 | **不需要** | 需要 SYSTEM_ALERT_WINDOW，没授权 addView 直接抛异常 → 用户设备上一次都没出现过 |
+| 部署上下文 | 前台 Activity（无 BAL 限制） | 后台 Service（Android 12+ 起 Activity 可能被静默拦） |
+| 自愈 | Activity.onResume 天然 | 服务永远在前台， onResume 自愈挂桌面侧，链路绕 |
+
+**改动**：
+- 新增 `VdPipView`：PIP1 尺寸逻辑 + 顶栏（返回/60%/拉伸/状态/关）+ SurfaceView
+  + 拉伸手柄 + input -d 触摸转发，全部照抄车联 b1/c；boot 管线复用
+  VirtualPipController（W 批次锚点+move-task 链不变）。
+- `HomeActivity.onResume → syncVdPip()`：开关开着就挂到 android.R.id.content
+  最上层（skin 重建后 getParent()==null 自动重挂）；关闭即摘。
+- `RootPanel` 推荐应用点选 → setTarget + setEnabled(true) + finish()，
+  回桌面即出现（车联同款流程）。
+- 删除 `PipOverlayService`（java + manifest 条目）—— 悬浮窗方案退役。
+
+**编译**：javac 全量 0 error。

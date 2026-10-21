@@ -47,6 +47,7 @@ public final class VirtualPipController {
     };
 
     private static String sTargetPkg;   // 用户在推荐应用里点选的（null = 自动探测）
+    private static boolean sEnabled;    // 画中画开关（桌面里嵌不嵌 VdPipView）
 
     /** 车联助手锚点启动 flags 原值 411041792 = NEW_TASK | NEW_DOCUMENT | EXCLUDE_FROM_RECENTS。 */
     private static final int ANCHOR_FLAGS = 411041792;
@@ -78,6 +79,11 @@ public final class VirtualPipController {
 
     /** 推荐应用点选（RootPanel 用）。传 null = 回到自动探测。 */
     public static synchronized void setTarget(String pkg) { sTargetPkg = pkg; }
+
+    /** 画中画开关：桌面按它决定嵌不嵌 VdPipView（车联同款：pip 是 Activity 内视图）。 */
+    public static synchronized boolean isEnabled() { return sEnabled; }
+
+    public static synchronized void setEnabled(boolean e) { sEnabled = e; }
 
     /**
      * 目标应用：用户点选 > 手机版高德 > 车机版高德；都没装返回 null。

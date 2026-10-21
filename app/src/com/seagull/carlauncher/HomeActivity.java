@@ -69,6 +69,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     private IslandView island;
     private NavCard navCard;
     private TextView pipBox;
+    private VdPipView vdPip;   // 批次 W3：桌面内嵌画中画（车联同款，Activity 内视图）
     private String lastSkin = "";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
@@ -134,6 +135,10 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     @Override protected void onResume() {
         super.onResume();
+        // 批次 W3：画中画嵌在桌面里（车联同款 —— Activity 内视图，非悬浮窗）。
+        // root 面板点推荐应用后回桌面，这里把 VdPipView 挂到最上层并开始部署；
+        // 从前台 Activity 起锚点无 BAL 限制，也不需要悬浮窗授权。
+        syncVdPip();
         // 批次 W：VdPip 自愈（复刻车联 MainActivity.onResume → c.h()）——
         // 任务被系统拉回主屏后，一回桌面就重跑锚点+move-task 搬回画布（幂等）
         VirtualPipController.redeploy(this);
@@ -263,6 +268,22 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     private boolean dockCollapsed;
 
     /* ------------------------- UI 构建 ------------------------- */
+
+    /** 画中画开关 ↔ VdPipView 挂载同步。skin 重建后 getParent()==null 会重新挂。 */
+    private void syncVdPip() {
+        boolean want = VirtualPipController.isEnabled();
+        if (want && (vdPip == null || vdPip.getParent() == null)) {
+            android.view.ViewGroup content = findViewById(android.R.id.content);
+            if (content != null) {
+                vdPip = new VdPipView(this);
+                content.addView(vdPip, vdPip.pipLayout());
+            }
+        } else if (!want && vdPip != null) {
+            android.view.ViewGroup p = (android.view.ViewGroup) vdPip.getParent();
+            if (p != null) p.removeView(vdPip);
+            vdPip = null;
+        }
+    }
 
     private View buildUi() {
         FrameLayout root = new FrameLayout(this);
