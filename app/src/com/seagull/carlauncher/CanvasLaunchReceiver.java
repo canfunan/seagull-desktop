@@ -57,10 +57,12 @@ public class CanvasLaunchReceiver extends BroadcastReceiver {
         String uri = intent.getStringExtra("uri");
         String out;
         if (uri != null && !uri.isEmpty()) {
-            // 安全（复盘 2）：URI 必须携带已校验的 component —— 本接收器 exported，
-            // 恶意 app 伪造广播就能借 root 之手启动任意 Activity。module 同帧发
-            // component extra + URI（URI 的 component 参数 = 同一组件），两边对不上拒绝。
-            if (!uri.contains("component=" + comp)) {
+            // 安全：URI 必须携带已校验的 component —— 本接收器 exported，恶意 app
+            // 伪造广播就能借 root 之手启动任意 Activity。module 同帧发 component
+            // extra + URI，规范化比较两边组件（toUri 写的是简写形式 pkg/.Class，
+            // 与 module 的全称 pkg/full.Class 字符串不同但语义同一 —— raw 匹配
+            // 会把改道全部拒掉，splash 死循环，实测踩过）。
+            if (!sameComponent(uri, comp)) {
                 Log.w(TAG, "URI 与校验组件不符，拒绝: " + uri);
                 return;
             }
@@ -78,5 +80,28 @@ public class CanvasLaunchReceiver extends BroadcastReceiver {
         Log.i(TAG, "root 直启(组件)到画布 d" + displayId + ": " + comp + " ok="
                 + (out != null && !out.toLowerCase().contains("exception"))
                 + (out != null ? " | " + out.trim() : ""));
+    }
+
+    /** URI 的组件与已校验组件是否同一（规范化简写/全称后比较）。 */
+    private static boolean sameComponent(String uri, String comp) {
+        try {
+            Intent parsed = Intent.parseUri(uri, Intent.URI_INTENT_SCHEME);
+            ComponentName uriCn = parsed == null ? null : parsed.getComponent();
+            ComponentName want = ComponentName.unflattenFromString(comp);
+            if (uriCn == null || want == null) return false;
+            if (!uriCn.getPackageName().equals(want.getPackageName())) return false;
+            String a = normalizeClass(uriCn.getPackageName(), uriCn.getClassName());
+            String b = normalizeClass(want.getPackageName(), want.getClassName());
+            return a.equals(b);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** ".Class" 简写 → 包名补全（"pkg/.a.b.C" 与 "pkg/pkg.a.b.C" 归一）。 */
+    private static String normalizeClass(String pkg, String cls) {
+        if (cls == null) return "";
+        if (cls.startsWith(".") && pkg != null) return pkg + cls;
+        return cls;
     }
 }
