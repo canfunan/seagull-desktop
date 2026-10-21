@@ -57,7 +57,14 @@ public class CanvasLaunchReceiver extends BroadcastReceiver {
         String uri = intent.getStringExtra("uri");
         String out;
         if (uri != null && !uri.isEmpty()) {
-            // shell 单引号包裹 URI（含 ; # = 空格）；URI 里的单引号先转义掉
+            // 安全（复盘 2）：URI 必须携带已校验的 component —— 本接收器 exported，
+            // 恶意 app 伪造广播就能借 root 之手启动任意 Activity。module 同帧发
+            // component extra + URI（URI 的 component 参数 = 同一组件），两边对不上拒绝。
+            if (!uri.contains("component=" + comp)) {
+                Log.w(TAG, "URI 与校验组件不符，拒绝: " + uri);
+                return;
+            }
+            // shell 单引号包裹 URI（含 ; # = 空格）；URI 里的单引号先剥掉
             // （toUri 的值不做 URL 编码，字符串 extras 带撇号会破引号 —— 极少数，
             // 丢一个字符比整条命令崩掉好）
             String safe = uri.replace("'", "");
