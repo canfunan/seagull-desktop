@@ -387,7 +387,23 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
     private void refreshMini() {
         if (dock == null) return;
         MediaListenerService.refresh(this);
-        dock.bindMedia(MediaListenerService.snap());
+        MediaListenerService.Snap s = MediaListenerService.snap();
+        // 挂载哪个播放器就控制哪个（批次 MB）：优先画布里槽位上的音乐包，
+        // 没有（音乐 app 没挂画布/从桌面图标开的）→ 当前会话兜底
+        String target = mountedMusicPkg();
+        dock.bindMedia(s, target);
+    }
+
+    /** 画布槽位（1/2）上正挂着的音乐包；没有返回 null。 */
+    private String mountedMusicPkg() {
+        for (int slot : new int[]{1, 2}) {
+            try {
+                String p = PipBoard.loadPkg(this, slot);
+                if (p != null && MediaListenerService.isMusicPkg(p)) return p;
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
     }
 
     /**
