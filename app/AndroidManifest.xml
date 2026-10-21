@@ -158,6 +158,17 @@
             android:label="@string/root_panel_title"
             android:configChanges="keyboardHidden|orientation|screenSize" />
 
+        <!-- 画中画锚点（批次 W，复刻车联助手 PipAnchorActivity）：独立 taskAffinity
+             保证在私有虚拟屏上独立成 root task；excludeFromRecents 不进最近任务。
+             落屏主路 = 先把锚点放上屏（属主启动必然成功），再 root am stack move-task
+             把目标应用搬进同一 root task，绕开 Android 14 直启 display 限制。 -->
+        <activity
+            android:name=".VdPipAnchorActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false"
+            android:taskAffinity="com.seagull.carlauncher.pipanchor"
+            android:excludeFromRecents="true" />
+
         <activity
             android:name=".WindowTestActivity"
             android:exported="false"

@@ -134,6 +134,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     @Override protected void onResume() {
         super.onResume();
+        // 批次 W：VdPip 自愈（复刻车联 MainActivity.onResume → c.h()）——
+        // 任务被系统拉回主屏后，一回桌面就重跑锚点+move-task 搬回画布（幂等）
+        VirtualPipController.redeploy(this);
         // 从设置页 / 壁纸选择回来：配置变了就整屏重画一次
         model.load();
         String sig = skinSignature();

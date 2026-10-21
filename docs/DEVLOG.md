@@ -2675,3 +2675,30 @@ Manifest/杂项：
 - 根因②：守护进程建的屏没有 VirtualDisplay 对象，setSurface() 根本不存在 —— Surface 必须走 PrivClient.surface(displayId, surface)（Parcel+Base64 行协议，RootMain SURFACE 事务）。
 - 修法：create() 先走 PrivClient.create（失败降回本地 PUBLIC 屏，保留批次 U 行为）；新增 attachSurface() 按建屏路径自动分流（root 屏过线协议、放后台线程防 ANR；本地屏直接 setSurface）；launchAmap() root 屏优先 PrivClient.launch（daemon setLaunchDisplayId，与 RootOps.launchOnDisplay 同款），退回 am start --display；release() 同步分流。PipOverlayService 三个 surface 回调全部改走 attachSurface，状态行显式标注 root TRUSTED 屏 / 本地屏，用户一眼看出走了哪条路。
 - 批次 V 续（黑屏二分）：悬浮窗可见但画布黑 → 剩两种可能（任务没落屏 / 落屏但 Surface 断）。修三处 + 把判别做进状态行：① am start 输出校验，Error/Exception/Permission Denial 不再当成功；② attachSurface 记录挂接结果（此前静默失败）；③ SurfaceView setFixedSize 为 VD 分辨率（清晰 + resize 不再重建 surface）。新增 probeContent()：root `screencap -d <id>` 量 VD 截屏体积（纯黑几 KB，有内容 >50KB），2.5s/7s 两次探测，结论直接写状态行 —— 屏黑=落屏问题，屏有内容但窗口黑=Surface 链路问题。
+
+## 批次 W —— 一比一复刻车联助手 3.0.0 的 VD 画中画管线
+
+**依据**：`docs/CARWITH-ANALYSIS.md`（全量反编译报告）。黑屏三根因逐一对应复刻：
+
+1. **落屏：锚点 + am stack move-task**（车联 c1/h.d，主路）
+   - 新增 `VdPipAnchorActivity`：独立 taskAffinity(`com.seagull.carlauncher.pipanchor`) +
+     excludeFromRecents + 透明 + setFinishOnTouchOutside(false)，复刻 PipAnchorActivity。
+     先以属主身份把锚点放上私有屏（必然成功）→ 屏上有 root task →
+     root `am stack move-task $TASK $ROOT true` 把高德搬进去。
+   - shell 脚本**逐字**取自车联 smali（仅类名替换）；其 ROOT 解析只认旧格式 `^Stack id=`，
+     Android 12+ 是 `rootTask id=`，失败时补丁脚本再试一次（兼容两种格式）。
+   - 车联的降级链原样复刻：直启（flags 269500416 + setLaunchDisplayId）→
+     root `am start --display -f 0x10104000`；再留 daemon 直启做第四层保险。
+   - **不再 force-stop**：搬活任务（车联原文如此）。
+2. **Surface：同进程直调**（车联 b1/b）—— `createVirtualDisplay(..., surface, flags=0, ...)`
+   建屏直传，surfaceChanged → `vd.resize(视图宽高)` + `setSurface`，surfaceDestroyed →
+   只摘 surface。批次 V 的 root 守护进程建屏 + 跨进程行协议整条退场（daemon 只剩第四层保险）。
+3. **自愈：onResume 重部署**（车联 MainActivity.onResume → c.h()）——
+   `HomeActivity.onResume → VirtualPipController.redeploy()`，幂等，任务被拉回主屏后
+   回桌面即搬回。
+4. **VD 尺寸 = SurfaceView 视图尺寸**：resize 跟随窗口拉伸（车联无黑边、触摸零换算的根本），
+   触摸坐标映射自然退化为 1:1；探针（screencap 二分）保留。
+
+**编译**：javac 全量 0 error（R.java 借用 gen-20261019 产物）。
+**验收**：部署后状态行应显示「锚点+move-task · 探测中… → 屏有内容(NKB)」；
+高德被拉回主屏后回桌面一次即自动搬回。

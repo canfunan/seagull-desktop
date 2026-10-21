@@ -1,48 +1,51 @@
 package com.seagull.carlauncher;
 
+import android.app.ActivityOptions;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
-import android.util.DisplayMetrics;
 import android.util.Log;
-import android.view.Display;
 import android.view.Surface;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
 /**
- * 虚拟屏画中画（批次 U → 批次 V 修正）。
+ * 虚拟屏画中画（批次 W —— 一比一复刻车联助手 3.0.0 的 VD 画中画管线）。
  *
- * 批次 V 修正（真机「还是不行」的两处根因）：
- *  ① 建屏主体。批次 U 在【应用进程内】用 PUBLIC 位建屏 —— 普通 uid 建的屏不受信，
- *     目标应用上不去（ActivityStarter 拒绝非属主上非信任屏）。本仓库已验证的路是
- *     【root 守护进程 uid 0】建 TRUSTED+PUBLIC 屏（RootMain CREATE，MirrorSlot 在用），
- *     这里改为：先走 PrivClient.create，失败再降回本地建屏（保留批次 U 行为）。
- *  ② Surface 挂接。守护进程建的屏没有 VirtualDisplay 对象可调 setSurface ——
- *     必须 PrivClient.surface(displayId, surface)（Parcel+Base64 行协议）。
- *     本地屏则照旧 vd.setSurface()。attachSurface() 按建屏路径自动分流。
+ * 对应关系（反编译源见 docs/CARWITH-ANALYSIS.md）：
+ *   车联 b1/b.surfaceCreated   → create()：应用进程内 flags=0 私有屏，surface 建屏时直传
+ *                                （同进程零协议 —— 批次 V 的跨进程行协议整条退场）
+ *   车联 b1/b.surfaceChanged   → surfaceChanged()：vd.resize(视图宽高) —— 屏=窗口，
+ *                                永不黑边、触摸零换算（车联无黑边的根本原因）
+ *   车联 b1/b.surfaceDestroyed → surfaceDestroyed()：只摘 surface 不拆屏
+ *   车联 c1/h.d                → anchorAndMove()：锚点占 root task + root am stack move-task
+ *   车联 c1/h.b                → directStart() / amStartDisplay()
+ *   车联 MainActivity.onResume → redeploy()：回桌面重跑锚点+搬任务（被拉回主屏的自愈）
+ *   车联 b1/d + MainActivity   → 触摸/返回仍走 input -d（PipOverlayService.inject 不变）
  *
- * 分辨率取「非默认屏里最大那块」的物理分辨率（车机副屏），取不到回退 1280x720。
- * 拉伸发生在悬浮窗视图层，VD 分辨率全程不变，保证清晰度与坐标映射稳定。
+ * 黑屏三根因的对应修法：
+ *   ① 落屏改「锚点+move-task」，绕开 Android 14 对第三方应用直启 display 的静默重定向；
+ *   ② Surface 同进程直调，不再跨进程；
+ *   ③ VD 尺寸跟随窗口 resize，不再固定 1280x720。
  */
 public final class VirtualPipController {
 
     private static final String TAG = "SeagullVdPip";
     public static final String DEF_PKG = "com.autonavi.amapauto";
 
-    private static VirtualDisplay sVd;      // 本地建屏路径才有值
-    private static int sDisplayId = -1;     // 两条路径统一用 displayId
+    /** 车联助手锚点启动 flags 原值 411041792 = NEW_TASK | NEW_DOCUMENT | EXCLUDE_FROM_RECENTS。 */
+    private static final int ANCHOR_FLAGS = 411041792;
+    /** 车联助手 h.b 的 am start flags：0x10104000 = NEW_TASK | RESET_TASK_IF_NEEDED | TASK_ON_HOME。 */
+    private static final int AM_START_FLAGS = 0x10104000;
+
+    private static VirtualDisplay sVd;
+    private static int sDisplayId = -1;
     private static int sW;
     private static int sH;
+    private static int sDpi;
     private static String sPkg;
-    private static boolean sRooted;         // true = 守护进程 TRUSTED 屏
-
-    private static final ExecutorService IO = Executors.newSingleThreadExecutor();
-    private static volatile String sAttachErr;   // 最近一次 Surface 挂接结果（null=成功）
+    private static String sDeployPath = "未部署";
 
     private VirtualPipController() {}
 
@@ -54,45 +57,35 @@ public final class VirtualPipController {
 
     public static synchronized String pkg() { return sPkg; }
 
-    /** true = 走 root 守护进程 TRUSTED 屏（可用路）；false = 本地屏（部分 ROM 上不去应用）。 */
-    public static synchronized boolean isRootDisplay() { return sRooted; }
+    public static synchronized String deployPath() { return sDeployPath; }
 
-    /** 创建（幂等）。返回 displayId，-1 = 失败，调用方负责提示。 */
-    public static synchronized int create(Context ctx, String pkg) {
-        if (sDisplayId >= 0) return sDisplayId;
-        int[] wh = pickSize(ctx);
+    /** 桌面 onResume 自愈判据：屏活着才值得重搬。 */
+    public static synchronized boolean isActive() { return sDisplayId >= 0; }
 
-        // ① 首选：root 守护进程建 TRUSTED+PUBLIC 屏（与 MirrorSlot 同一条已验证路）
-        try {
-            PrivClient.init(ctx.getApplicationContext());
-            PrivClient.Created c = PrivClient.create(wh[0], wh[1], wh[2]);
-            if (c != null && c.displayId >= 0) {
-                sDisplayId = c.displayId;
-                sW = wh[0];
-                sH = wh[1];
-                sPkg = pkg;
-                sRooted = true;
-                Log.i(TAG, "root 屏 VD#" + sDisplayId + " " + sW + "x" + sH
-                        + " trusted=" + c.trusted + " for " + pkg);
-                return sDisplayId;
-            }
-        } catch (Throwable t) {
-            Log.w(TAG, "root 建屏失败，降回本地", t);
-        }
+    /* ============ 建屏（复刻 b1/b.surfaceCreated） ============ */
 
-        // ② 降级：本地 PUBLIC 屏（保留批次 U 行为；部分 ROM 可用）
+    /**
+     * 应用进程内建 flags=0 私有屏，surface 建屏时直接传入（车联原文如此）。
+     * w/h = SurfaceView 视图尺寸，dpi = 主屏 densityDpi。
+     * 返回 displayId，-1 = 失败。
+     */
+    public static synchronized int create(Context ctx, String pkg, Surface sf,
+                                          int w, int h, int dpi) {
+        release();
+        if (sf == null || w <= 0 || h <= 0) return -1;
         try {
             DisplayManager dm = (DisplayManager) ctx.getSystemService(Context.DISPLAY_SERVICE);
-            VirtualDisplay vd = dm.createVirtualDisplay("seagull_pip", wh[0], wh[1], wh[2],
-                    null, DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC);
+            VirtualDisplay vd = dm.createVirtualDisplay("seagull-pip", w, h, dpi, sf, 0, null, null);
             if (vd == null) return -1;
             sVd = vd;
             sDisplayId = vd.getDisplay().getDisplayId();
-            sW = wh[0];
-            sH = wh[1];
+            sW = w;
+            sH = h;
+            sDpi = dpi;
             sPkg = pkg;
-            sRooted = false;
-            Log.i(TAG, "本地屏 VD#" + sDisplayId + " " + sW + "x" + sH + " for " + pkg);
+            sDeployPath = "未部署";
+            Log.i(TAG, "VD#" + sDisplayId + " " + w + "x" + h + "@" + dpi
+                    + " 私有屏 created for " + pkg);
             return sDisplayId;
         } catch (Throwable t) {
             Log.w(TAG, "createVirtualDisplay 失败", t);
@@ -100,92 +93,157 @@ public final class VirtualPipController {
         }
     }
 
-    /** 最近一次 Surface 挂接错误（null=成功）。黑屏二分用：屏内容有 ↔ Surface 没接上。 */
-    public static synchronized String attachErr() { return sAttachErr; }
-
-    /**
-     * Surface 挂接（两条路径自动分流）。
-     * root 屏走 PrivClient.surface —— 会过线协议，必须放后台线程；结果记入 sAttachErr，
-     * 静默失败是黑屏排查的大坑（批次 V）。
-     * 本地屏直接 setSurface，主线程安全。
-     */
-    public static synchronized void attachSurface(final Surface s) {
-        if (sDisplayId < 0) return;
-        if (sRooted) {
-            IO.execute(() -> {
-                try {
-                    boolean ok = PrivClient.surface(sDisplayId, s);
-                    sAttachErr = ok ? null : "Surface 挂接被守护进程拒绝";
-                    Log.i(TAG, "surface attach ok=" + ok + " s=" + (s != null));
-                } catch (Throwable t) {
-                    sAttachErr = "Surface 挂接异常: " + t;
-                    Log.w(TAG, "surface attach 异常", t);
-                }
-            });
-        } else if (sVd != null) {
-            try {
-                sVd.setSurface(s);
-                sAttachErr = null;
-            } catch (Throwable t) {
-                sAttachErr = "setSurface 失败: " + t;
-                Log.w(TAG, "setSurface 失败", t);
-            }
+    /** 复刻 b1/b.surfaceChanged：窗口尺寸变了屏直接跟着变。 */
+    public static synchronized void surfaceChanged(Surface sf, int w, int h) {
+        if (sVd == null || sf == null || w <= 0 || h <= 0) return;
+        try {
+            sVd.resize(w, h, sDpi);
+            sVd.setSurface(sf);
+            sW = w;
+            sH = h;
+        } catch (Throwable t) {
+            Log.w(TAG, "resize/setSurface 失败", t);
         }
     }
 
+    /** 复刻 b1/b.surfaceDestroyed：只摘 surface，屏保留（车联原文如此）。 */
+    public static synchronized void surfaceDestroyed() {
+        if (sVd == null) return;
+        try {
+            sVd.setSurface(null);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /* ============ 落屏（复刻 c1/h.d → h.e → h.b） ============ */
+
     /**
-     * 把高德拉进虚拟屏。先 force-stop 保证落屏（活着的进程不会自己换屏），
-     * 再启动：root 屏优先 PrivClient.launch（daemon setLaunchDisplayId，
-     * MirrorSlot 同款），失败退回 am start --display。
-     * launchable 组件名由 PackageManager 解析，
-     * 车机版没有 LAUNCHER 类目时取清单里第一个 activity 兜底。
+     * 落屏链（车联 deploy 顺序）：锚点+move-task → 直启 → root am start → daemon 直启。
+     * 返回走通的那条路名；全败返回错误串。
      */
-    public static synchronized String launchAmap(Context ctx) {
-        if (sDisplayId < 0) return "虚拟屏未创建";
-        String pkg = sPkg != null ? sPkg : DEF_PKG;
+    public static String deploy(Context ctx) {
+        final String pkg;
+        final int id;
+        synchronized (VirtualPipController.class) {
+            pkg = sPkg;
+            id = sDisplayId;
+        }
+        if (id < 0 || pkg == null) return "虚拟屏未创建";
         String comp = resolveComponent(ctx, pkg);
         if (comp == null) return "解析不到 " + pkg + " 的入口 Activity";
-
-        Caps.exec("am force-stop " + pkg + " 2>&1");
-
-        if (sRooted) {
-            try {
-                if (PrivClient.launch(sDisplayId, comp, RootOps.LAUNCH_FLAGS_INT)) {
-                    Log.i(TAG, "daemon launch VD#" + sDisplayId + " -> " + comp);
-                    return null;
-                }
-                Log.w(TAG, "daemon launch 失败，退回 am start");
-            } catch (Throwable t) {
-                Log.w(TAG, "daemon launch 异常", t);
-            }
+        if (anchorAndMove(ctx, pkg)) return "锚点+move-task";
+        if (directStart(ctx, pkg)) return "直启";
+        if (amStartDisplay(id, comp)) return "root am start";
+        // 车联没有的最后一层保险：daemon setLaunchDisplayId（批次 V 路径， MirrorSlot 同款）
+        try {
+            if (PrivClient.launch(id, comp, RootOps.LAUNCH_FLAGS_INT)) return "daemon直启";
+        } catch (Throwable t) {
+            Log.w(TAG, "daemon launch 异常", t);
         }
-
-        String out = Caps.exec("am start --display " + sDisplayId + " -n " + comp + " 2>&1");
-        if (out == null) return "am start 失败（root 通道超时）";
-        Log.i(TAG, "am start out=" + out.replace('\n', ' '));
-        String bad = amStartError(out);
-        return bad != null ? "am start: " + bad : null;
-    }
-
-    /** am start 输出校验：不再把 "Error" 当成功（黑屏排查时这种假成功最坑）。 */
-    private static String amStartError(String out) {
-        String[] lines = out.split("\n");
-        for (String l : lines) {
-            String t = l.trim();
-            String low = t.toLowerCase(java.util.Locale.ROOT);
-            if (low.startsWith("error") || low.contains("exception")
-                    || low.contains("permission denial") || low.contains("not started")) {
-                return t.length() > 120 ? t.substring(0, 120) : t;
-            }
-        }
-        return null;
+        return "落屏失败（四条路全败）";
     }
 
     /**
-     * 黑屏二分探针：对 VD 直接 root 截屏，量 PNG 体积。
-     * 黑屏图高度可压缩（1280x720 纯黑约几 KB），有真实内容在 50KB 以上。
-     * 返回一句话结论，直接进悬浮窗状态行 —— 不用抓日志就能分清
-     * 「任务没落屏」（屏黑）还是「落了屏但 Surface 没接上」（屏有内容、窗口黑）。
+     * 复刻 c1/h.d，两步：
+     * ① 自家锚点 Activity（独立 taskAffinity → 私有屏上必然成 root task）；
+     * ② root 一行流：am stack list 找目标任务 taskId + 锚点所在 root task id → move-task。
+     *
+     * 脚本逐字取自车联助手 smali（仅 PipAnchorActivity → VdPipAnchorActivity）；
+     * 其 ROOT 解析只认旧格式「^Stack id=」，Android 12+ 是「rootTask id=」，
+     * 失败时用补丁版脚本再试一次（兼容两种格式 + 宽松 id 提取）。
+     * 逐字保留「不杀目标应用」：搬的是活任务（车联原文如此）。
+     */
+    private static boolean anchorAndMove(Context ctx, String pkg) {
+        try {
+            Intent i = new Intent(ctx, VdPipAnchorActivity.class);
+            i.setFlags(ANCHOR_FLAGS);
+            ActivityOptions o = ActivityOptions.makeBasic();
+            o.setLaunchDisplayId(sDisplayId);
+            ctx.startActivity(i, o.toBundle());
+        } catch (Throwable t) {
+            Log.w(TAG, "锚点创建失败", t);
+        }
+        int code = suExec(legacyScript(pkg));
+        if (code == 0) return true;
+        Log.w(TAG, "车联原版脚本 exit=" + code + "，试新格式补丁");
+        return suExec(modernScript(pkg)) == 0;
+    }
+
+    /** 车联助手 h.d 脚本逐字（变量名不变；DID 车联里也是死变量，略）。 */
+    private static String legacyScript(String pkg) {
+        return "sleep 0.15; OUT=\"$(am stack list 2>/dev/null)\"; PKG='" + pkg + "'; "
+                + "TASK=\"$(printf '%s\\n' \"$OUT\" | awk -v p=\"$PKG\" 'index($0,p) && /taskId=/"
+                + "{x=$0; sub(/.*taskId=/,\"\",x); sub(/:.*/,\"\",x); print x; exit}')\"; "
+                + "ROOT=\"$(printf '%s\\n' \"$OUT\" | awk '/^Stack id=/{s=$0; sub(/^Stack id=/,\"\",s); "
+                + "sub(/ .*/,\"\",s)} /VdPipAnchorActivity/{print s; exit}')\"; "
+                + "if [ -n \"$TASK\" ] && [ -n \"$ROOT\" ]; then "
+                + "am stack move-task \"$TASK\" \"$ROOT\" true >/dev/null 2>&1; else exit 41; fi";
+    }
+
+    /** Android 12+ 补丁：rootTask id= 兼容 + taskId/task id 都能提取。 */
+    private static String modernScript(String pkg) {
+        return "sleep 0.15; OUT=\"$(am stack list 2>/dev/null)\"; PKG='" + pkg + "'; "
+                + "TASK=\"$(printf '%s\\n' \"$OUT\" | awk -v p=\"$PKG\" 'index($0,p) && "
+                + "match($0,/id=[0-9]+/){print substr($0,RSTART+3,RLENGTH-3); exit}')\"; "
+                + "ROOT=\"$(printf '%s\\n' \"$OUT\" | awk '/(Stack|rootTask) id=/{s=$0; "
+                + "sub(/.*rootTask id=/,\"\",s); sub(/.*Stack id=/,\"\",s); sub(/ .*/,\"\",s)} "
+                + "/VdPipAnchorActivity/{print s; exit}')\"; "
+                + "if [ -n \"$TASK\" ] && [ -n \"$ROOT\" ]; then "
+                + "am stack move-task \"$TASK\" \"$ROOT\" true >/dev/null 2>&1; else exit 41; fi";
+    }
+
+    /** 复刻 c1/h.b 第一步：getLaunchIntentForPackage + setLaunchDisplayId 直启。 */
+    private static boolean directStart(Context ctx, String pkg) {
+        try {
+            Intent i = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
+            if (i == null) return false;
+            i.setFlags(269500416);   // NEW_TASK | RESET_TASK_IF_NEEDED（车联原值）
+            ActivityOptions o = ActivityOptions.makeBasic();
+            o.setLaunchDisplayId(sDisplayId);
+            ctx.startActivity(i, o.toBundle());
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "直启失败（Android API denied）", t);
+            return false;
+        }
+    }
+
+    /** 复刻 c1/h.b 第二步：root am start --display（车联 flags 原值）。 */
+    private static boolean amStartDisplay(int id, String comp) {
+        return suExec("am start --display " + id + " -f " + AM_START_FLAGS + " -n " + comp) == 0;
+    }
+
+    /** 车联同款：Runtime.exec 数组形式 su -c，waitFor 拿退出码（不经 sh 引号转义地狱）。 */
+    private static int suExec(String script) {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", script});
+            return p.waitFor();
+        } catch (Throwable t) {
+            Log.w(TAG, "su 执行失败", t);
+            return -1;
+        }
+    }
+
+    /* ============ 自愈（复刻车联 MainActivity.onResume → c.h()） ============ */
+
+    /**
+     * 桌面 onResume 调用：任务被系统拉回主屏后，回桌面即重跑锚点+move-task 搬回。
+     * 幂等（搬成功的任务 id 不变）；屏没建时直接空转。
+     */
+    public static void redeploy(Context ctx) {
+        if (!isActive()) return;
+        final Context app = ctx.getApplicationContext();
+        new Thread(() -> {
+            String r = deploy(app);
+            Log.i(TAG, "redeploy → " + r);
+        }, "seagull-vd-redeploy").start();
+    }
+
+    /* ============ 黑屏二分探针（批次 V，保留） ============ */
+
+    /**
+     * 对 VD 直接 root 截屏，量 PNG 体积：纯黑几 KB，有真实内容 >50KB。
+     * 结论直接进悬浮窗状态行 —— 分清「任务没落屏」还是「Surface 没接上」。
      */
     public static String probeContent() {
         int id;
@@ -228,41 +286,9 @@ public final class VirtualPipController {
         return null;
     }
 
-    /** 副屏物理分辨率：非默认屏里面积最大的一块；没有就 1280x720@160。 */
-    private static int[] pickSize(Context ctx) {
-        try {
-            DisplayManager dm = (DisplayManager) ctx.getSystemService(Context.DISPLAY_SERVICE);
-            Display best = null;
-            long area = 0;
-            for (Display d : dm.getDisplays()) {
-                if (d.getDisplayId() == Display.DEFAULT_DISPLAY) continue;
-                DisplayMetrics m = new DisplayMetrics();
-                d.getRealMetrics(m);
-                long a = (long) m.widthPixels * m.heightPixels;
-                if (a > area) {
-                    area = a;
-                    best = d;
-                }
-            }
-            if (best != null) {
-                DisplayMetrics m = new DisplayMetrics();
-                best.getRealMetrics(m);
-                if (m.widthPixels > 0 && m.heightPixels > 0) {
-                    return new int[]{m.widthPixels, m.heightPixels, m.densityDpi};
-                }
-            }
-        } catch (Throwable t) {
-            Log.w(TAG, "pickSize 回退", t);
-        }
-        return new int[]{1280, 720, 160};
-    }
-
     public static synchronized void release() {
-        if (sDisplayId < 0) return;
-        if (sRooted) {
-            final int id = sDisplayId;
-            IO.execute(() -> PrivClient.release(id));
-        } else if (sVd != null) {
+        if (sDisplayId < 0 && sVd == null) return;
+        if (sVd != null) {
             try {
                 sVd.release();
             } catch (Throwable ignored) {
@@ -270,6 +296,7 @@ public final class VirtualPipController {
         }
         sVd = null;
         sDisplayId = -1;
+        sDeployPath = "未部署";
         Log.i(TAG, "VD released");
     }
 }

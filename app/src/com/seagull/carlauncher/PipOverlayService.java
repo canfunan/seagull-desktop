@@ -10,6 +10,7 @@ import android.graphics.PixelFormat;
 import android.os.IBinder;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -21,15 +22,16 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 /**
- * 虚拟屏画中画悬浮窗（批次 U）。
+ * 虚拟屏画中画悬浮窗（批次 U 建，批次 W 按车联助手管线重接）。
  *
  * 交互分区：
  *   顶栏（返回/60%/拉伸/关闭 + 状态文字）——拖这里移动窗口；
  *   SurfaceView 区——触摸手势原样转发进虚拟屏（input -d tap/swipe）；
  *   右下角手柄——拖这里自由拉伸窗口（"随意拉伸"规格）。
  *
- * VD 分辨率恒定，窗口尺寸随意变，拉伸由 SurfaceView 缩放完成，
- * 坐标映射 x' = x * vdW / viewW 保证点击命中率。
+ * 批次 W 复刻车联 b1/b 的屏窗口关系：VD 尺寸 = SurfaceView 视图尺寸，
+ * surfaceChanged → vd.resize —— 永不黑边、触摸坐标零换算。
+ * 建屏在 surfaceCreated（surface 建屏时直传），落屏走锚点+move-task 链。
  */
 public class PipOverlayService extends Service {
 
@@ -43,6 +45,7 @@ public class PipOverlayService extends Service {
     private WindowManager.LayoutParams lp;
     private int vdId = -1;
     private int inputFails;
+    private boolean booted;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -96,17 +99,25 @@ public class PipOverlayService extends Service {
         sv.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder h) {
-                VirtualPipController.attachSurface(h.getSurface());
+                if (booted) {
+                    VirtualPipController.surfaceChanged(h.getSurface(),
+                            sv.getWidth(), sv.getHeight());
+                    return;
+                }
+                booted = true;
+                bootFromSurface(h, sv);
             }
 
             @Override
             public void surfaceChanged(SurfaceHolder h, int f, int w, int hh) {
-                VirtualPipController.attachSurface(h.getSurface());
+                // 复刻车联 b1/b：窗口尺寸变了屏跟着 resize —— 触摸零换算的根基
+                VirtualPipController.surfaceChanged(h.getSurface(), w, hh);
             }
 
             @Override
             public void surfaceDestroyed(SurfaceHolder h) {
-                VirtualPipController.attachSurface(null);
+                // 复刻车联 b1/b：只摘 surface 不拆屏
+                VirtualPipController.surfaceDestroyed();
             }
         });
         sv.setOnTouchListener(this::onStageTouch);
@@ -130,9 +141,49 @@ public class PipOverlayService extends Service {
         } catch (Throwable t) {
             toast("悬浮窗权限被拒：" + t);
             stopSelf();
-            return;
         }
-        bootVirtualDisplay();
+    }
+
+    /* ---------------- 虚拟屏 + 高德（批次 W：车联管线） ---------------- */
+
+    /**
+     * surfaceCreated 驱动的部署（复刻车联 b1/b.surfaceCreated → c1/h）：
+     * create（surface 直传，屏=视图尺寸）→ deploy（锚点+move-task 链）→ 探针。
+     */
+    private void bootFromSurface(SurfaceHolder h, SurfaceView v) {
+        final Surface sf = h.getSurface();
+        new Thread(() -> {
+            int dpi = getResources().getDisplayMetrics().densityDpi;
+            int w = v.getWidth(), hh = v.getHeight();
+            if (w <= 0 || hh <= 0) { w = 1280; hh = 720; }
+            int id = VirtualPipController.create(this, VirtualPipController.DEF_PKG, sf, w, hh, dpi);
+            if (id < 0) {
+                setStatus("虚拟屏创建失败", true);
+                return;
+            }
+            vdId = id;
+            setStatus("VD#" + id + " " + w + "x" + hh + " · 部署中…", false);
+            String r = VirtualPipController.deploy(this);
+            boolean ok = r.equals("锚点+move-task") || r.equals("直启")
+                    || r.equals("root am start") || r.equals("daemon直启");
+            setStatus("VD#" + id + " · " + r + (ok ? " · 探测中…" : ""), !ok);
+            if (ok) {
+                // 黑屏二分探针：2.5s / 7s 两次量 VD 截屏体积，结论直接写状态行
+                android.os.Handler hd = new android.os.Handler(android.os.Looper.getMainLooper());
+                hd.postDelayed(this::probe, 2500);
+                hd.postDelayed(this::probe, 7000);
+            }
+        }, "seagull-vd-boot").start();
+    }
+
+    /** 后台跑探针，结论回状态行。 */
+    private void probe() {
+        if (root == null || status == null) return;   // 服务已关，延时探针作废
+        new Thread(() -> {
+            String r = VirtualPipController.probeContent();
+            boolean err = r.startsWith("屏黑") || r.startsWith("截屏") || r.equals("屏未建");
+            setStatus(r, err);
+        }, "seagull-vd-probe").start();
     }
 
     private TextView btn(String text, View.OnClickListener l) {
@@ -171,63 +222,6 @@ public class PipOverlayService extends Service {
             }
         });
         return h;
-    }
-
-    /* ---------------- 虚拟屏 + 高德 ---------------- */
-
-    private void bootVirtualDisplay() {
-        new Thread(() -> {
-            int id = VirtualPipController.create(this, VirtualPipController.DEF_PKG);
-            if (id < 0) {
-                setStatus("虚拟屏创建失败（root 与本地均未成功）", true);
-                return;
-            }
-            vdId = id;
-            // SurfaceView 缓冲固定为 VD 分辨率：清晰且 resize 时不再反复重建 surface
-            final SurfaceView v = sv();
-            if (v != null) {
-                new android.os.Handler(android.os.Looper.getMainLooper()).post(() ->
-                        v.getHolder().setFixedSize(
-                                VirtualPipController.width(), VirtualPipController.height()));
-            }
-            VirtualPipController.attachSurface(v != null ? v.getHolder().getSurface() : null);
-            String err = VirtualPipController.launchAmap(this);
-            if (err != null) {
-                setStatus(err, true);
-                return;
-            }
-            String path = VirtualPipController.isRootDisplay()
-                    ? "root TRUSTED 屏" : "本地屏（若不显示属 ROM 限制）";
-            setStatus("VD#" + id + " " + VirtualPipController.width() + "x"
-                    + VirtualPipController.height() + " · " + path
-                    + " · 已拉起，探测中…", false);
-            // 黑屏二分探针：2.5s / 7s 两次量 VD 截屏体积，结论直接写状态行
-            android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
-            h.postDelayed(() -> probe(), 2500);
-            h.postDelayed(() -> probe(), 7000);
-        }, "seagull-vd-boot").start();
-    }
-
-    /** 后台跑探针，结论回状态行；顺带把 Surface 挂接结果一并报出。 */
-    private void probe() {
-        if (root == null || status == null) return;   // 服务已关，延时探针作废
-        final SurfaceView v = sv();
-        if (v != null && v.getHolder().getSurface() != null
-                && v.getHolder().getSurface().isValid()) {
-            VirtualPipController.attachSurface(v.getHolder().getSurface());
-        }
-        new Thread(() -> {
-            String r = VirtualPipController.probeContent();
-            String a = VirtualPipController.attachErr();
-            boolean err = "屏未建".equals(r) || r.startsWith("截屏失败") || r.startsWith("截屏不支持")
-                    || (a != null && r.startsWith("屏黑"));
-            setStatus(r + (a != null ? " · Surface:" + a : ""), err);
-        }, "seagull-vd-probe").start();
-    }
-
-    private SurfaceView sv() {
-        FrameLayout stage = (FrameLayout) root.getChildAt(1);
-        return (SurfaceView) stage.getChildAt(0);
     }
 
     /* ---------------- 输入转发 ---------------- */
