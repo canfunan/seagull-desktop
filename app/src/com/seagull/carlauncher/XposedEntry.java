@@ -123,6 +123,13 @@ public class XposedEntry implements IXposedHookLoadPackage {
     /** 方向开关（对齐 WFreeHook 的 prop 口径）：0 跟随 / 1 横屏(默认) / 2 竖屏。 */
     private static final String PROP_ENABLE = "persist.seagull.wf";
     private static final String PROP_ORIENTATION = "persist.seagull.wf.orientation";
+    /**
+     * 车机显示适配：密度伪装值（批次 CAR·H6）。0 = 关闭（默认，不改任何行为）。
+     * 车机版 UI 按车机屏密度设计（常见 160/213/240dpi），手机 480dpi 下元素尺寸
+     * 全错。滑杆（RootPanel）经 root setprop 写入，模块在目标进程读后覆写
+     * DisplayMetrics.density/densityDpi/scaledDensity + Display.getMetrics/getRealMetrics。
+     */
+    private static final String PROP_DENSITY = "persist.seagull.car.density";
 
     /** 空气开关关闭时不装任何 hook，方便真机对比排查。 */
     private static boolean enabled() {
@@ -180,12 +187,20 @@ public class XposedEntry implements IXposedHookLoadPackage {
             // 网易云同样需要 H1~H3 的窗口语义配合，继续往下走
         }
 
-        if (!hit(pkg)) return;
-        log("已挂载 " + pkg + " → 窗口语义 + PiP" + (hitLandscape(pkg) ? " + 横屏" : ""));
-        try {
-            hookMultiWindowPretence();
-        } catch (Throwable t) {
-            log("H1 失败: " + t);
+        boolean curated = hit(pkg);
+        // 车机包名启发式（批次 CAR）：auto/car/iot/carsnp —— 命中即按车机版对待，
+        // 无需把每个新车机 app 加进编译名单。只给「安全子集」（PiP + H4 + 密度），
+        // 不给 H1（谎报分屏）和 C0（displayId 注入）—— 那两个对未知应用有破坏风险。
+        boolean auto = !curated && isCarName(pkg);
+        if (!curated && !auto) return;
+        log("已挂载 " + pkg + (curated ? " → 窗口语义 + PiP" : " → 车机自动识别")
+                + (hitLandscape(pkg) ? " + 横屏" : ""));
+        if (curated) {
+            try {
+                hookMultiWindowPretence();
+            } catch (Throwable t) {
+                log("H1 失败: " + t);
+            }
         }
         // H2 方向劫持只对 hitLandscape 生效（TARGETS + CAR_LANDSCAPE）：
         // 车机版里百度汽车版/网易云车机版有显式 portrait 的登录设置页，
@@ -212,12 +227,14 @@ public class XposedEntry implements IXposedHookLoadPackage {
             log("H4 失败: " + t);
         }
         // C0 总闸（批次 AG）：Instrumentation.execStartActivity 是所有 Activity 启动
-        // 的必经终点，一条 hook 覆盖全部入口。对所有 TARGETS 生效 —— 这是「应用在
-        // 画布内点击后必须留在画布」的根治 hook，对齐高德的固定效果全靠它。
-        try {
-            hookExecStartActivity();
-        } catch (Throwable t) {
-            log("C0 失败: " + t);
+        // 的必经终点，一条 hook 覆盖全部入口。只对 curated 名单生效（curated = TARGETS
+        // ∪ CAR_PKGS）—— 给未知应用注入 displayId 有破坏风险，启发式命中的不给。
+        if (curated) {
+            try {
+                hookExecStartActivity();
+            } catch (Throwable t) {
+                log("C0 失败: " + t);
+            }
         }
         // D 段（批次 AA）：应用进程内的「窄屏强制竖屏」配置改写（网易云车机版
         // IotActivityBase.attachBaseContext 宽高比 ≤1.3 时 applyOverrideConfiguration
@@ -227,6 +244,91 @@ public class XposedEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("D 失败: " + t);
         }
+        // H6（批次 CAR）：车机密度伪装。curated 与启发式命中都吃；
+        // 滑杆值为 0（默认）时整体关闭，一行日志都不打。
+        try {
+            hookDensitySpoof(lpp.classLoader);
+        } catch (Throwable t) {
+            log("H6 失败: " + t);
+        }
+    }
+
+    /**
+     * H6：密度伪装（批次 CAR）。把目标应用进程内的 DisplayMetrics 密度改写为
+     * persist.seagull.car.density（0 = 关闭）。车机版 UI 按车机屏密度设计，
+     * 手机 480dpi 下元素尺寸全错；这一条通杀所有车机版，值由 RootPanel 滑杆
+     * root setprop 写入，实时生效（下次取 metrics 即用新值）。
+     *
+     * 钩三类，覆盖绝大多数取密度的路径：
+     *   ① Resources.getDisplayMetrics —— 布局 inflate 的主路径（返回共享实例，
+     *      原地改写即全局生效）；
+     *   ②/③ Display.getMetrics / getRealMetrics —— 应用自己量屏幕的路径。
+     */
+    private void hookDensitySpoof(ClassLoader cl) {
+        final int dpi = carDensity();
+        if (dpi <= 0) return;   // 滑杆在 0 = 关闭，与默认行为完全一致
+        final float density = dpi / 160f;
+        XposedHelpers.findAndHookMethod("android.content.res.Resources", cl,
+                "getDisplayMetrics", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            applyDensity((DisplayMetrics) param.getResult(), density, dpi);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+        for (String m : new String[]{"getMetrics", "getRealMetrics"}) {
+            try {
+                XposedHelpers.findAndHookMethod("android.view.Display", cl, m,
+                        DisplayMetrics.class, new XC_MethodHook() {
+                            @Override
+                            protected void afterHookedMethod(MethodHookParam param) {
+                                try {
+                                    applyDensity((DisplayMetrics) param.args[0], density, dpi);
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        });
+            } catch (Throwable ignored) {
+                // 个别 ROM 少一个重载，跳过即可
+            }
+        }
+        log("H6 密度伪装 dpi=" + dpi + " density=" + density);
+    }
+
+    private static void applyDensity(DisplayMetrics dm, float density, int dpi) {
+        if (dm == null) return;
+        // getDisplayMetrics 是热路径（每次布局 inflate 都走）：已经是目标值就别重复写，
+        // 让钩子开销只剩一次字段比较。
+        if (dm.densityDpi == dpi && dm.density == density) return;
+        dm.density = density;
+        dm.densityDpi = dpi;
+        dm.scaledDensity = density;
+    }
+
+    /** 密度滑杆值（0 = 关闭）。读不到按关闭处理，绝不乱改。 */
+    private static int carDensity() {
+        try {
+            String v = prop(PROP_DENSITY, "0");
+            int dpi = Integer.parseInt(v.trim());
+            return (dpi >= 120 && dpi <= 640) ? dpi : 0;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /**
+     * 车机包名启发式（批次 CAR）：auto / car / iot / carsnp。
+     * 本仓库 5 个车机版实测全部命中（qqmusiccar / kugou.android.auto /
+     * kwmusiccarsnp / naviauto / cloudmusic.iot），商店目录里 com.mgtv.auto、
+     * com.baidu.car.radio、com.autochips.carplayapp 等同名规律的一并覆盖。
+     */
+    private static boolean isCarName(String pkg) {
+        if (pkg == null) return false;
+        String p = pkg.toLowerCase();
+        return p.contains("auto") || p.contains(".car") || p.contains("car.")
+                || p.contains("carsnp") || p.contains(".iot");
     }
 
     // ===================== A) SystemUI：AmapPip 尺寸缩放 =====================
@@ -775,7 +877,9 @@ public class XposedEntry implements IXposedHookLoadPackage {
                             ActivityInfo ai = (ActivityInfo) param.thisObject;
                             if (ai == null) return;
                             String p = ai.packageName;
-                            if (p != null && hit(p)) {
+                            // curated 名单 + 车机包名启发式一并放行 —— 车机版 5/5
+                            // 都没声明 supportsPictureInPicture，这里补上。
+                            if (p != null && (hit(p) || isCarName(p))) {
                                 param.setResult(Boolean.TRUE);
                             }
                         } catch (Throwable ignored) {
