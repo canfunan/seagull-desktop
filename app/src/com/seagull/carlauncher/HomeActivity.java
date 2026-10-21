@@ -80,6 +80,10 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         }
         lastSkin = skinSignature();
         selfReport();
+        // 通知监听自授权（野菜同款）：底栏音乐条的数据源 —— 没授权系统只返回
+        // 空会话列表、横幅整条隐藏。反射直授，系统随即重绑 MediaListenerService，
+        // 全程无 UI 无重启。
+        MediaListenerService.ensureAccess(this);
         setContentView(buildUi());
         refreshMini();
         ui.postDelayed(tick, 30_000L);
