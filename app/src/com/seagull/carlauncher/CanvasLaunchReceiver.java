@@ -40,9 +40,32 @@ public class CanvasLaunchReceiver extends BroadcastReceiver {
         }
         // Caps.exec 走 su -c（root 身份）：root(uid 0) 带 INTERNAL_SYSTEM_WINDOW
         // 过 vivo 归属检查，组件直接落进画布屏。
-        String out = Caps.exec("am start --display " + displayId + " -n " + comp);
-        boolean ok = out != null && !out.toLowerCase().contains("exception");
-        Log.i(TAG, "root 直启到画布 d" + displayId + ": " + comp + " ok=" + ok
+        // v7 启动形态（按优先级）：
+        // ① intent URI（模块 toUri 带过来）—— 完整 intent（extras/data 都在），
+        //    am start 直接吃标准 URI 格式。内部导航带数据的场景（网易云点歌/开页）
+        //    必须走这条，否则 Activity 拿不到数据 → 黑屏/挂载失效。
+        // ② 组件 + flags 保真 —— 无 URI 时（老模块/序列化失败）的退化路径：
+        //    -f 用原启动 flag（am 默认 NEW_TASK 会把内部导航变成新开任务，
+        //    打断返回栈/UI 状态）。
+        // flags < 0 = 没带，退回 am 默认行为。
+        int flags = intent.getIntExtra("flags", -1);
+        String f = flags >= 0 ? " -f 0x" + Integer.toHexString(flags) : "";
+        String uri = intent.getStringExtra("uri");
+        String out;
+        if (uri != null && !uri.isEmpty()) {
+            // shell 单引号包裹 URI（含 ; # = 空格）；URI 里的单引号先转义掉
+            // （toUri 的值不做 URL 编码，字符串 extras 带撇号会破引号 —— 极少数，
+            // 丢一个字符比整条命令崩掉好）
+            String safe = uri.replace("'", "");
+            out = Caps.exec("am start --display " + displayId + f + " '" + safe + "'");
+            Log.i(TAG, "root 直启(URI)到画布 d" + displayId + " ok="
+                    + (out != null && !out.toLowerCase().contains("exception"))
+                    + (out != null ? " | " + out.trim() : ""));
+            return;
+        }
+        out = Caps.exec("am start --display " + displayId + f + " -n " + comp);
+        Log.i(TAG, "root 直启(组件)到画布 d" + displayId + ": " + comp + " ok="
+                + (out != null && !out.toLowerCase().contains("exception"))
                 + (out != null ? " | " + out.trim() : ""));
     }
 }
