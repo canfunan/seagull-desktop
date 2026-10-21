@@ -85,6 +85,10 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         // 全程无 UI 无重启。
         MediaListenerService.ensureAccess(this);
         KeyMapService.ensureAccess(this);   // 按键映射 root 授权（野菜同款无障碍通道）
+        BallService.ensureAccess(this);     // 悬浮球 overlay root 授权
+        if (BallService.isOn(this)) {
+            try { startService(new Intent(this, BallService.class)); } catch (Throwable ignore) {}
+        }
         setContentView(buildUi());
         refreshMini();
         ui.postDelayed(tick, 30_000L);
