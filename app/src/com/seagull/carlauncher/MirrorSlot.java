@@ -726,14 +726,22 @@ public final class MirrorSlot implements CanvasSource {
         if (d <= 0 || w <= 0 || h <= 0 || dpi <= 0) return;
         rootExecAsync(() -> {
             try {
-                PrivClient.resize(d, w, Math.max(64, h - 1), dpi);
+                // daemon 不可用时 PrivClient.resize 全部静默返回 false —— 记一下
+                // 真实结果，别打「完成」骗自己（复盘 5：本路径只被 daemon 建屏的
+                // 槽走到，app 自建屏走本地 vd.resize 路径，功能不受影响）
+                boolean ok1 = PrivClient.resize(d, w, Math.max(64, h - 1), dpi);
                 Thread.sleep(400);
-                PrivClient.resize(d, w, h, dpi);
+                boolean ok2 = PrivClient.resize(d, w, h, dpi);
                 Thread.sleep(800);
-                PrivClient.resize(d, w, h, dpi + 8);
+                boolean ok3 = PrivClient.resize(d, w, h, dpi + 8);
                 Thread.sleep(1000);
-                PrivClient.resize(d, w, h, dpi);
-                Log.i(TAG, "[" + name + "] root 屏布局抖动完成 " + w + "x" + h);
+                boolean ok4 = PrivClient.resize(d, w, h, dpi);
+                if (ok1 && ok2 && ok3 && ok4) {
+                    Log.i(TAG, "[" + name + "] root 屏布局抖动完成 " + w + "x" + h);
+                } else {
+                    Log.w(TAG, "[" + name + "] root 屏布局抖动未生效（守护进程不可用，"
+                            + "app 自建屏走本地 resize 路径，本槽无碍）");
+                }
             } catch (Throwable t) {
                 Log.w(TAG, "[" + name + "] root 屏布局抖动失败: " + t);
             }
