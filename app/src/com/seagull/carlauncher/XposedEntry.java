@@ -1291,6 +1291,23 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 boolean wantsNewTask = (flags & (Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_CLEAR_TASK
                         | Intent.FLAG_ACTIVITY_NEW_DOCUMENT)) != 0;
+                // v8：singleTask/singleInstance 目标也要改道 —— 网易云实测：Minibar
+                // 点封面启 IotRadioPlayerActivity，flag 只有 0x20000（无 NEW_TASK），
+                // 但 launchMode=singleTask（manifest 坐实）—— singleTask 系统必建
+                // 独立任务 → 给新任务选屏 → 从源 Activity 继承合成 launchDisplayId
+                // → 归属检查拒 → 网易云没 catch → 进程崩（黑屏+挂载失效）。
+                // 判据不能只看 flag，必须查目标 launchMode。
+                if (!wantsNewTask && cn != null && who != null) {
+                    try {
+                        ActivityInfo ai = who.getPackageManager().getActivityInfo(cn, 0);
+                        if (ai != null && (ai.launchMode == ActivityInfo.LAUNCH_SINGLE_TASK
+                                || ai.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE)) {
+                            wantsNewTask = true;
+                        }
+                    } catch (Throwable ignored) {
+                        // 查不到（组件不在本包等）按不改道处理
+                    }
+                }
                 if (wantsNewTask) {
                     Context bc = who != null ? who : srcAct;
                     if (cn != null && bc != null) {
