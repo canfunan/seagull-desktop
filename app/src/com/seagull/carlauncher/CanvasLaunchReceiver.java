@@ -48,8 +48,12 @@ public class CanvasLaunchReceiver extends BroadcastReceiver {
         //    -f 用原启动 flag（am 默认 NEW_TASK 会把内部导航变成新开任务，
         //    打断返回栈/UI 状态）。
         // flags < 0 = 没带，退回 am 默认行为。
+        // v8：root 直启强制补 NEW_TASK —— shell 身份启动的硬性要求，
+        // 原 flag 可能没有（网易云 IotRadioPlayerActivity 实测 0x20000 无 NEW_TASK，
+        // am start 不带 NEW_TASK 直接拒）。补上不改变语义（root 直启本来就要建任务）。
         int flags = intent.getIntExtra("flags", -1);
-        String f = flags >= 0 ? " -f 0x" + Integer.toHexString(flags) : "";
+        int effFlags = flags < 0 ? -1 : (flags | 0x10000000);
+        String f = effFlags >= 0 ? " -f 0x" + Integer.toHexString(effFlags) : "";
         String uri = intent.getStringExtra("uri");
         String out;
         if (uri != null && !uri.isEmpty()) {
