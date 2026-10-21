@@ -305,6 +305,18 @@ public class RootPanelActivity extends BaseActivity {
         dpiHint.setPadding(dp(4), 0, 0, dp(4));
         col.addView(dpiHint);
 
+        /* 桌面组件（批次 MB/KB/KM，野菜复刻）：悬浮球 / 按键映射开关。
+         * 都是立即生效（prop + 服务起停），不用重启。 */
+        col.addView(section("桌面组件"));
+        col.addView(btn("悬浮球开关（当前 " + (BallService.isOn(this) ? "开" : "关") + "）",
+                () -> doVoid("悬浮球", () -> BallService.setOn(this, !BallService.isOn(this)))));
+        col.addView(btn("按键映射授权（音量±切歌 / 耳机键播放暂停）",
+                () -> op("按键映射授权", () -> {
+                    KeyMapService.ensureAccess(this);
+                    return new SysOps.R(KeyMapService.isEnabled(this),
+                            KeyMapService.isEnabled(this) ? "按键映射已授权生效" : "授权失败");
+                })));
+
         log = new TextView(this);
         log.setTextColor(Skin.c(R.color.warn));
         log.setTextSize(11);
