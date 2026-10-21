@@ -25,5 +25,7 @@
         <item>com.baidu.carlife.xiaomi</item>
         <item>com.samsung.android.carlink</item>
         <item>com.luna.music</item>
+        <!-- 落雪音乐（lx-music）：音乐条 MUSIC_PKGS 已含，显示适配（方向/密度）必须注入 -->
+        <item>cn.toside.music.mobile</item>
     </string-array>
 </resources>
