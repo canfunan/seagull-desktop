@@ -30,6 +30,10 @@ public class KeyMapService extends AccessibilityService {
     private static final String TAG = "SeagullKeyMap";
     /** 映射表 prop：格式 "24:next:25:prev:79:playpause"（键码:动作 成对），空=用默认表。 */
     public static final String PROP_MAP = "persist.seagull.keymap";
+    /** 开关 prop：1=开（默认）/ 0=关。 */
+    public static final String PROP_ON = "persist.seagull.keymap.on";
+    private static volatile String mapCached;
+    private static volatile long mapCachedAt;
 
     @Override
     protected void onServiceConnected() {
@@ -58,27 +62,57 @@ public class KeyMapService extends AccessibilityService {
     @Override
     protected boolean onKeyEvent(KeyEvent event) {
         try {
-            if (event == null || event.getAction() != KeyEvent.ACTION_UP) {
-                return super.onKeyEvent(event);
-            }
-            if (event.getRepeatCount() > 0) return true;   // 长按重复吃掉
+            if (event == null || !isOn()) return super.onKeyEvent(event);
             int code = event.getKeyCode();
             String action = mappingFor(code);
             if (action == null) return super.onKeyEvent(event);
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                // 映射键的 DOWN 一律吃掉：原键行为（音量调节）不发生，
+                // 只等 UP 时执行映射动作 —— 旧版放行 DOWN 导致「音量照变 + 又切歌」双重动作
+                return true;
+            }
+            if (event.getAction() != KeyEvent.ACTION_UP) return true;
+            if (event.getRepeatCount() > 0) return true;   // 长按重复吃掉
             dispatch(action);
-            return true;   // 吃掉：不再执行原键行为（音量调节等）
+            return true;
         } catch (Throwable t) {
             Log.w(TAG, "处理按键出错: " + t);
             return false;
         }
     }
 
-    /** 键码 → 动作名（prop 优先，空则默认表）。 */
-    private String mappingFor(int code) {
-        String map = null;
+    /** 开关：prop persist.seagull.keymap.on，默认开。 */
+    public static boolean isOn() {
         try {
-            map = SysOps.getProp(PROP_MAP);
+            String v = SysOps.getProp(PROP_ON);
+            if (v == null || v.trim().isEmpty()) return true;
+            return "1".equals(v.trim());
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    public static void setOn(boolean on) {
+        try {
+            SysOps.setProp(PROP_ON, on ? "1" : "0");
         } catch (Throwable ignored) {
+        }
+    }
+
+    /** 键码 → 动作名（prop 优先，空则默认表）。prop 读走 root su，10s 缓存。 */
+    private String mappingFor(int code) {
+        long now = System.currentTimeMillis();
+        String map;
+        if (now - mapCachedAt < 10_000) {
+            map = mapCached;
+        } else {
+            map = null;
+            try {
+                map = SysOps.getProp(PROP_MAP);
+            } catch (Throwable ignored) {
+            }
+            mapCached = map;
+            mapCachedAt = now;
         }
         if (map != null && !map.trim().isEmpty()) {
             String[] kv = map.trim().split(":");
