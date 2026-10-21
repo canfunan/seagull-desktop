@@ -168,7 +168,10 @@ public class XposedEntry implements IXposedHookLoadPackage {
         // = 设备支持 && 标准 activity 类型 && ActivityInfo.supportsPictureInPicture()，
         // 前两者恒真，唯一卡点就是这个标志（已从本机 services.jar 反汇编坐实）。
         // 高德两个版本都没声明该标志，所以 enterPictureInPictureMode 永远被拒。
-        if ("android".equals(pkg)) {
+        // 【包名坑】AOSP 的 system_server 包名是 "android"，但 vivo 等 ROM 叫
+        // "system"（实测本机 logcat: handleLoadPackage: system）—— 三个名字全匹配，
+        // 否则钩子静默不装、PiP 永远挂不上，重启也不管用（2026-10-21 实测踩实）。
+        if ("android".equals(pkg) || "system".equals(pkg) || "system_server".equals(pkg)) {
             try {
                 hookPipFlag(lpp.classLoader);
             } catch (Throwable t) {
