@@ -318,7 +318,8 @@ public class DockBar extends LinearLayout {
         } else {
             lyricLine.setVisibility(GONE);
         }
-        btnPlay.setKind(s.playing ? G_PAUSE : G_PLAY);
+        // 播放按钮状态取**目标包**的播放态（不是 snap —— 挂载 A 放 B 时显示反）
+        btnPlay.setKind(MediaListenerService.playing(controlPkg) ? G_PAUSE : G_PLAY);
         removeCallbacks(mediaTick);
         post(mediaTick);
     }
