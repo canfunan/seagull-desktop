@@ -202,6 +202,121 @@ public final class SysOps {
         return sb.toString();
     }
 
+    /**
+     * LSPosed 配置直查（批次 W5，root）—— 注入失败时的决定性证据，不再猜。
+     *
+     * 心跳 ✗ 时只有两种可能：模块没被 LSPosed 注入 / 注入了 hook 全挂。
+     * 本方法 root 直读 LSPosed 的配置文件把前者拆成三问：
+     *   ① 模块启用了吗（modules.json 里海鸥条目 enabled）
+     *   ② 作用域勾了吗（scope 里有没有高德/SystemUI/网易云）
+     *   ③ 空气开关挡了吗（getprop persist.seagull.* —— 排查残留的 0 会
+     *      静默跳过全部 hook，症状与「没注入」一模一样）
+     * 三问全绿仍 ✗ 才是「注入了但 hook 失败」，届时才需要 LSPosed 日志。
+     *
+     * 线程要求：后台线程（每条 su 上限 3s）。无 root 返回提示不抛错。
+     */
+    public static String lspDiag(Context ctx) {
+        StringBuilder sb = new StringBuilder("LSPosed 直查（root）:");
+        if (!Caps.hasRoot()) return sb.append("\n  需 root（当前 su 不可用，改在 LSPosed 管理器里人工确认）").toString();
+
+        // ① 海鸥属性：排除空气开关残留（persist.seagull.amap/wf=0 时 hook 全跳过）
+        String props = Caps.exec("getprop | grep -i seagull");
+        sb.append("\n  海鸥属性: ");
+        if (props == null || props.trim().isEmpty()) {
+            sb.append("(无 —— 开关全为默认值 ✓)");
+        } else {
+            sb.append(props.trim().replace("\n", "\n            "));
+        }
+
+        // ② LSPosed 配置目录
+        String ls = Caps.exec("ls /data/adb/lspd/config/ 2>/dev/null");
+        if (ls == null || ls.trim().isEmpty()) {
+            return sb.append("\n  配置目录: /data/adb/lspd/config/ 读不到（SELinux 挡了或 LSPosed 未装）\n"
+                    + "    → 在 LSPosed 管理器里人工确认：海鸥已启用 + 作用域含高德").toString();
+        }
+        sb.append("\n  配置文件: ").append(ls.trim().replace("\n", " "));
+
+        // ③ 逐个 cat json，Java 侧解析海鸥条目（不同版本文件名/结构有差异，容错遍历）
+        boolean found = false, enabled = false;
+        String scopeText = null;
+        for (String f : ls.trim().split("\n")) {
+            if (!f.endsWith(".json")) continue;
+            String body = Caps.exec("cat /data/adb/lspd/config/" + f.trim() + " 2>/dev/null");
+            if (body == null || !body.contains("seagull")) continue;
+            String[] r = parseModuleEntry(body);
+            if (r != null) {
+                found = true;
+                enabled = Boolean.parseBoolean(r[0]);
+                scopeText = r[1];
+                break;
+            }
+        }
+        if (!found) {
+            return sb.append("\n  模块条目: 配置里没找到海鸥 → LSPosed 管理器模块列表里没有/未启用本模块\n"
+                    + "    → 打开 LSPosed → 模块 → 启用海鸥桌面").toString();
+        }
+        sb.append("\n  模块启用: ").append(enabled ? "✓" : "✗（LSPosed 里开关没开）");
+        sb.append("\n  作用域  : ").append(scopeText == null ? "(空)" : scopeText);
+        String need = "";
+        for (String[] p : new String[][]{
+                {"高德", "com.autonavi.minimap"}, {"SystemUI", "com.android.systemui"},
+                {"网易云", "com.netease.cloudmusic"}}) {
+            if (scopeText != null && !scopeText.contains(p[1])) need += (need.isEmpty() ? "" : " ") + p[0];
+        }
+        if (!need.isEmpty()) sb.append("\n  缺作用域: ").append(need).append(" → LSPosed 海鸥详情页勾上");
+        if (enabled && (need.isEmpty() && scopeText != null && scopeText.contains("com.autonavi.minimap"))) {
+            sb.append("\n  结论    : 配置全绿 → 强杀高德重开；仍竖屏再看 LSPosed 日志搜 SeagullLsp");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 在 LSPosed 配置 JSON 里找海鸥条目。结构随版本漂移，递归遍历所有对象：
+     * 取 package/moduleName == 海鸥 的节点，返回 {enabled, scope 拼接}；找不到 null。
+     */
+    private static String[] parseModuleEntry(String body) {
+        try {
+            org.json.JSONTokener tk = new org.json.JSONTokener(body.trim());
+            Object root = tk.nextValue();
+            StringBuilder scope = new StringBuilder();
+            Object[] hit = {null};
+            walk(root, hit, scope);
+            if (hit[0] == null) return null;
+            Object en = hit[0];
+            String enabled = String.valueOf(
+                    en instanceof org.json.JSONObject ? ((org.json.JSONObject) en).optBoolean("enabled", false) : false);
+            return new String[]{enabled, scope.length() == 0 ? null : scope.toString()};
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 深度遍历 JSON：找到 package 为海鸥的 JSONObject 记下来，同节点读 scope 数组。 */
+    private static void walk(Object o, Object[] hit, StringBuilder scope) {
+        try {
+            if (o instanceof org.json.JSONObject) {
+                org.json.JSONObject jo = (org.json.JSONObject) o;
+                String pkg = jo.optString("package", jo.optString("moduleName", ""));
+                if (hit[0] == null && Constants.SELF_PACKAGE.equals(pkg)) {
+                    hit[0] = jo;
+                    Object sc = jo.opt("scope");
+                    if (sc instanceof org.json.JSONArray) {
+                        org.json.JSONArray arr = (org.json.JSONArray) sc;
+                        for (int i = 0; i < arr.length(); i++) {
+                            String s = arr.optString(i, "");
+                            if (!s.isEmpty()) scope.append(s).append(' ');
+                        }
+                    }
+                }
+                java.util.Iterator<String> it = jo.keys();
+                while (it.hasNext()) walk(jo.opt(it.next()), hit, scope);
+            } else if (o instanceof org.json.JSONArray) {
+                org.json.JSONArray ja = (org.json.JSONArray) o;
+                for (int i = 0; i < ja.length(); i++) walk(ja.opt(i), hit, scope);
+            }
+        } catch (Throwable ignore) {}
+    }
+
     /* ---------------- 桌面组件取值（纯读取，无权限） ---------------- */
 
     public static String clockHHmm() {

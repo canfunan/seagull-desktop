@@ -38,11 +38,17 @@ public class RootPanelActivity extends BaseActivity {
         new Thread(() -> {
             String s;
             try { s = SysOps.envInfo(self); } catch (Throwable t) { s = "环境检测失败: " + t; }
-            // 批次 W4：注入诊断置顶 —— 「模块像没生效一样」的第一判据就在这行：
-            // 心跳 ✓ = LSPosed 配置正确 hook 在跑；✗ = 去管理器启用/勾作用域/重启应用。
+            // 批次 W4/W5：心跳（注入状态）+ LSPosed 配置直查置顶 ——
+            // 「模块像没生效一样」在三行内定位：心跳 ✓/✗ → 启用/作用域/属性开关。
             String diag;
             try { diag = HookDiagnostics.describe(self); } catch (Throwable t) { diag = ""; }
-            final String out = diag.isEmpty() ? s : diag + "\n\n" + s;
+            String lsp;
+            try { lsp = SysOps.lspDiag(self); } catch (Throwable t) { lsp = "LSPosed 直查失败: " + t; }
+            StringBuilder sb = new StringBuilder();
+            if (!diag.isEmpty()) sb.append(diag).append("\n\n");
+            if (!lsp.isEmpty()) sb.append(lsp).append("\n\n");
+            sb.append(s);
+            final String out = sb.toString();
             if (isFinishing() || isDestroyed()) return;
             runOnUiThread(() -> env.setText(out));
         }).start();
