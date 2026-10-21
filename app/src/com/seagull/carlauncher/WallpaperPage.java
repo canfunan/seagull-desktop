@@ -357,14 +357,14 @@ public final class WallpaperPage extends FrameLayout {
         plRow0.setGravity(android.view.Gravity.CENTER_VERTICAL);
         plArt = new ImageView(c);
         plArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        plArt.setOnClickListener(v -> MediaListenerService.playPause());
-        plRow0.addView(plArt, new LayoutParams(dp(44), dp(44)));
+        plArt.setOnClickListener(v -> MediaListenerService.playPause(controlTarget()));
+        plRow0.addView(plArt, new LayoutParams(dp(110), dp(110)));
         LinearLayout plCol = new LinearLayout(c);
         plCol.setOrientation(LinearLayout.VERTICAL);
-        plTitle = tv(c, 15, R.color.leaf, true);
+        plTitle = tv(c, 22, R.color.leaf, true);
         plTitle.setSingleLine(true);
         plTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        plSource = tv(c, 11, R.color.text_dim, false);
+        plSource = tv(c, 15, R.color.text_dim, false);
         plSource.setSingleLine(true);
         plSource.setEllipsize(android.text.TextUtils.TruncateAt.END);
         plCol.addView(plTitle);
@@ -372,31 +372,35 @@ public final class WallpaperPage extends FrameLayout {
         LinearLayout.LayoutParams pcp = new LinearLayout.LayoutParams(-2, -2);
         pcp.leftMargin = dp(8);
         plRow0.addView(plCol, pcp);
-        plLyric = tv(c, 12, R.color.text_dim, false);
+        // 批次 MB 大卡：歌词行走马灯（超长自动滚）
+        plLyric = tv(c, 16, R.color.text_dim, false);
         plLyric.setSingleLine(true);
-        plLyric.setEllipsize(android.text.TextUtils.TruncateAt.END);
-        plTime = tv(c, 10, R.color.text_dim, true);
+        plLyric.setEllipsize(android.text.TextUtils.TruncateAt.MARQUEE);
+        plLyric.setMarqueeRepeatLimit(-1);
+        plLyric.setHorizontallyScrolling(true);
+        plLyric.setSelected(true);
+        plTime = tv(c, 13, R.color.text_dim, true);
         LinearLayout.LayoutParams ptlp = new LinearLayout.LayoutParams(-1, -2);
         ptlp.topMargin = dp(4);
         plTime.setLayoutParams(ptlp);
         plTrack = new FrameLayout(c);
         plTrack.setBackground(Skin.round(PlayerSkin.trackBg(), 3));
         plFill = new View(c);
-        plTrack.addView(plFill, new LayoutParams(0, dp(3)));
+        plTrack.addView(plFill, new LayoutParams(0, dp(5)));
         plTrack.setVisibility(GONE);
         plCtrl = new LinearLayout(c);
         plCtrl.setOrientation(LinearLayout.HORIZONTAL);
         plCtrl.setGravity(android.view.Gravity.CENTER);
         plPrev = new DockBar.GlyphIconView(c, DockBar.G_PREV).scale(0.74f);
         plPrev.setContentDescription("上一曲");
-        plPrev.setOnClickListener(v -> MediaListenerService.prev());
+        plPrev.setOnClickListener(v -> MediaListenerService.control(controlTarget(), "prev"));
         plPlay = new DockBar.GlyphIconView(c, DockBar.G_PAUSE).scale(0.74f);
         plPlay.setContentDescription("播放/暂停");
-        plPlay.setOnClickListener(v -> MediaListenerService.playPause());
+        plPlay.setOnClickListener(v -> MediaListenerService.control(controlTarget(), "playpause"));
         plNext = new DockBar.GlyphIconView(c, DockBar.G_NEXT).scale(0.74f);
         plNext.setContentDescription("下一曲");
-        plNext.setOnClickListener(v -> MediaListenerService.next());
-        LinearLayout.LayoutParams pkp = new LinearLayout.LayoutParams(dp(36), dp(36));
+        plNext.setOnClickListener(v -> MediaListenerService.control(controlTarget(), "next"));
+        LinearLayout.LayoutParams pkp = new LinearLayout.LayoutParams(dp(46), dp(46));
         pkp.rightMargin = dp(14);
         plCtrl.addView(plPrev, pkp);
         plCtrl.addView(plPlay, pkp);
@@ -1161,10 +1165,10 @@ public final class WallpaperPage extends FrameLayout {
 
     /** 尺寸：文本按 s 缩放（封面/控制键固定尺寸随单色块风格，与 mus 块一致）。 */
     private void applyPlayerScale(float s) {
-        plTitle.setTextSize(15 * s);
-        plSource.setTextSize(11 * s);
-        plLyric.setTextSize(12 * s);
-        plTime.setTextSize(10 * s);
+        plTitle.setTextSize(22 * s);
+        plSource.setTextSize(15 * s);
+        plLyric.setTextSize(16 * s);
+        plTime.setTextSize(13 * s);
         playerBox.post(() -> placeBlock(playerBox, model.wallPlayerX, model.wallPlayerY));
     }
 
@@ -1178,10 +1182,23 @@ public final class WallpaperPage extends FrameLayout {
         plPrev.tint(col);
         plPlay.tint(col);
         plNext.tint(col);
-        plFill.setBackground(Skin.round(col, 3));
+        plFill.setBackground(Skin.round(col, 5));
     }
 
     /** 块刷新：会话数据源（MediaListenerService.snap，本地/蓝牙/落雪通吃）。 */
+    /** 挂载哪个播放器就控制哪个（批次 MB）：画布槽位上的音乐包，无则当前会话。 */
+    private String controlTarget() {
+        for (int slot : new int[]{1, 2}) {
+            try {
+                String p = PipBoard.loadPkg(getContext(), slot);
+                if (p != null && MediaListenerService.isMusicPkg(p)) return p;
+            } catch (Throwable ignored) {
+            }
+        }
+        MediaListenerService.Snap s = MediaListenerService.snap();
+        return s == null ? null : s.pkg;
+    }
+
     public void refreshPlayerBlock() {
         if (!model.wallPlayerEnabled) {
             playerBox.setVisibility(GONE);
