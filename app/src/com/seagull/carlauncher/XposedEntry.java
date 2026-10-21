@@ -113,11 +113,17 @@ public class XposedEntry implements IXposedHookLoadPackage {
      * 需要整体强制横屏的车机版（音乐类：全部 activity 都不声明方向，
      * 在手机竖屏上会整个竖过来）。导航/有 portrait 关键页面的不进这张表，
      * 其主界面方向由各自 manifest 的 USER 声明 + 系统方向锁决定。
+     *
+     * 【批次 PIP】百度汽车版也进：反编译坐实 BasePage.onCreate 调
+     * setRequestedOrientation(2)（USER），竖屏锁定的手机上 USER=竖屏，
+     * 地图在横版画布上会竖版letterbox。它那 3 个 portrait 登录页被一起
+     * 拉横是已知代价（能用，后续按需收紧）。
      */
     private static final String[] CAR_LANDSCAPE = {
             "com.tencent.qqmusiccar",
             "com.kugou.android.auto",
             "cn.kuwo.kwmusiccarsnp",
+            "com.baidu.naviauto",
     };
 
     /** 方向开关（对齐 WFreeHook 的 prop 口径）：0 跟随 / 1 横屏(默认) / 2 竖屏。 */
@@ -1121,20 +1127,14 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 Context who = null;
                 Intent intent = null;
                 Bundle options = null;
-                int optIdx = -1;
                 Object[] args = param.args;
                 // options 槽定位：已知签名里 options 都带 Bundle（值可能为 null
-                // —— null instanceof 不成立，不能纯按类型扫）。从尾部扫 Bundle，
-                // 没有且末参是 null 时认定末参就是 options 槽（options 恒为末参）。
+                // —— null instanceof 不成立，不能纯按类型扫）。从尾部扫 Bundle。
                 for (int i = args.length - 1; i >= 0; i--) {
                     if (args[i] instanceof Bundle) {
                         options = (Bundle) args[i];
-                        optIdx = i;
                         break;
                     }
-                }
-                if (optIdx < 0 && args.length > 0 && args[args.length - 1] == null) {
-                    optIdx = args.length - 1;
                 }
                 for (int i = 0; i < args.length; i++) {
                     Object a = args[i];
@@ -1142,27 +1142,33 @@ public class XposedEntry implements IXposedHookLoadPackage {
                     if (a instanceof Context && who == null) who = (Context) a;
                     if (a instanceof Intent && intent == null) intent = (Intent) a;
                 }
-                if (intent == null || optIdx < 0) return;
+                if (intent == null) return;
                 int id = srcAct != null ? displayIdOf(srcAct)
                         : (who != null ? displayIdOf(who) : -1);
-                if (id < 0) return;   // 启动方在主屏：不干预
-                // 只钉「应用自己内部跳转」：目标组件是本应用，或解析不出。
-                // 外跳别的应用（浏览器/分享）不钉，否则外跳会被塞进私有画布被拒。
+                if (id <= 0) return;   // 启动方在主屏：不干预
+
+                // 【批次 PIP·C0 重写】画布（非默认屏）上的启动统一策略：
+                // 剥掉建任务类 flag（NEW_TASK/CLEAR_TASK/NEW_DOCUMENT），让 Activity
+                // 进调用方的现有任务。系统只在「给新任务选屏」时才继承/合成
+                // launchDisplayId 并触发 SafeActivityOptions 的
+                // isCallerAllowedToLaunchOnDisplay 检查（AOSP 标准：显式 displayId
+                // 指向调用方无归属的屏即 SecurityException）—— 同任务内启动压根
+                // 不走那条路，检查不触发。私有画布上的跨包启动（百度 naviauto →
+                // baidumaps.MapsActivity 实测被拒 → splash 走完黑屏）从根上消失。
+                // 旧版「同包注入 displayId」逻辑整体退役：进现有任务天然落在画布上，
+                // 不需要注入，注入反而会重新触发归属检查。
                 ComponentName cn = intent.getComponent();
-                String self = who != null ? who.getPackageName()
-                        : (srcAct != null ? srcAct.getPackageName() : null);
-                if (cn != null && self != null && !cn.getPackageName().equals(self)) {
-                    return;
+                int flags = intent.getFlags();
+                int strip = flags & (Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        | Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
+                if (strip != 0) {
+                    intent.setFlags(flags & ~strip);
+                    log("C0 剥建任务flag 0x" + Integer.toHexString(strip)
+                            + " → 进现有任务 (" + (cn != null ? cn.getClassName() : intent.toString()) + ")");
                 }
                 if (options != null) {
-                    options.putInt(KEY_LAUNCH_DISPLAY_ID, id);
-                    log("C0 注入 displayId=" + id + " execStartActivity "
-                            + (cn != null ? cn.getClassName() : "(隐式)"));
-                } else {
-                    ActivityOptions o = ActivityOptions.makeBasic();
-                    o.setLaunchDisplayId(id);
-                    param.args[optIdx] = o.toBundle();
-                    log("C0 注入 displayId=" + id + " execStartActivity (新建 options)");
+                    options.remove(KEY_LAUNCH_DISPLAY_ID);
                 }
             } catch (Throwable t) {
                 log("C0 execStartActivity 处理异常: " + t);
