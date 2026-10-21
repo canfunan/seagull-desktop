@@ -310,9 +310,21 @@ public class DockBar extends LinearLayout {
                 ? s.title + (s.artist != null && !s.artist.isEmpty() ? " · " + s.artist : "")
                 : s.pkg;
         mediaTitle.setText(line);
-        // 歌词行走马灯（批次 MB）：有歌词才显示，marquee 无限滚动
-        if (s.lyric != null && !s.lyric.isEmpty()) {
-            lyricLine.setText(s.lyric);
+        // 歌词行走马灯（批次 MB·复盘 4）：管线优先（Lyrics.window —— CarLink/
+        // metadata/网络歌词，与壁纸大卡同源），通知提取兜底（落雪等通知带歌词的
+        // 车机 app 管线里没数据时走这条）。两边都没 → 隐藏不占位。
+        String lyric = null;
+        try {
+            String[] lw = Lyrics.window(getContext(), null, 1);
+            if (lw != null && lw.length > 0 && lw[lw.length - 1] != null) {
+                String t = lw[lw.length - 1].trim();
+                if (!t.isEmpty()) lyric = t;
+            }
+        } catch (Throwable ignored) {
+        }
+        if (lyric == null && s.lyric != null && !s.lyric.isEmpty()) lyric = s.lyric;
+        if (lyric != null) {
+            lyricLine.setText(lyric);
             lyricLine.setVisibility(VISIBLE);
             lyricLine.setSelected(true);
         } else {
