@@ -2702,3 +2702,27 @@ Manifest/杂项：
 **编译**：javac 全量 0 error（R.java 借用 gen-20261019 产物）。
 **验收**：部署后状态行应显示「锚点+move-task · 探测中… → 屏有内容(NKB)」；
 高德被拉回主屏后回桌面一次即自动搬回。
+
+## 批次 W2 —— 用户截图实锤：目标应用写死车机版 = 每次必败；补「推荐应用」
+
+用户截图（横屏主屏上的手机版高德 + 黑边、无任何画中画窗口）+ 反馈
+「车联助手 lsp 里有推荐应用，你这个都没有，而且一直都没成功过」。复盘发现：
+
+1. **画中画目标写死 `com.autonavi.amapauto`（车机版）**。用户设备上装的是
+   手机版高德（截图即证）—— 没装车机版 → `resolveComponent` 返回 null →
+   deploy 第一步就「解析不到入口 Activity」→ 四条落屏路全不用跑，每次必败。
+   而车联助手的画中画目标就是**手机版高德**（其 xposed_scope 含
+   com.autonavi.minimap；VD 布局按手机 app 适配）。
+2. **「推荐应用」缺失**。车联助手在自己的界面里列出推荐应用，点谁画谁。
+   海鸥只给一个写死的按钮。
+
+修复：
+- `VirtualPipController` 增加 `RECOMMEND{minimap, amapauto, netease}` +
+  `pickTarget()`（用户点选 > 手机版高德 > 车机版 > 网易云，按装没装探测）
+  + `setTarget()`。
+- `RootPanelActivity` 增加「推荐应用（点谁画谁）」区：三个应用条目，未装的
+  标注；点选后 stopService→startForegroundService 重建悬浮窗（换目标必须
+  重启服务，否则 VD 还挂在旧包上）。
+- 悬浮窗状态行带目标包名：`VD#N com.autonavi.minimap · 部署中…`。
+- `xposed_scope` 补车联 3.0.0 同款条目（miui.carlink / baidu.carlife.xiaomi /
+  samsung.android.carlink / luna.music），LSPosed 推荐作用域与其对齐。

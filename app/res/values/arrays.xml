@@ -15,5 +15,10 @@
         <item>com.netease.cloudmusic</item>
         <item>com.netease.cloudmusic.iot</item>
         <item>com.tencent.qqmusic</item>
+        <!-- 车联助手 3.0.0 同款条目（批次 W 对齐）：手机互联 kit + 洛雪 -->
+        <item>com.miui.carlink</item>
+        <item>com.baidu.carlife.xiaomi</item>
+        <item>com.samsung.android.carlink</item>
+        <item>com.luna.music</item>
     </string-array>
 </resources>

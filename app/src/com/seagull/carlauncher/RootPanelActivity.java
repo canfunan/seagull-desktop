@@ -245,19 +245,35 @@ public class RootPanelActivity extends BaseActivity {
                     return new SysOps.R(true, out == null ? "（无输出）" : out);
                 })));
 
-        /* 虚拟屏画中画（批次 U）：海鸥自建 VirtualDisplay 承载车机高德，
-         * 悬浮窗呈现、自由拉伸、root input 转发触摸。零 hook、零 LSPosed 依赖，
-         * 与注入链完全解耦。规格见 .monkeycode/specs/virtual-display-pip/。 */
+        /* 虚拟屏画中画（批次 U 建，批次 W 按车联助手管线复刻 + 推荐应用点选）：
+         * 车联助手模型 = 在它界面里点推荐应用即开画中画。这里同款：
+         * 推荐应用区点谁就画谁，没点选则按 装没装 自动探测（手机版高德优先 ——
+         * 批次 W 教训：写死车机版，没装 amapauto 的设备每次必败）。 */
         col.addView(section("虚拟屏画中画"));
-        col.addView(btn("启动高德画中画（虚拟屏）", () -> op("虚拟屏画中画", () -> {
-            try {
-                startForegroundService(new android.content.Intent(this, PipOverlayService.class));
-                return new SysOps.R(true, "服务已拉起：看悬浮窗顶栏状态行；"
-                        + "SurfaceView 区手势直达高德，右下角手柄自由拉伸。");
-            } catch (Throwable ex) {
-                return new SysOps.R(false, "拉起失败: " + ex);
-            }
+        col.addView(btn("启动画中画（自动选应用）", () -> op("虚拟屏画中画", () -> {
+            VirtualPipController.setTarget(null);
+            return startPip();
         })));
+        col.addView(section("推荐应用（点谁画谁）"));
+        String[][] recs = {
+                {"高德地图（手机版）", "com.autonavi.minimap"},
+                {"高德地图（车机版）", "com.autonavi.amapauto"},
+                {"网易云音乐", "com.netease.cloudmusic"},
+        };
+        for (String[] rec : recs) {
+            boolean installed;
+            try {
+                installed = getPackageManager().getLaunchIntentForPackage(rec[1]) != null;
+            } catch (Throwable tt) {
+                installed = false;
+            }
+            final String label = rec[0] + (installed ? "" : "（未装，点了会失败）");
+            final String pkg = rec[1];
+            col.addView(btn(label, () -> op("画中画·" + pkg, () -> {
+                VirtualPipController.setTarget(pkg);
+                return startPip();
+            })));
+        }
 
         log = new TextView(this);
         log.setTextColor(Skin.c(R.color.warn));
@@ -295,6 +311,19 @@ public class RootPanelActivity extends BaseActivity {
             final String line = label + " → " + r;
             runOnUiThread(() -> append(line));
         }).start();
+    }
+
+    /** 拉起画中画悬浮窗（目标应用已由 setTarget 定好，自动选时传 null）。
+     *  已在跑的旧服务先停掉 —— 否则 VD 还挂在旧目标上，换推荐应用不生效。 */
+    private SysOps.R startPip() {
+        try {
+            stopService(new android.content.Intent(this, PipOverlayService.class));
+            startForegroundService(new android.content.Intent(this, PipOverlayService.class));
+            return new SysOps.R(true, "服务已拉起：看悬浮窗顶栏状态行；"
+                    + "SurfaceView 区手势直达目标应用，右下角手柄自由拉伸。");
+        } catch (Throwable ex) {
+            return new SysOps.R(false, "拉起失败: " + ex);
+        }
     }
 
     private void append(String s) {

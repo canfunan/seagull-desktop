@@ -153,16 +153,22 @@ public class PipOverlayService extends Service {
     private void bootFromSurface(SurfaceHolder h, SurfaceView v) {
         final Surface sf = h.getSurface();
         new Thread(() -> {
+            // 目标应用：推荐应用点选 > 自动探测（手机版高德 > 车机版 > 网易云）
+            String pkg = VirtualPipController.pickTarget(this);
+            if (pkg == null) {
+                setStatus("没装推荐应用：先装高德/网易云，或到 root 面板点选", true);
+                return;
+            }
             int dpi = getResources().getDisplayMetrics().densityDpi;
             int w = v.getWidth(), hh = v.getHeight();
             if (w <= 0 || hh <= 0) { w = 1280; hh = 720; }
-            int id = VirtualPipController.create(this, VirtualPipController.DEF_PKG, sf, w, hh, dpi);
+            int id = VirtualPipController.create(this, pkg, sf, w, hh, dpi);
             if (id < 0) {
                 setStatus("虚拟屏创建失败", true);
                 return;
             }
             vdId = id;
-            setStatus("VD#" + id + " " + w + "x" + hh + " · 部署中…", false);
+            setStatus("VD#" + id + " " + pkg + " · 部署中…", false);
             String r = VirtualPipController.deploy(this);
             boolean ok = r.equals("锚点+move-task") || r.equals("直启")
                     || r.equals("root am start") || r.equals("daemon直启");

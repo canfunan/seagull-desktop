@@ -34,6 +34,20 @@ public final class VirtualPipController {
     private static final String TAG = "SeagullVdPip";
     public static final String DEF_PKG = "com.autonavi.amapauto";
 
+    /**
+     * 推荐应用（复刻车联助手的「推荐应用」模型）。
+     * 顺序即自动探测优先级：手机版高德优先 —— 车联助手的画中画目标就是手机版
+     * 高德（其 xposed_scope 第一批就是 com.autonavi.minimap）；车机版 amapauto
+     * 未必装（批次 W 教训：写死车机版，用户没装 → 每次必败「解析不到入口」）。
+     */
+    public static final String[] RECOMMEND = {
+            "com.autonavi.minimap",     // 高德地图（手机版）
+            "com.autonavi.amapauto",    // 高德地图（车机版）
+            "com.netease.cloudmusic",   // 网易云音乐
+    };
+
+    private static String sTargetPkg;   // 用户在推荐应用里点选的（null = 自动探测）
+
     /** 车联助手锚点启动 flags 原值 411041792 = NEW_TASK | NEW_DOCUMENT | EXCLUDE_FROM_RECENTS。 */
     private static final int ANCHOR_FLAGS = 411041792;
     /** 车联助手 h.b 的 am start flags：0x10104000 = NEW_TASK | RESET_TASK_IF_NEEDED | TASK_ON_HOME。 */
@@ -61,6 +75,26 @@ public final class VirtualPipController {
 
     /** 桌面 onResume 自愈判据：屏活着才值得重搬。 */
     public static synchronized boolean isActive() { return sDisplayId >= 0; }
+
+    /** 推荐应用点选（RootPanel 用）。传 null = 回到自动探测。 */
+    public static synchronized void setTarget(String pkg) { sTargetPkg = pkg; }
+
+    /**
+     * 目标应用：用户点选 > 手机版高德 > 车机版高德；都没装返回 null。
+     * （批次 W 教训：写死车机版 —— 用户没装 amapauto 时解析不到入口，每次必败。）
+     */
+    public static String pickTarget(Context ctx) {
+        synchronized (VirtualPipController.class) {
+            if (sTargetPkg != null) return sTargetPkg;
+        }
+        for (String p : RECOMMEND) {
+            try {
+                if (ctx.getPackageManager().getLaunchIntentForPackage(p) != null) return p;
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
 
     /* ============ 建屏（复刻 b1/b.surfaceCreated） ============ */
 
