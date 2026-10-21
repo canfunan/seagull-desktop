@@ -106,18 +106,25 @@ public class MediaListenerService extends NotificationListenerService {
                 Log.w(TAG, "反射授权失败，回落 setting: " + t);
             }
             if (!granted) {
-                // 回落：root 直写 setting（su settings put）—— 用户要求走 root 级授权，
-                // app 自身写 secure setting 可能被拒，root 必成。
+                // 回落（root 级）：cmd notification allow_listener —— 系统 shell 直通
+                // NotificationManagerService 的服务端授权，一次性更新内存 Allowed 结构
+                // （连 vivo 的 Has user set 花括号列表都同步），不重启、不碰设置 UI。
+                // 反射在 Android 14 隐藏 API 拦截下必然 NoSuchMethodException，
+                // 这条是实际生效路径；settings put 只是最后兜底（vivo 缓存不刷）。
                 try {
-                    String cur = Caps.exec("settings get secure enabled_notification_listeners");
-                    String flat = cn.flattenToString();
-                    String nv = (cur == null || cur.trim().isEmpty()
-                            || "null".equals(cur.trim())) ? flat
-                            : (cur.contains(flat) ? cur.trim() : cur.trim() + ":" + flat);
-                    Caps.exec("settings put secure enabled_notification_listeners '" + nv + "'");
-                    Log.i(TAG, "通知监听自授权回落 root setting 写入完成: " + nv);
+                    String out = Caps.exec("cmd notification allow_listener " + cn.flattenToString());
+                    Log.i(TAG, "通知监听自授权回落 cmd allow_listener: " + out);
                 } catch (Throwable t) {
-                    Log.w(TAG, "root setting 回落也失败: " + t);
+                    Log.w(TAG, "cmd allow_listener 失败，回落 setting: " + t);
+                    try {
+                        String cur = Caps.exec("settings get secure enabled_notification_listeners");
+                        String flat = cn.flattenToString();
+                        String nv = (cur == null || cur.trim().isEmpty()
+                                || "null".equals(cur.trim())) ? flat
+                                : (cur.contains(flat) ? cur.trim() : cur.trim() + ":" + flat);
+                        Caps.exec("settings put secure enabled_notification_listeners '" + nv + "'");
+                    } catch (Throwable ignore) {
+                    }
                 }
             }
         } catch (Throwable ignored) {
