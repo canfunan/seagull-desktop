@@ -1,7 +1,9 @@
 package com.seagull.carlauncher;
 
+import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
+import android.provider.Settings;
 import android.media.MediaMetadata;
 import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
@@ -10,6 +12,7 @@ import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
 import android.util.Log;
 
+import java.lang.reflect.Method;
 import java.util.List;
 
 /**
@@ -69,6 +72,54 @@ public class MediaListenerService extends NotificationListenerService {
     @Override public void onCreate() {
         super.onCreate();
         appCtx = getApplicationContext();
+        // 野菜同款自授权（批次 MB）：没授权就自己授 —— 不弹设置 UI、不重启、
+        // 不动系统设置界面。授权后系统自动重绑本服务，onListenerConnected 跟着来。
+        ensureAccess(appCtx);
+    }
+
+    /**
+     * 通知监听自授权（野菜桌面普通版 LyricNotificationListener 同款机制）：
+     * 反射调 NotificationManager 隐藏方法 setNotificationListenerAccessGranted
+     * 直接授予本服务访问权 —— 系统内存态立即更新并自动重绑，全程无 UI、无重启。
+     * 反射失败（个别 ROM 收紧隐藏 API）回落写 enabled_notification_listeners
+     * 标准冒号格式（AOSP 原生格式，vivo 缓存需重启才刷的坑走不到这步）。
+     */
+    public static void ensureAccess(Context ctx) {
+        if (ctx == null) return;
+        ComponentName cn = new ComponentName(ctx, MediaListenerService.class);
+        try {
+            NotificationManager nm =
+                    (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return;
+            try {
+                if (nm.isNotificationListenerAccessGranted(cn)) return;   // 已授权
+            } catch (Throwable ignored) {
+            }
+            boolean granted = false;
+            try {
+                Method m = NotificationManager.class.getMethod(
+                        "setNotificationListenerAccessGranted", ComponentName.class, boolean.class);
+                m.invoke(nm, cn, true);
+                granted = true;
+                Log.i(TAG, "通知监听自授权成功（反射）");
+            } catch (Throwable t) {
+                Log.w(TAG, "反射授权失败，回落 setting: " + t);
+            }
+            if (!granted) {
+                try {
+                    String cur = Settings.Secure.getString(
+                            ctx.getContentResolver(), "enabled_notification_listeners");
+                    String flat = cn.flattenToString();
+                    String nv = (cur == null || cur.isEmpty()) ? flat
+                            : (cur.contains(flat) ? cur : cur + ":" + flat);
+                    Settings.Secure.putString(
+                            ctx.getContentResolver(), "enabled_notification_listeners", nv);
+                    Log.i(TAG, "通知监听自授权回落 setting 写入完成");
+                } catch (Throwable ignore) {
+                }
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     @Override public void onListenerConnected() {
