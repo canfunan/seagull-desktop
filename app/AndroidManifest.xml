@@ -290,5 +290,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- 画布跨包启动改道（批次 PIP）：模块在目标应用进程里取消必然失败的
+             跨包启动，广播组件过来，本接收器以 root 直启到画布屏。 -->
+        <receiver
+            android:name=".CanvasLaunchReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.seagull.carlauncher.CANVAS_LAUNCH" />
+            </intent-filter>
+        </receiver>
+
     </application>
 </manifest>
