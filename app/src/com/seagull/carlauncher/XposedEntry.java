@@ -1272,80 +1272,43 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 // ③ 剥 options 里残留的 launchDisplayId：
                 //    ①之后不该有 displayId，有就删，杜绝归属检查。
                 ComponentName cn = intent.getComponent();
-                String selfPkg = who != null ? who.getPackageName()
-                        : (srcAct != null ? srcAct.getPackageName() : null);
 
-                // 【批次 PIP·C0 v4】跨包启动改道（百度 naviauto → baidumaps.MapsActivity）：
-                // singleTask + 跨包 affinity（affinity 按类包名 = com.baidu.baidumaps，
-                // ≠ splash 所在 com.baidu.naviauto 任务）让「进调用方任务」的钉法
-                // 必然失败（系统静默丢弃 → splash 卡死在画布上，用户实测症状）；
-                // 带 displayId 又撞 vivo 归属检查（私有画布 FLAG_PRIVATE 非零直接拒）。
-                // 破局：取消原启动，把组件广播给海鸥 app —— app 以 root 身份
-                // `am start --display <画布> -n <组件>` 直启（root 带
-                // INTERNAL_SYSTEM_WINDOW 过归属检查，实测 MapsActivity 落进
-                // 画布上 splash 的任务、0 拒绝、正常渲染）。
-                // 同包启动不走这条路（剥 flag 进现有任务即可）。
+                // 【批次 PIP·C0 v6（技能坑#7 落地）】画布（非默认屏）上的启动分两类：
                 //
-                // 跨包判定注意：ComponentName.getPackageName() 返回的是 **intent 的
-                // package**（百度这里也是 com.baidu.naviauto），不是 Activity 类
-                // 所在的包 —— 必须按**类名的包前缀**判（com.baidu.baidumaps.MapsActivity
-                // 的类包 = com.baidu.baidumaps ≠ com.baidu.naviauto）。
-                if (cn != null && selfPkg != null && cn.getClassName() != null) {
-                    String cls = cn.getClassName();
-                    boolean samePkg = cls.equals(selfPkg) || cls.startsWith(selfPkg + ".");
-                    if (!samePkg) {
-                        Context bc = who != null ? who : srcAct;
-                        if (bc != null) {
-                            try {
-                                Intent b = new Intent(CanvasLaunchReceiver.ACTION);
-                                b.setPackage(Constants.SELF_PACKAGE);
-                                b.putExtra("component", cn.flattenToString());
-                                b.putExtra("displayId", id);
-                                bc.sendBroadcast(b);
-                                log("C0 跨包启动改道 app-root: " + cn.flattenToString());
-                            } catch (Throwable t) {
-                                log("C0 广播失败: " + t);
-                            }
-                        }
-                        param.setResult(null);   // 取消原启动（singleTask 跨包必然失败）
-                        return;
-                    }
-                }
-
+                // ① 带建任务 flag（NEW_TASK/CLEAR_TASK/NEW_DOCUMENT）—— 应用本意就是
+                //    「新建任务/新文档」（splash → 主 Activity 的典型形态）。这类启动
+                //    **剥 flag + 钉宿主任务的改写不可靠**：高德车机版实测钉法每秒打上、
+                //    系统静默丢弃、splash 死循环卡在启动动画（百度 v3 同病）——
+                //    技能坑 #7「别跟它较劲，走 root 改道」。改道路线：
+                //    取消原启动 + 广播组件给海鸥 app → app 以 root 身份
+                //    `am start --display <画布> -n <组件>` 直启（root 带
+                //    INTERNAL_SYSTEM_WINDOW 过归属检查，任务由系统正常创建落屏，
+                //    实测百度/高德两路都通）。
+                //
+                // ② 普通启动（不带建任务 flag）—— 系统默认把 Activity 投进调用方的
+                //    现有任务，不合成 displayId、不触发归属检查 —— 一律不干预。
                 int flags = intent.getFlags();
-                int strip = flags & (Intent.FLAG_ACTIVITY_NEW_TASK
+                boolean wantsNewTask = (flags & (Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_CLEAR_TASK
-                        | Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
-                if (strip != 0) {
-                    intent.setFlags(flags & ~strip);
+                        | Intent.FLAG_ACTIVITY_NEW_DOCUMENT)) != 0;
+                if (wantsNewTask) {
+                    Context bc = who != null ? who : srcAct;
+                    if (cn != null && bc != null) {
+                        try {
+                            Intent b = new Intent(CanvasLaunchReceiver.ACTION);
+                            b.setPackage(Constants.SELF_PACKAGE);
+                            b.putExtra("component", cn.flattenToString());
+                            b.putExtra("displayId", id);
+                            bc.sendBroadcast(b);
+                            log("C0 建任务启动改道 app-root: " + cn.flattenToString());
+                        } catch (Throwable t) {
+                            log("C0 广播失败: " + t);
+                        }
+                    }
+                    param.setResult(null);   // 取消原启动（建任务类改写在画布上不可靠）
+                    return;
                 }
-                // ② 钉宿主任务：Activity.getTaskId() 拿调用方（splash）的任务
-                int taskId = -1;
-                if (srcAct != null) {
-                    try {
-                        taskId = srcAct.getTaskId();
-                    } catch (Throwable ignored) {
-                    }
-                }
-                if (taskId >= 0 && optIdx >= 0) {
-                    if (options == null) {
-                        options = new Bundle();
-                        param.args[optIdx] = options;
-                    }
-                    options.remove(KEY_LAUNCH_DISPLAY_ID);
-                    options.putInt(KEY_LAUNCH_TASK_ID, taskId);
-                    log("C0 剥flag 0x" + Integer.toHexString(strip)
-                            + " 钉宿主任务 taskId=" + taskId + " ("
-                            + (cn != null ? cn.getClassName() : intent.toString()) + ")");
-                } else {
-                    if (options != null) {
-                        options.remove(KEY_LAUNCH_DISPLAY_ID);
-                    }
-                    if (strip != 0) {
-                        log("C0 剥建任务flag 0x" + Integer.toHexString(strip)
-                                + " → 进现有任务 (" + (cn != null ? cn.getClassName() : intent.toString()) + ")");
-                    }
-                }
+                // 普通启动：天然进现有任务，不干预（也不剥 options —— 本来就没 displayId）
             } catch (Throwable t) {
                 log("C0 execStartActivity 处理异常: " + t);
             }
