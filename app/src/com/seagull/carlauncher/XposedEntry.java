@@ -326,8 +326,9 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 // 个别 ROM 少一个重载，跳过即可
             }
         }
+        int[] vdSize0 = carVdSize();
         log("H6 密度伪装 dpi=" + dpi + " density=" + density
-                + (vdSize != null ? " 尺寸=" + vdSize[0] + "x" + vdSize[1] : ""));
+                + (vdSize0 != null ? " 尺寸=" + vdSize0[0] + "x" + vdSize0[1] : ""));
     }
 
     private static void applyDensity(DisplayMetrics dm, float density, int dpi) {
