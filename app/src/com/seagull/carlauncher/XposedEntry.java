@@ -137,6 +137,19 @@ public class XposedEntry implements IXposedHookLoadPackage {
      */
     private static final String PROP_DENSITY = "persist.seagull.car.density";
 
+    /**
+     * 车机显示适配：画布尺寸伪装值（批次 PIP·H6b）。格式 "WxH"（如 1114x798）。
+     * 空 = 关闭尺寸伪装（只伪装密度，与旧版一致）。
+     *
+     * 为什么需要：百度汽车版 ScreenUtils.getDefaultDisplay() 拿的是**主屏
+     * （display 0）** 的 metrics —— app 跑在画布上时它算出的还是手机屏的
+     * 1080x2400，地图按它排版就会被裁剪（画布只有 1113x798）。光改密度
+     * 不够，得把 widthPixels/heightPixels 也改成画布真实尺寸。
+     * 值由海鸥 app 部署成功时 root setprop 写入（MirrorSlot.finishDeploy），
+     * 模块在目标进程读后覆写 DisplayMetrics.widthPixels/heightPixels。
+     */
+    private static final String PROP_VDSIZE = "persist.seagull.car.vdsize";
+
     /** 空气开关关闭时不装任何 hook，方便真机对比排查。 */
     private static boolean enabled() {
         return "1".equals(prop(PROP_ENABLE, "1"));
@@ -284,14 +297,17 @@ public class XposedEntry implements IXposedHookLoadPackage {
      */
     private void hookDensitySpoof(ClassLoader cl) {
         final int dpi = carDensity();
-        if (dpi <= 0) return;   // 滑杆在 0 = 关闭，与默认行为完全一致
-        final float density = dpi / 160f;
+        // 画布尺寸伪装（H6b）：读不到就只伪装密度，行为与旧版一致
+        final int[] vdSize = carVdSize();
+        if (dpi <= 0 && vdSize == null) return;   // 两者都关 = 完全关闭
+        // density < 0 表示只伪装尺寸不动密度（滑杆关着但画布尺寸开着）
+        final float density = dpi > 0 ? dpi / 160f : -1f;
         XposedHelpers.findAndHookMethod("android.content.res.Resources", cl,
                 "getDisplayMetrics", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
                         try {
-                            applyDensity((DisplayMetrics) param.getResult(), density, dpi);
+                            applyDensity((DisplayMetrics) param.getResult(), density, dpi, vdSize);
                         } catch (Throwable ignored) {
                         }
                     }
@@ -303,7 +319,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
                             @Override
                             protected void afterHookedMethod(MethodHookParam param) {
                                 try {
-                                    applyDensity((DisplayMetrics) param.args[0], density, dpi);
+                                    applyDensity((DisplayMetrics) param.args[0], density, dpi, vdSize);
                                 } catch (Throwable ignored) {
                                 }
                             }
@@ -312,17 +328,46 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 // 个别 ROM 少一个重载，跳过即可
             }
         }
-        log("H6 密度伪装 dpi=" + dpi + " density=" + density);
+        log("H6 密度伪装 dpi=" + dpi + " density=" + density
+                + (vdSize != null ? " 尺寸=" + vdSize[0] + "x" + vdSize[1] : ""));
     }
 
-    private static void applyDensity(DisplayMetrics dm, float density, int dpi) {
+    private static void applyDensity(DisplayMetrics dm, float density, int dpi, int[] vdSize) {
         if (dm == null) return;
         // getDisplayMetrics 是热路径（每次布局 inflate 都走）：已经是目标值就别重复写，
         // 让钩子开销只剩一次字段比较。
-        if (dm.densityDpi == dpi && dm.density == density) return;
-        dm.density = density;
-        dm.densityDpi = dpi;
-        dm.scaledDensity = density;
+        if ((density < 0 || (dm.densityDpi == dpi && dm.density == density))
+                && (vdSize == null || (dm.widthPixels == vdSize[0] && dm.heightPixels == vdSize[1]))) {
+            return;
+        }
+        if (density >= 0) {
+            dm.density = density;
+            dm.densityDpi = dpi;
+            dm.scaledDensity = density;
+        }
+        // 尺寸伪装（H6b）：把主屏 metrics 的宽高改成画布真实尺寸，
+        // 让按 getRealMetrics/getDefaultDisplay 算布局的车机 app
+        // （百度 ScreenUtils 实测）在画布上按画布尺寸排版而不是按手机屏裁剪。
+        if (vdSize != null) {
+            dm.widthPixels = vdSize[0];
+            dm.heightPixels = vdSize[1];
+        }
+    }
+
+    /** 画布尺寸伪装值（prop "WxH"）。读不到/格式错返回 null（只伪装密度）。 */
+    private static int[] carVdSize() {
+        try {
+            String v = prop(PROP_VDSIZE, "");
+            v = v.trim();
+            int x = v.indexOf('x');
+            if (x <= 0 || x >= v.length() - 1) return null;
+            int w = Integer.parseInt(v.substring(0, x).trim());
+            int h = Integer.parseInt(v.substring(x + 1).trim());
+            if (w < 320 || w > 4096 || h < 240 || h > 4096) return null;
+            return new int[]{w, h};
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /** 密度滑杆值（0 = 关闭）。读不到按关闭处理，绝不乱改。 */
