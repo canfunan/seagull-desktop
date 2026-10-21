@@ -64,10 +64,15 @@ public class BallService extends Service {
 
     private void buildBall() {
         wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
-        int size = dp(this, BALL_DP);
+        LauncherModel m = cfg(this);
+        int size = dp(this, m != null && m.ballSize >= 32 && m.ballSize <= 96
+                ? m.ballSize : BALL_DP);
+        int alpha = m != null && m.ballAlpha >= 20 && m.ballAlpha <= 100
+                ? m.ballAlpha : 90;
+        int alpha255 = (int) (255 * alpha / 100f);
         ballView = new FrameLayout(this);
         ballImg = new ImageView(this);
-        ballImg.setImageDrawable(Skin.pill(0xCC1B5E20));
+        ballImg.setImageDrawable(Skin.pill((alpha255 << 24) | 0x1B5E20));
         ballImg.setPadding(dp(this, 13), dp(this, 13), dp(this, 13), dp(this, 13));
         ballView.addView(ballImg, new FrameLayout.LayoutParams(size, size));
         ballView.setContentDescription("悬浮球：单击回桌面，左滑返回，上滑最近任务，拖动移动");
@@ -160,6 +165,22 @@ public class BallService extends Service {
         super.onDestroy();
     }
 
+    /* ---------------- model 缓存（Lyrics 同款代际号模式） ---------------- */
+
+    private static LauncherModel cfgM;
+    private static int cfgVer = -1;
+
+    private static LauncherModel cfg(Context ctx) {
+        int v = LauncherModel.cfgVersion();
+        LauncherModel m = cfgM;
+        if (m == null || v != cfgVer) {
+            m = new LauncherModel(ctx, false);
+            cfgM = m;
+            cfgVer = v;
+        }
+        return m;
+    }
+
     /* ---------------- root 级自授权 + 开关 ---------------- */
 
     /** overlay 是否已放行（SYSTEM_ALERT_WINDOW appops）。 */
@@ -184,21 +205,21 @@ public class BallService extends Service {
         }
     }
 
-    /** 开关：prop persist.seagull.ball，默认开（"1"/空=开，"0"=关）。 */
+    /** 开关读 model.ballEnabled（设置页「显示小白点」同源）。 */
     public static boolean isOn(Context ctx) {
         try {
-            String v = SysOps.getProp(PROP_BALL);
-            if (v == null || v.trim().isEmpty()) return true;
-            return "1".equals(v.trim());
+            return cfg(ctx).ballEnabled;
         } catch (Throwable t) {
-            return true;
+            return false;
         }
     }
 
-    /** 开关切换（设置页用；立即起停）。 */
-    public static void setOn(Context ctx, boolean on) {
+    /** 开关切换（设置页 SettingsSectionActivity.ballBody 调用）：写 model + 起停服务。 */
+    public static void setEnabled(Context ctx, boolean on) {
         try {
-            SysOps.setProp(PROP_BALL, on ? "1" : "0");
+            LauncherModel m = cfg(ctx);
+            m.ballEnabled = on;
+            m.save();
         } catch (Throwable ignored) {
         }
         try {
@@ -207,6 +228,11 @@ public class BallService extends Service {
             else ctx.stopService(i);
         } catch (Throwable ignored) {
         }
+    }
+
+    /** prop 兼容入口（RootPanel 旧调用名）：等同 setEnabled。 */
+    public static void setOn(Context ctx, boolean on) {
+        setEnabled(ctx, on);
     }
 
     private static int dp(Context c, int v) {
