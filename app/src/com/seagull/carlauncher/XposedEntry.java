@@ -129,6 +129,21 @@ public class XposedEntry implements IXposedHookLoadPackage {
             return;
         }
 
+        // 系统框架（批次 PIP）：system_server 侧强制目标应用的 ActivityInfo 支持 PiP。
+        // manifest 的 supportsPictureInPicture 标志由 system_server 在装包时解析，
+        // 应用进程内的钩子够不着它 —— ActivityRecord.supportsPictureInPicture()
+        // = 设备支持 && 标准 activity 类型 && ActivityInfo.supportsPictureInPicture()，
+        // 前两者恒真，唯一卡点就是这个标志（已从本机 services.jar 反汇编坐实）。
+        // 高德两个版本都没声明该标志，所以 enterPictureInPictureMode 永远被拒。
+        if ("android".equals(pkg)) {
+            try {
+                hookPipFlag(lpp.classLoader);
+            } catch (Throwable t) {
+                log("系统框架 PiP 标志钩子失败: " + t);
+            }
+            return;
+        }
+
         if (isNetease(pkg)) {
             try {
                 log("已挂载 " + pkg + " → 注入 setLaunchDisplayId");
@@ -687,16 +702,71 @@ public class XposedEntry implements IXposedHookLoadPackage {
                         }
                     });
         }
+        // H5（批次 PIP）：按 Home/切走 = 直接进 PiP。onUserLeaveHint 只在用户主动
+        // 离开（Home/Recents/去别的 app）时触发，任务内跳 Activity 不触发 —— 正是
+        // 「随时挂载画中画」的入口。应用自己从不调 enterPictureInPictureMode，只能由
+        // 模块代劳；system_server 侧标志已强制打开（见 hookPipFlag），这里调用才会被放行。
+        XposedHelpers.findAndHookMethod(Activity.class, "onUserLeaveHint",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        Activity a = (Activity) param.thisObject;
+                        try {
+                            if (a.isInMultiWindowMode() || a.isInPictureInPictureMode()) return;
+                            PictureInPictureParams p = fullScreenParams(a);
+                            if (p == null) return;
+                            boolean ok = a.enterPictureInPictureMode(p);
+                            log("H5 onUserLeaveHint → enterPip=" + ok + " ("
+                                    + a.getClass().getName() + ")");
+                        } catch (Throwable t) {
+                            log("H5 onUserLeaveHint 进 PiP 失败: " + t);
+                        }
+                    }
+                });
         log("H3 hookPictureInPicture OK");
+    }
+
+    /**
+     * 系统框架侧（批次 PIP）：把目标应用的 ActivityInfo.supportsPictureInPicture()
+     * 强制返回 true。闸门链（本机 services.jar 反汇编确认）：
+     *   ActivityRecord.supportsPictureInPicture() = 设备支持 && 标准 activity 类型
+     *       && ActivityInfo.supportsPictureInPicture()
+     * 前两者对高德恒真，唯一卡点是 manifest 标志 —— 高德手机版/车机版都没声明，
+     * 导致 enterPictureInPictureMode 在 system_server 被静默拒绝（PiP 挂不上的根因）。
+     * 钩子体保持最小：只按包名放行，其它应用一律不碰。
+     */
+    private void hookPipFlag(ClassLoader cl) {
+        XposedHelpers.findAndHookMethod("android.content.pm.ActivityInfo", cl,
+                "supportsPictureInPicture", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            ActivityInfo ai = (ActivityInfo) param.thisObject;
+                            if (ai == null) return;
+                            String p = ai.packageName;
+                            if (p != null && hit(p)) {
+                                param.setResult(Boolean.TRUE);
+                            }
+                        } catch (Throwable ignored) {
+                            // 钩子体内绝不外抛：system_server 里抛异常会连带拖垮调用方
+                        }
+                    }
+                });
+        log("系统框架已挂载 → 目标应用 PiP 标志强制开启（TARGETS）");
     }
 
     private static PictureInPictureParams fullScreenParams(Activity a) {
         try {
             DisplayMetrics dm = a.getResources().getDisplayMetrics();
-            return new PictureInPictureParams.Builder()
+            PictureInPictureParams.Builder b = new PictureInPictureParams.Builder()
                     .setSourceRectHint(new Rect(0, 0, dm.widthPixels, dm.heightPixels))
-                    .setAspectRatio(new Rational(dm.widthPixels, dm.heightPixels))
-                    .build();
+                    .setAspectRatio(new Rational(dm.widthPixels, dm.heightPixels));
+            // Android 12+ 的 Home 自动进 PiP 要求参数里带 auto-enter（API 31 才有，
+            // 低版本静默跳过 —— onUserLeaveHint 那条路不依赖它）
+            if (Build.VERSION.SDK_INT >= 31) {
+                b.setAutoEnterEnabled(true);
+            }
+            return b.build();
         } catch (Throwable t) {
             return null;
         }
