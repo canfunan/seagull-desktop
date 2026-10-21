@@ -106,7 +106,6 @@ public class MediaListenerService extends NotificationListenerService {
                 Caps.exec("cmd notification allow_listener " + flat);
                 return;
             }
-            boolean granted = false;
             try {
                 Method m = NotificationManager.class.getMethod(
                         "setNotificationListenerAccessGranted", ComponentName.class, boolean.class);
@@ -129,7 +128,6 @@ public class MediaListenerService extends NotificationListenerService {
                     Log.w(TAG, "cmd allow_listener 失败，回落 setting: " + t);
                     try {
                         String cur = Caps.exec("settings get secure enabled_notification_listeners");
-                        String flat = cn.flattenToString();
                         String nv = (cur == null || cur.trim().isEmpty()
                                 || "null".equals(cur.trim())) ? flat
                                 : (cur.contains(flat) ? cur.trim() : cur.trim() + ":" + flat);
