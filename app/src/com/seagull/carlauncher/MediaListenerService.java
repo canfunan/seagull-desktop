@@ -327,6 +327,25 @@ public class MediaListenerService extends NotificationListenerService {
         return current;
     }
 
+    /**
+     * 指定包的播放态（底栏/大卡的播放按钮图标用）—— 读目标控制器自身的
+     * PlaybackState，不是全局 snap（snap 是「正在发声的那个」，挂载 A 放 B 时
+     * 按钮会显示反）。拿不到（目标没会话）回落 snap.playing。
+     */
+    public static boolean playing(String pkg) {
+        try {
+            MediaController c = controllerFor(pkg);
+            if (c != null) {
+                PlaybackState ps = c.getPlaybackState();
+                if (ps != null) {
+                    return ps.getState() == PlaybackState.STATE_PLAYING;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return snap.playing;
+    }
+
     /** 底栏播放器按钮：对指定包（挂载的那个）下发传输控制。 */
     public static void control(String pkg, String action) {
         try {
