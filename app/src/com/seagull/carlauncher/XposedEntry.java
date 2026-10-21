@@ -451,12 +451,9 @@ public class XposedEntry implements IXposedHookLoadPackage {
             log("H4 ActivityThread 拿不到: " + t);
             return;
         }
-        final java.lang.reflect.Field info;
-        try {
-            info = record.getDeclaredField("info");   // ActivityClientRecord.info（ActivityInfo）
-            info.setAccessible(true);
-        } catch (Throwable t) {
-            log("H4 ActivityClientRecord.info 拿不到: " + t);
+        final java.lang.reflect.Field info = activityInfoField(record);
+        if (info == null) {
+            log("H4 ActivityClientRecord 里找不到 ActivityInfo 字段（info/activityInfo 均无），跳过");
             return;
         }
         XposedHelpers.findAndHookMethod(atr, "performLaunchActivity", record,
@@ -473,6 +470,29 @@ public class XposedEntry implements IXposedHookLoadPackage {
                     }
                 });
         log("H4 hookConfigChangesAbsorb OK (吸收 size/orientation/density 重配置)");
+    }
+
+    /**
+     * H4 兜底：不同 ROM 的 ActivityThread$ActivityClientRecord 里 ActivityInfo 字段名不同——
+     * 老 ROM（<=13）叫 info，Android 14+ 叫 activityInfo（AOSP 改名）。
+     * 先按名字逐个试，再按字段类型扫一遍兜底；都拿不到返回 null，让 H4 体面跳过而不是炸钩子。
+     */
+    private static java.lang.reflect.Field activityInfoField(Class<?> record) {
+        for (String name : new String[] { "info", "activityInfo" }) {
+            try {
+                java.lang.reflect.Field f = record.getDeclaredField(name);
+                f.setAccessible(true);
+                return f;
+            } catch (Throwable ignored) {
+            }
+        }
+        for (java.lang.reflect.Field f : record.getDeclaredFields()) {
+            if (ActivityInfo.class.isAssignableFrom(f.getType())) {
+                f.setAccessible(true);
+                return f;
+            }
+        }
+        return null;
     }
 
     /**
