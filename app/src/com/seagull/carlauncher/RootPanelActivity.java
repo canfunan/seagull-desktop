@@ -283,6 +283,28 @@ public class RootPanelActivity extends BaseActivity {
             })));
         }
 
+        /* 车机显示适配（批次 CAR·H6）：密度滑杆。
+         * 车机版 UI 按车机屏密度设计（160/213/240dpi 常见），手机 480dpi 下元素
+         * 尺寸全错。值经 root setprop 写 persist.seagull.car.density，模块
+         * （XposedEntry H6）在目标应用进程覆写 DisplayMetrics 密度。
+         * 0 = 关闭（默认，与没有这功能完全一致）；改了重开车机应用生效。 */
+        col.addView(section("车机显示适配（密度滑杆）"));
+        int curDpi = 0;
+        try {
+            String dv = SysOps.getProp("persist.seagull.car.density");
+            if (!dv.isEmpty()) curDpi = Integer.parseInt(dv);
+        } catch (Throwable ignored) {
+        }
+        col.addView(slider(0, 480, curDpi, v ->
+                op("车机密度=" + v, () -> SysOps.setProp("persist.seagull.car.density", String.valueOf(v)))));
+        TextView dpiHint = new TextView(this);
+        dpiHint.setText("当前 " + curDpi + " dpi" + (curDpi == 0 ? "（关闭）" : "")
+                + "　常用：160 / 213 / 240（车机屏）　0 = 关闭");
+        dpiHint.setTextColor(Skin.c(R.color.text));
+        dpiHint.setTextSize(12);
+        dpiHint.setPadding(dp(4), 0, 0, dp(4));
+        col.addView(dpiHint);
+
         log = new TextView(this);
         log.setTextColor(Skin.c(R.color.warn));
         log.setTextSize(11);
