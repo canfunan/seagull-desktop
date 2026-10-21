@@ -1370,6 +1370,10 @@ public final class LauncherModel {
             ballEnabled = o.optBoolean("ball", false);
             ballX = o.optInt("ballX", 40);
             ballY = o.optInt("ballY", -1);
+            // 复盘 7：save 写 5 字段（含 size/alpha），旧 load 只读 3 个 ——
+            // 球的大小/透明度在设置里改了保存，重载就丢回默认
+            ballSize = o.optInt("ballSize", 48);
+            ballAlpha = o.optInt("ballAlpha", 90);
             ballSize = o.optInt("ballSize", 48);
             ballAlpha = o.optInt("ballAlpha", 90);
 
