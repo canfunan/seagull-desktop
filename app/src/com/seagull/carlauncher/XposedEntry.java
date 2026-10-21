@@ -235,15 +235,24 @@ public class XposedEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("H4 失败: " + t);
         }
-        // C0 总闸（批次 AG）：Instrumentation.execStartActivity 是所有 Activity 启动
-        // 的必经终点，一条 hook 覆盖全部入口。只对 curated 名单生效（curated = TARGETS
-        // ∪ CAR_PKGS）—— 给未知应用注入 displayId 有破坏风险，启发式命中的不给。
+        // C0 总闸（批次 AG→PIP 重写）：见 hookExecStartActivity 上方注释。
         if (curated) {
             try {
                 hookExecStartActivity();
             } catch (Throwable t) {
                 log("C0 失败: " + t);
             }
+        }
+        // H7（批次 PIP）：钉住画布上 Activity 的自我 finish。splash 类 Activity
+        // 「startActivity 后立即 finish」是车机 app 的常态（百度 SlashActivity 实测：
+        // startMainMap 之后 splash 就退了）—— splash 一死，紧随其后被剥了
+        // NEW_TASK 的启动找不到宿主任务，只能新建任务落**默认屏**（黑屏变错屏的
+        // 根因）。钉住 finish 后 splash 常驻，所有后续启动进它的任务，
+        // 天然落在画布上，且 back 键回 splash 的体验也保住了。
+        try {
+            hookNoFinishOnCanvas();
+        } catch (Throwable t) {
+            log("H7 失败: " + t);
         }
         // D 段（批次 AA）：应用进程内的「窄屏强制竖屏」配置改写（网易云车机版
         // IotActivityBase.attachBaseContext 宽高比 ≤1.3 时 applyOverrideConfiguration
@@ -1100,7 +1109,6 @@ public class XposedEntry implements IXposedHookLoadPackage {
      *   · 目标是别的应用（外跳浏览器/分享）→ 不注入，交给系统正常解析。
      */
     private void hookExecStartActivity() {
-        // 【批次 AG】桩 jar（api-82）没有 XposedBridge.hookAllMethods 便捷 API，
         // 手动枚举同名重载逐个 hookMethod —— 顺带把「某条重载挂不上」的失败
         // 收敛到单条日志，不再牵连其余重载。
         int n = 0;
@@ -1116,6 +1124,38 @@ public class XposedEntry implements IXposedHookLoadPackage {
         }
         if (n == 0) throw new IllegalStateException("execStartActivity 一条重载都没挂上");
         log("C0 hookExecStartActivity OK (" + n + " 个重载)");
+    }
+
+    /**
+     * H7（批次 PIP）：钉住画布上 Activity 的自我 finish。
+     *
+     * 为什么：splash 类 Activity「startActivity 之后立即 finish」是车机 app
+     * 的常态（百度 SlashActivity.startMainMap 之后 splash 就退）。而 C0 把
+     * 后续启动的 NEW_TASK 剥掉后，启动要投递到**调用方的现有任务**——splash
+     * 一死，投递目标消失，系统只能新建任务落**默认屏**（地图在主屏渲染、
+     * 画布黑屏/错屏的根因）。钉住 finish 后 splash 常驻画布，所有启动进它的
+     * 任务天然落画布；back 键回 splash 的导航体验也保住。
+     *
+     * 范围：只钉非默认屏（画布）上的 Activity；主屏行为零影响。
+     * 代价：个别 app 用 finish 做正常流程收尾（登录页跳完自退）会被钉住，
+     * 留在返回栈里——能用，后续按需收紧（如只钉任务根 Activity）。
+     */
+    private void hookNoFinishOnCanvas() {
+        XposedHelpers.findAndHookMethod(Activity.class, "finish",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            Activity a = (Activity) param.thisObject;
+                            if (displayIdOf(a) > 0) {
+                                param.setResult(null);
+                                log("H7 拦截 finish: " + a.getClass().getName());
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+        log("H7 hookNoFinishOnCanvas OK");
     }
 
     /** C0 的 hook 体（在 hookExecStartActivity 里逐重载挂载）。 */
