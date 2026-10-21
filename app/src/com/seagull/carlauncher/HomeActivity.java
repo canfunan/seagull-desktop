@@ -84,6 +84,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         // 空会话列表、横幅整条隐藏。反射直授，系统随即重绑 MediaListenerService，
         // 全程无 UI 无重启。
         MediaListenerService.ensureAccess(this);
+        KeyMapService.ensureAccess(this);   // 按键映射 root 授权（野菜同款无障碍通道）
         setContentView(buildUi());
         refreshMini();
         ui.postDelayed(tick, 30_000L);
