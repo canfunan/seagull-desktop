@@ -75,6 +75,8 @@ public class DockBar extends LinearLayout {
     private final LinearLayout media;
     private final ImageView mediaIcon;
     private final TextView mediaTitle;
+    private final TextView lyricLine;      // 批次 MB：歌词行走马灯
+    private String controlPkg = "";        // 批次 MB：横幅控制的包（挂载的那个）
     private final GlyphIconView btnPlay;
     private final TextView netLabel;
     private final BatteryView battery;
@@ -160,6 +162,16 @@ public class DockBar extends LinearLayout {
         mediaTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
         mediaTitle.setPadding(dp(c, 7), 0, dp(c, 4), 0);
         titleCol.addView(mediaTitle, new LinearLayout.LayoutParams(-2, -2));
+        lyricLine = new TextView(c);
+        lyricLine.setTextColor(0x99FFFFFF);
+        lyricLine.setTextSize(11);
+        lyricLine.setSingleLine(true);
+        lyricLine.setEllipsize(android.text.TextUtils.TruncateAt.MARQUEE);
+        lyricLine.setMarqueeRepeatLimit(-1);   // 无限滚动
+        lyricLine.setHorizontallyScrolling(true);
+        lyricLine.setPadding(dp(c, 7), dp(c, 1), dp(c, 4), 0);
+        lyricLine.setVisibility(GONE);
+        titleCol.addView(lyricLine, new LinearLayout.LayoutParams(-2, -2));
         progTrack = new FrameLayout(c);
         progTrack.setBackground(Skin.round(0x33FFFFFF, 3));
         progFill = new View(c);
@@ -176,17 +188,20 @@ public class DockBar extends LinearLayout {
 
         GlyphIconView btnPrev = new GlyphIconView(c, G_PREV).scale(0.74f);
         btnPrev.setContentDescription("上一曲");
-        btnPrev.setOnClickListener(v -> MediaListenerService.prev());
+        btnPrev.setOnClickListener(v ->
+                MediaListenerService.control(controlPkg, "prev"));
         media.addView(btnPrev, new LinearLayout.LayoutParams(dp(c, 34), dp(c, 34)));
 
         btnPlay = new GlyphIconView(c, G_PAUSE).scale(0.74f);
         btnPlay.setContentDescription("播放/暂停");
-        btnPlay.setOnClickListener(v -> MediaListenerService.playPause());
+        btnPlay.setOnClickListener(v ->
+                MediaListenerService.control(controlPkg, "playpause"));
         media.addView(btnPlay, new LinearLayout.LayoutParams(dp(c, 34), dp(c, 34)));
 
         GlyphIconView btnNext = new GlyphIconView(c, G_NEXT).scale(0.74f);
         btnNext.setContentDescription("下一曲");
-        btnNext.setOnClickListener(v -> MediaListenerService.next());
+        btnNext.setOnClickListener(v ->
+                MediaListenerService.control(controlPkg, "next"));
         LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(dp(c, 34), dp(c, 34));
         nlp.leftMargin = dp(c, 2);
         media.addView(btnNext, nlp);
