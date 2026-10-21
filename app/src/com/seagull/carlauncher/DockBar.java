@@ -285,7 +285,10 @@ public class DockBar extends LinearLayout {
     /** 媒体横幅：没会话整条隐藏不占位；有则显示 App 图标 + 歌名 + 播放态。
      *  窄屏放不下时横幅自动让位（suppress），同一条媒体不再反复冒头；换歌或
      *  Dock 尺寸变化后重新尝试。 */
-    public void bindMedia(MediaListenerService.Snap s) {
+    /** 媒体横幅（批次 MB 升级为完整播放器）：歌名 + 歌词行走马灯 + 上下曲/播放暂停。
+     * @param targetPkg 要控制的包（画中画挂载的那个；null = 当前会话兜底）——
+     *        「挂载哪个播放器就控制哪个播放器」。 */
+    public void bindMedia(MediaListenerService.Snap s, String targetPkg) {
         if (s == null || s.pkg == null || s.pkg.isEmpty()) {
             lastSnap = null;
             media.setVisibility(GONE);
@@ -295,6 +298,7 @@ public class DockBar extends LinearLayout {
         lastSnap = s;
         String key = s.pkg + "|" + s.title;
         currentKey = key;
+        controlPkg = targetPkg != null && !targetPkg.isEmpty() ? targetPkg : s.pkg;
         media.setVisibility(VISIBLE);
         if (!key.equals(coverKey)) {   // 换曲才复位图标；同曲保封面
             coverKey = null;
@@ -306,6 +310,14 @@ public class DockBar extends LinearLayout {
                 ? s.title + (s.artist != null && !s.artist.isEmpty() ? " · " + s.artist : "")
                 : s.pkg;
         mediaTitle.setText(line);
+        // 歌词行走马灯（批次 MB）：有歌词才显示，marquee 无限滚动
+        if (s.lyric != null && !s.lyric.isEmpty()) {
+            lyricLine.setText(s.lyric);
+            lyricLine.setVisibility(VISIBLE);
+            lyricLine.setSelected(true);
+        } else {
+            lyricLine.setVisibility(GONE);
+        }
         btnPlay.setKind(s.playing ? G_PAUSE : G_PLAY);
         removeCallbacks(mediaTick);
         post(mediaTick);
