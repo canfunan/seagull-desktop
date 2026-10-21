@@ -290,6 +290,20 @@
             </intent-filter>
         </receiver>
 
+        <!-- 按键映射（批次 KM，野菜 KeyMapService 同款）：AccessibilityService
+             拦截硬件键改派动作（音量键切歌/耳机键播放暂停/回桌面）。 -->
+        <service
+            android:name=".KeyMapService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <!-- 画布跨包启动改道（批次 PIP）：模块在目标应用进程里取消必然失败的
              跨包启动，广播组件过来，本接收器以 root 直启到画布屏。 -->
         <receiver
