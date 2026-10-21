@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 按键映射服务配置（批次 KM，野菜 KeyMapService 同款）：
+     canRequestFilterKeyEvents = 拿到原始硬件键事件并吃掉的关键开关 -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:canRequestFilterKeyEvents="true"
+    android:description="车机桌面按键映射：音量键切歌、耳机键播放暂停" />
