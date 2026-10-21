@@ -413,6 +413,25 @@ public final class SysOps {
         return sb.toString();
     }
 
+    /* ---------------- 系统属性（车机显示适配滑杆用） ---------------- */
+
+    /** 写 persist.* 属性（root setprop）。模块侧（XposedEntry）用反射读同一 key。 */
+    public static R setProp(String key, String value) {
+        if (key == null || !key.matches("[a-zA-Z][a-zA-Z0-9._]*")
+                || value == null || !value.matches("[a-zA-Z0-9._-]*")) {
+            return new R(false, "非法 key/value");
+        }
+        return run("setprop " + key + " " + value);
+    }
+
+    /** 读系统属性（root getprop，空串 = 没设过）。 */
+    public static String getProp(String key) {
+        if (key == null || !key.matches("[a-zA-Z][a-zA-Z0-9._]*")) return "";
+        if (!Caps.hasRoot()) return "";
+        String out = Caps.exec("getprop " + key);
+        return out == null ? "" : out.trim();
+    }
+
     public static String tempC() {
         // 无网络下拉系统热区温度，保证组件不空
         try {
