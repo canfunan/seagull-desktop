@@ -84,8 +84,14 @@ public class BallService extends Service {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.TOP | Gravity.START;
-        lp.x = startX = dp(this, 12);
-        lp.y = startY = dp(this, 240);
+        // 位置：model.ballX/Y（-1 = 默认左上角偏下；设置页「回到默认位置」重置）
+        if (m != null && m.ballX >= 0 && m.ballY >= 0) {
+            lp.x = startX = m.ballX;
+            lp.y = startY = m.ballY;
+        } else {
+            lp.x = startX = dp(this, 12);
+            lp.y = startY = dp(this, 240);
+        }
 
         ballView.setOnTouchListener(new View.OnTouchListener() {
             @Override
@@ -122,6 +128,16 @@ public class BallService extends Service {
                             float dy = e.getRawY() - downY;
                             startX = lp.x;
                             startY = lp.y;
+                            // 位置写回 model（设置页「回到默认位置」可重置）
+                            try {
+                                LauncherModel mm = cfg(BallService.this);
+                                if (mm != null) {
+                                    mm.ballX = startX;
+                                    mm.ballY = startY;
+                                    mm.save();
+                                }
+                            } catch (Throwable ignore) {
+                            }
                             if (Math.abs(dx) > dp(BallService.this, 60)
                                     && Math.abs(dx) > Math.abs(dy)) {
                                 if (dx < 0) goBack();   // 左滑 = 返回
