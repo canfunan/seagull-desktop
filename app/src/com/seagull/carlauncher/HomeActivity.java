@@ -79,6 +79,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             toast("检测到连续崩溃，画布已恢复默认布局");
         }
         lastSkin = skinSignature();
+        carMode = getIntent() != null && getIntent().getBooleanExtra("car_mode", false);
         selfReport();
         // 通知监听自授权（野菜同款）：底栏音乐条的数据源 —— 没授权系统只返回
         // 空会话列表、横幅整条隐藏。反射直授，系统随即重绑 MediaListenerService，
@@ -281,6 +282,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     /** 批次 BB：true = 底部导航栏已收起（单应用模式自动收，回桌面自动展开）。 */
     private boolean dockCollapsed;
+    /** 车机投屏模式（vivo互联车机屏）：部署时带 car_mode=true —— 板上车机屏
+     *  会做 VD 二次合成（每帧多一层全屏合成），叠加 vivo 的 ScreenRecord 采集
+     *  就是双倍合成、掉帧卡顿。车机屏默认纯桌面（壁纸+底栏+音乐条，轻量），
+     *  要挂车机 app 再手动开板。 */
+    private boolean carMode;
 
     /* ------------------------- UI 构建 ------------------------- */
 
