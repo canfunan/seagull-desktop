@@ -493,7 +493,12 @@ public class XposedEntry implements IXposedHookLoadPackage {
                                 // （home 角色不丢、框架不踢），CarHomeActivity 作为同任务
                                 // 第二 Activity 进入。
                                 android.app.ActivityOptions ao = android.app.ActivityOptions.makeBasic();
-                                ao.setLaunchTaskId(act.getTaskId());
+                                try {
+                                    // setLaunchTaskId 是 @hide（公开 jar 没有）—— 反射调
+                                    ao.getClass().getMethod("setLaunchTaskId", int.class)
+                                            .invoke(ao, act.getTaskId());
+                                } catch (Throwable ignored) {
+                                }
                                 act.startActivity(i, ao.toBundle());
                                 log("vivo 车机启动器 → 海鸥 CarHomeActivity 已投入任务 "
                                         + act.getTaskId());
