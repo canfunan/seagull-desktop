@@ -310,6 +310,11 @@
             android:name=".BallService"
             android:exported="false" />
 
+        <!-- 底栏遮盖层（vivo互联投屏）：overlay 盖住 vivo 车机屏底栏 104px -->
+        <service
+            android:name=".ToolBarCoverService"
+            android:exported="false" />
+
         <!-- 按键映射（批次 KM，野菜 KeyMapService 同款）：AccessibilityService
              拦截硬件键改派动作（音量键切歌/耳机键播放暂停/回桌面）。 -->
         <service
