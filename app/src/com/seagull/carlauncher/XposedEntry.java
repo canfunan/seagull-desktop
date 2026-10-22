@@ -203,12 +203,37 @@ public class XposedEntry implements IXposedHookLoadPackage {
         }
 
         if ("com.vivo.car.networking".equals(pkg)) {
-            // vivo 车机屏底栏（NAVIGATION_BAR 型悬浮窗）拦截 + 车机屏任务保活挂钩
+            // vivo 车机屏底栏（NAVIGATION_BAR 型悬浮窗）：
+            //   正路（classes5.dex 反编译坐实）：kp/q = FullScreenModeManager，
+            //     i(pkg,cls)/j(pkg,cls) 返回 false → post AppFullScreenEv(false)
+            //     → ir/u1.z3(false) → T3(false) 底栏滑出隐藏（vivo 原生逻辑）
+            //   兜底：addView type==2019 直接拦（防正路漏判的场景）
             try {
                 hookVivoCarToolBar(lpp.classLoader);
                 log("已挂载 vivo.car.networking → 车机底栏拦截");
             } catch (Throwable t) {
                 log("vivo 车机底栏钩子失败: " + t);
+            }
+            try {
+                hookVivoFullScreenMode(lpp.classLoader);
+                log("已挂载 vivo.car.networking → 底栏显隐正路(kp/q)");
+            } catch (Throwable t) {
+                log("底栏显隐正路失败: " + t);
+            }
+            return;
+        }
+
+        if ("com.baidu.carlife.vivo".equals(pkg)) {
+            // CarLife 投屏客户端（vivo 版）：onCastPrepared(displayId) = vivo 通过
+            // AIDL 告知车机屏就绪（RemoteCastCallback ← MixScreenManager ←
+            // BaseScreenImpl.onDisplayCreate）。事件驱动推海鸥桌面上车机屏——
+            // 比 MediaListenerService 的 5s 轮询快得多，且 displayId 是 vivo
+            // 官方给的，不用 dumpsys 猜。
+            try {
+                hookCarlifeCastPrepared(lpp.classLoader);
+                log("已挂载 baidu.carlife.vivo → 车机屏就绪事件驱动");
+            } catch (Throwable t) {
+                log("CarLife 事件驱动失败: " + t);
             }
             return;
         }
@@ -511,6 +536,77 @@ public class XposedEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             log("vivo 车机启动器 hook 安装失败: " + t);
         }
+    }
+
+    /**
+     * 底栏显隐正路（复盘 classes5.dex 坐实）：
+     *   kp/q = FullScreenModeManager，i(pkg,cls) 返回 true → post
+     *   AppFullScreenEv(true) → 底栏显示（半透明 mask）；返回 false →
+     *   AppFullScreenEv(false) → ir/u1.z3(false)→T3(false) 底栏滑出隐藏。
+     *   海鸥前台时强制 false —— vivo 自己的隐藏逻辑照常走（动画/状态机不坏），
+     *   只是判定结果改一下，零副作用。j(pkg,cls) 是第二判定入口，一起拦。
+     */
+    private void hookVivoFullScreenMode(ClassLoader cl) {
+        XposedHelpers.findAndHookMethod("kp.q", cl,
+                "i", String.class, String.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            Object a0 = param.args[0];
+                            if (a0 != null && "com.seagull.carlauncher".equals(a0.toString())) {
+                                param.setResult(false);
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+        XposedHelpers.findAndHookMethod("kp.q", cl,
+                "j", String.class, String.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            Object a0 = param.args[0];
+                            if (a0 != null && "com.seagull.carlauncher".equals(a0.toString())) {
+                                param.setResult(false);
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+    }
+
+    /**
+     * CarLife 投屏就绪事件（com.baidu.carlife.vivo 普通 app，注得进）：
+     *   RemoteCastCallback.onCastPrepared(displayId) = vivo AIDL 告知车机屏
+     *   displayId。after 里直接 root 推海鸥 HomeActivity 上那个屏 ——
+     *   连车机即接线，用户零操作（解决「不可能每次都要你接线」）。
+     *   带 --ez car_mode true：HomeActivity 车机模式 → ToolBarCoverService
+     *   自动起 + 不建画中画板。守护线程（MediaListenerService）继续兜底。
+     */
+    private void hookCarlifeCastPrepared(ClassLoader cl) {
+        XposedHelpers.findAndHookMethod("com.baidu.carlife.core.mix.RemoteCastCallback", cl,
+                "onCastPrepared", int.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object r = param.getResult();
+                            if (r != null) return;
+                            int did = (Integer) param.args[0];
+                            if (did <= 0) return;
+                            String out = Caps.exec(
+                                    "am start --display " + did
+                                  + " --ez car_mode true -f 0x18200000"
+                                  + " -n com.seagull.carlauncher/.HomeActivity");
+                            log("CarLife 车机屏就绪 d" + did + " → 海鸥桌面已上屏 | "
+                                    + (out == null ? "null" : out.trim().replace('\n', ' ')));
+                        } catch (Throwable t) {
+                            log("CarLife 上屏失败: " + t);
+                        }
+                    }
+                });
     }
 
     private void hookVivoCarToolBar(ClassLoader cl) {

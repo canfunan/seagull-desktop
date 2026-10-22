@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    LSPosed 模块默认作用域。必须与 XposedEntry 的目标列表保持一致：
+    LSPosed 管理器按这份名单预勾选，hook 侧按名单放行。
+    SystemUI 是 PiP 尺寸缩放 hook 的宿主进程，必须勾选。
+-->
+<resources>
+    <string-array name="xposed_scope">
+        <!-- SystemUI 是 AmapPip 尺寸缩放 hook 的宿主进程，必须勾选 -->
+        <item>com.android.systemui</item>
+        <item>com.autonavi.minimap</item>
+        <item>com.autonavi.amapauto</item>
+        <item>com.baidu.BaiduMap</item>
+        <item>com.tencent.map</item>
+        <item>com.netease.cloudmusic</item>
+        <item>com.netease.cloudmusic.iot</item>
+        <item>com.tencent.qqmusic</item>
+        <!-- 车机版通用名单（批次 CAR）：命中 CAR_PKGS，全套通用钩子 + PiP -->
+        <item>com.tencent.qqmusiccar</item>
+        <item>com.kugou.android.auto</item>
+        <item>cn.kuwo.kwmusiccarsnp</item>
+        <item>com.baidu.naviauto</item>
+        <!-- 车联助手 3.0.0 同款条目（批次 W 对齐）：手机互联 kit + 洛雪 -->
+        <item>com.miui.carlink</item>
+        <item>com.baidu.carlife.xiaomi</item>
+        <item>com.baidu.carlife.vivo</item>
+        <item>com.vivo.car.networking</item>
+        <item>com.vivo.carlauncher</item>
+        <item>com.samsung.android.carlink</item>
+        <item>com.luna.music</item>
+    </string-array>
+</resources>
