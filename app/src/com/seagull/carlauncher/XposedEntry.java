@@ -190,6 +190,17 @@ public class XposedEntry implements IXposedHookLoadPackage {
         // 【包名坑】AOSP 的 system_server 包名是 "android"，但 vivo 等 ROM 叫
         // "system"（实测本机 logcat: handleLoadPackage: system）—— 三个名字全匹配，
         // 否则钩子静默不装、PiP 永远挂不上，重启也不管用（2026-10-21 实测踩实）。
+        if ("com.vivo.car.networking".equals(pkg)) {
+            // vivo 车机屏底栏（NAVIGATION_BAR 型悬浮窗）拦截 + 车机屏任务保活挂钩
+            try {
+                hookVivoCarToolBar(lpp.classLoader);
+                log("已挂载 vivo.car.networking → 车机底栏拦截");
+            } catch (Throwable t) {
+                log("vivo 车机底栏钩子失败: " + t);
+            }
+            return;
+        }
+
         if ("android".equals(pkg) || "system".equals(pkg) || "system_server".equals(pkg)) {
             try {
                 hookPipFlag(lpp.classLoader);
@@ -413,6 +424,39 @@ public class XposedEntry implements IXposedHookLoadPackage {
     // 逐条对齐 xphook.hookAmapPip。原理：任意应用进 PiP 时 SystemUI 调
     // PipBoundsAlgorithm 算窗口大小，我们只在「当前 PiP 是高德」时把结果放大到
     // 屏短边的 60%。带锚点 Activity 的场景下，这就等价于「可设置具体大小」。
+
+    /**
+     * vivo 车机屏底栏拦截（vivo互联投屏）：vivo.car.networking 往车机屏加一条
+     * TYPE_NAVIGATION_BAR(2019) 的系统级导航栏窗口（gr=BOTTOM 1280x104，
+     * 窗口标题 VivoCarToolBar）—— 海鸥桌面上车机屏时它压在底下碍事。
+     * hook 它的 WindowManagerImpl.addView：NAVIGATION_BAR 型一律 setResult(null)
+     * 拦掉 —— 窗口根本不会被加上（比事后隐藏干净）。
+     * 代价：车机屏失去 vivo 自己的导航按钮（返回/主页）—— 用户明确要求去掉。
+     */
+    private void hookVivoCarToolBar(ClassLoader cl) {
+        try {
+            XposedHelpers.findAndHookMethod("android.view.WindowManagerImpl", cl,
+                    "addView", android.view.View.class, android.view.ViewGroup.LayoutParams.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                Object lp = param.args[1];
+                                if (lp instanceof android.view.WindowManager.LayoutParams) {
+                                    int type = ((android.view.WindowManager.LayoutParams) lp).type;
+                                    if (type == android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR) {
+                                        param.setResult(null);
+                                        log("vivo 车机底栏已拦截（NAVIGATION_BAR addView）");
+                                    }
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+        } catch (Throwable t) {
+            log("vivo 车机底栏 hook 安装失败: " + t);
+        }
+    }
 
     private void hookAmapPip(ClassLoader cl) {
         hookSetBoundsStateForEntry(cl);
