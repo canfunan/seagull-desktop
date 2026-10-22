@@ -487,10 +487,16 @@ public class XposedEntry implements IXposedHookLoadPackage {
                                 Intent i = new Intent();
                                 i.setComponent(new ComponentName("com.seagull.carlauncher",
                                         "com.seagull.carlauncher.CarHomeActivity"));
-                                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                                        | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-                                act.startActivity(i);
-                                log("vivo 车机启动器 → 海鸥 CarHomeActivity 已拉入同任务");
+                                // 按任务 ID 投进 vivo 现有车机任务（setLaunchTaskId）——
+                                // affinity 跨包带冒号非法（PackageManager 拒装），
+                                // 这条路直接指定目标任务，任务 base 仍是 CarLauncherActivity
+                                // （home 角色不丢、框架不踢），CarHomeActivity 作为同任务
+                                // 第二 Activity 进入。
+                                android.app.ActivityOptions ao = android.app.ActivityOptions.makeBasic();
+                                ao.setLaunchTaskId(act.getTaskId());
+                                act.startActivity(i, ao.toBundle());
+                                log("vivo 车机启动器 → 海鸥 CarHomeActivity 已投入任务 "
+                                        + act.getTaskId());
                             } catch (Throwable t) {
                                 log("vivo 车机启动器接管失败: " + t);
                             }
