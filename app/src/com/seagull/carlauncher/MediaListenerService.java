@@ -459,30 +459,24 @@ public class MediaListenerService extends NotificationListenerService {
         if (carWatchThread != null) carWatchThread.interrupt();
     }
 
-    /** 一轮巡检：车机屏在而海鸥桌面不在 → root 重推。 */
+    /** 一轮巡检：车机屏在而海鸥桌面不在 → root 重推（复盘 9c6aa05：单 fork + 精确匹配 + 静默）。 */
     private static void guardCarScreen() {
         if (appCtx == null) return;
-        // 1. 车机屏在不在（vivo_car_screen 的 displayId）
-        String disp = Caps.exec("dumpsys display | grep -B8 vivo_car_screen | grep -oE 'displayId [0-9]+' | tail -1 | grep -oE '[0-9]+'");
-        if (disp == null || disp.trim().isEmpty()) return;   // 车机没连，不用管
-        final int did;
-        try {
-            did = Integer.parseInt(disp.trim());
-        } catch (NumberFormatException e) {
-            return;
+        // 一条 shell 同时完成：取车机屏 ID → 桌面在不在（精确 dID 边界匹配）→
+        // 不在就重推并回声。车机屏不在（输出空）直接返回。
+        // 相比原实现：① 两轮 su fork 合一（5s 一轮省一半 root 开销）
+        // ② 'd'$D'( |$)' 精确匹配屏 ID（原 '.*d90003' 会误匹配 d190003）
+        // ③ 只在真重推时打日志（原来每轮都打，刷屏）
+        String out = Caps.exec(
+                "D=$(dumpsys display | grep -oE 'displayId [0-9]+' | tail -1 | grep -oE '[0-9]+'); "
+              + "if [ -z \"$D\" ]; then exit 0; fi; "
+              + "N=$(dumpsys activity activities | grep -cE 'com.seagull.carlauncher/.HomeActivity[^0-9]* d'$D'( |$)'); "
+              + "if [ \"$N\" = \"0\" ]; then "
+              + "am start --display $D -f 0x18800000 -n com.seagull.carlauncher/.HomeActivity; "
+              + "echo REDEPLOYED_d$D; fi");
+        if (out != null && out.contains("REDEPLOYED_d")) {
+            Log.i(TAG, "车机守护：桌面掉了 → 自动重推 | " + out.trim());
         }
-        if (did <= 0) return;
-        // 2. 海鸥桌面在不在车机屏上
-        String acts = Caps.exec("dumpsys activity activities | grep -c 'com.seagull.carlauncher/.HomeActivity.*d" + did + "'");
-        boolean onScreen = acts != null && acts.trim().startsWith("0") == false
-                && !"0".equals(acts.trim());
-        if (onScreen) return;   // 在，不用管
-        // 3. 不在 → root 重推（自动接线 / 掉了自愈）
-        String out = Caps.exec("am start --display " + did
-                + " -f 0x18800000 -n com.seagull.carlauncher/.HomeActivity");
-        Log.i(TAG, "车机守护：桌面不在车机屏 d" + did + " → 已重推 | "
-                + (out == null ? "null" : out.trim().replace('
-', ' ')));
     }
 
     private static boolean snapshotPlaying() { return snap.playing; }
