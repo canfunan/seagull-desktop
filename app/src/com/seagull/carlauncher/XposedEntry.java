@@ -453,14 +453,37 @@ public class XposedEntry implements IXposedHookLoadPackage {
      * 内容已经是海鸥桌面 —— 海鸥自己的外来任务不再被 CLOSE。
      */
     private void hookVivoCarLauncher(ClassLoader cl) {
+        // onCreate 声明在父类（实测 NoSuchMethodError: #exact 只匹配本类声明）——
+        // hook 父类的 onCreate + 类名检查只放行 CarLauncherActivity
+        Class<?> actCls = null;
         try {
-            Class<?> actCls = cl.loadClass("com.vivo.carlauncher.activity.CarLauncherActivity");
-            XposedHelpers.findAndHookMethod(actCls, "onCreate",
+            actCls = cl.loadClass("com.vivo.carlauncher.activity.CarLauncherActivity");
+        } catch (Throwable t) {
+            log("vivo 车机启动器类加载失败: " + t);
+            return;
+        }
+        Class<?> hookCls = actCls;
+        try {
+            java.lang.reflect.Method om = actCls.getDeclaredMethod("onCreate", android.os.Bundle.class);
+            hookCls = actCls;   // 本类就有，直接钩
+        } catch (NoSuchMethodException e) {
+            hookCls = actCls.getSuperclass();   // 父类声明的，钩父类
+        } catch (Throwable ignored) {
+        }
+        if (hookCls == null) {
+            log("vivo 车机启动器父类为空，跳过");
+            return;
+        }
+        try {
+            XposedHelpers.findAndHookMethod(hookCls, "onCreate",
                     android.os.Bundle.class, new XC_MethodHook() {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
                                 android.app.Activity act = (android.app.Activity) param.thisObject;
+                                // 父类 hook 会命中所有子类，只放行车机启动器本体
+                                if (!"com.vivo.carlauncher.activity.CarLauncherActivity"
+                                        .equals(act.getClass().getName())) return;
                                 Intent i = new Intent();
                                 i.setComponent(new ComponentName("com.seagull.carlauncher",
                                         "com.seagull.carlauncher.CarHomeActivity"));
@@ -473,6 +496,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
                             }
                         }
                     });
+            log("vivo 车机启动器接管 hook 已装（" + hookCls.getName() + "）");
         } catch (Throwable t) {
             log("vivo 车机启动器 hook 安装失败: " + t);
         }
