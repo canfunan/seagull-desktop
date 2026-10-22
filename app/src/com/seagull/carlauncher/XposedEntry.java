@@ -216,9 +216,9 @@ public class XposedEntry implements IXposedHookLoadPackage {
             }
             try {
                 hookVivoFullScreenMode(lpp.classLoader);
-                log("已挂载 vivo.car.networking → 底栏显隐正路(kp/q)");
+                log("已挂载 vivo.car.networking → 底栏屏蔽(kr.c.E 拦 addView)");
             } catch (Throwable t) {
-                log("底栏显隐正路失败: " + t);
+                log("底栏屏蔽失败: " + t);
             }
             return;
         }
@@ -546,30 +546,29 @@ public class XposedEntry implements IXposedHookLoadPackage {
      *   海鸥前台时强制 false —— vivo 自己的隐藏逻辑照常走（动画/状态机不坏），
      *   只是判定结果改一下，零副作用。j(pkg,cls) 是第二判定入口，一起拦。
      */
+    /**
+     * 底栏屏蔽正路（复盘二次修正）：kr.c.E(int,int) = showSuspend 的 addView
+     * 入口（kr.c 76 行：windowManager.addView(d, f) 就在 E 里）。ir/u1（底栏
+     * VivoCarToolBar 实现类）调 E = 要把底栏窗口加上屏 —— before 里直接
+     * setResult(null)，窗口永远加不上。
+     *
+     * 为什么废掉上一版 kp/q.i() 强制 false：那条路 post AppFullScreenEv(false)
+     * → ir/u1.onAppFullScreenEv 里 z(当前显示)==z3(!fullScreen) 走 if 分支，
+     * 只 dismiss mask（u1()）不动底栏 —— 底栏照样在，还冒出遮罩。实测打脸。
+     *
+     * kr.a1（遮罩层）也 extends kr.c，所以必须按类名精确限定 ir/u1，
+     * 不拦遮罩（vivo 自己的全屏 app 还要用）。
+     */
     private void hookVivoFullScreenMode(ClassLoader cl) {
-        XposedHelpers.findAndHookMethod("kp.q", cl,
-                "i", String.class, String.class,
+        XposedHelpers.findAndHookMethod("kr.c", cl,
+                "E", int.class, int.class,
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
                         try {
-                            Object a0 = param.args[0];
-                            if (a0 != null && "com.seagull.carlauncher".equals(a0.toString())) {
-                                param.setResult(false);
-                            }
-                        } catch (Throwable ignored) {
-                        }
-                    }
-                });
-        XposedHelpers.findAndHookMethod("kp.q", cl,
-                "j", String.class, String.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        try {
-                            Object a0 = param.args[0];
-                            if (a0 != null && "com.seagull.carlauncher".equals(a0.toString())) {
-                                param.setResult(false);
+                            Object thiz = param.thisObject;
+                            if (thiz != null && "ir.u1".equals(thiz.getClass().getName())) {
+                                param.setResult(null);
                             }
                         } catch (Throwable ignored) {
                         }
@@ -577,14 +576,6 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 });
     }
 
-    /**
-     * CarLife 投屏就绪事件（com.baidu.carlife.vivo 普通 app，注得进）：
-     *   RemoteCastCallback.onCastPrepared(displayId) = vivo AIDL 告知车机屏
-     *   displayId。after 里直接 root 推海鸥 HomeActivity 上那个屏 ——
-     *   连车机即接线，用户零操作（解决「不可能每次都要你接线」）。
-     *   带 --ez car_mode true：HomeActivity 车机模式 → ToolBarCoverService
-     *   自动起 + 不建画中画板。守护线程（MediaListenerService）继续兜底。
-     */
     private void hookCarlifeCastPrepared(ClassLoader cl) {
         XposedHelpers.findAndHookMethod("com.baidu.carlife.core.mix.RemoteCastCallback", cl,
                 "onCastPrepared", int.class,
