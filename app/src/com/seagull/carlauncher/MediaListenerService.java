@@ -468,7 +468,9 @@ public class MediaListenerService extends NotificationListenerService {
         // ② 'd'$D'( |$)' 精确匹配屏 ID（原 '.*d90003' 会误匹配 d190003）
         // ③ 只在真重推时打日志（原来每轮都打，刷屏）
         String out = Caps.exec(
-                "D=$(dumpsys display | grep -oE 'displayId [0-9]+' | tail -1 | grep -oE '[0-9]+'); "
+                // 按 vivo_car_screen 的 uniqueId 上下文抓 displayId（不能 tail -1 ——
+                // 多屏时会抓到海鸥自己的画布屏；grep -B 定位于 vivo_car_screen 记录前）
+                "D=$(dumpsys display | grep -B14 'vivo_car_screen\"' | grep -oE 'mDisplayId=[0-9]+' | tail -1 | cut -d= -f2); "
               + "if [ -z \"$D\" ]; then exit 0; fi; "
               + "N=$(dumpsys activity activities | grep -cE 'com.seagull.carlauncher/.HomeActivity[^0-9]* d'$D'( |$)'); "
               + "if [ \"$N\" = \"0\" ]; then "

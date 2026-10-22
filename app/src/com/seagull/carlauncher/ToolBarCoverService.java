@@ -58,7 +58,13 @@ public class ToolBarCoverService extends Service {
                             | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                     PixelFormat.TRANSLUCENT);
             lp.gravity = android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL;
-            lp.displayId = displayId;
+            // displayId 是 LayoutParams 的 @hide 字段（公开 jar 没有，javac 挂过）——
+            // 反射设。设不上（个别 ROM 去掉该字段）就退化成当前屏。
+            try {
+                android.view.WindowManager.LayoutParams.class
+                        .getField("displayId").set(lp, displayId);
+            } catch (Throwable ignored) {
+            }
             wm.addView(cover, lp);
             Log.i(TAG, "底栏遮盖层已挂起 d" + displayId + " 104dp");
         } catch (Throwable t) {
