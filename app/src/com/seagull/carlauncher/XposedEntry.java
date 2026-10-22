@@ -190,6 +190,18 @@ public class XposedEntry implements IXposedHookLoadPackage {
         // 【包名坑】AOSP 的 system_server 包名是 "android"，但 vivo 等 ROM 叫
         // "system"（实测本机 logcat: handleLoadPackage: system）—— 三个名字全匹配，
         // 否则钩子静默不装、PiP 永远挂不上，重启也不管用（2026-10-21 实测踩实）。
+        if ("com.vivo.carlauncher".equals(pkg)) {
+            // vivo 车机启动器接管（修掉线）：CarLauncherActivity.onCreate 拉海鸥
+            // CarHomeActivity 进同任务 —— home 角色不丢、任务不被踢
+            try {
+                hookVivoCarLauncher(lpp.classLoader);
+                log("已挂载 vivo.carlauncher → 车机任务接管");
+            } catch (Throwable t) {
+                log("vivo 车机启动器接管失败: " + t);
+            }
+            return;
+        }
+
         if ("com.vivo.car.networking".equals(pkg)) {
             // vivo 车机屏底栏（NAVIGATION_BAR 型悬浮窗）拦截 + 车机屏任务保活挂钩
             try {
@@ -433,6 +445,39 @@ public class XposedEntry implements IXposedHookLoadPackage {
      * 拦掉 —— 窗口根本不会被加上（比事后隐藏干净）。
      * 代价：车机屏失去 vivo 自己的导航按钮（返回/主页）—— 用户明确要求去掉。
      */
+    /**
+     * vivo 车机启动器接管（vivo互联投屏·修掉线）：hook com.vivo.carlauncher 的
+     * CarLauncherActivity.onCreate —— super 之后拉起海鸥的 CarHomeActivity
+     * （taskAffinity=com.vivo.carlauncher，清单声明）→ affinity 匹配进 vivo
+     * 自己的车机任务。框架眼里任务 base 还是 vivo 的启动器（home 角色不动），
+     * 内容已经是海鸥桌面 —— 海鸥自己的外来任务不再被 CLOSE。
+     */
+    private void hookVivoCarLauncher(ClassLoader cl) {
+        try {
+            Class<?> actCls = cl.loadClass("com.vivo.carlauncher.activity.CarLauncherActivity");
+            XposedHelpers.findAndHookMethod(actCls, "onCreate",
+                    android.os.Bundle.class, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                android.app.Activity act = (android.app.Activity) param.thisObject;
+                                Intent i = new Intent();
+                                i.setComponent(new ComponentName("com.seagull.carlauncher",
+                                        "com.seagull.carlauncher.CarHomeActivity"));
+                                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                        | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                                act.startActivity(i);
+                                log("vivo 车机启动器 → 海鸥 CarHomeActivity 已拉入同任务");
+                            } catch (Throwable t) {
+                                log("vivo 车机启动器接管失败: " + t);
+                            }
+                        }
+                    });
+        } catch (Throwable t) {
+            log("vivo 车机启动器 hook 安装失败: " + t);
+        }
+    }
+
     private void hookVivoCarToolBar(ClassLoader cl) {
         try {
             XposedHelpers.findAndHookMethod("android.view.WindowManagerImpl", cl,
