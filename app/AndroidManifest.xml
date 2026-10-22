@@ -295,6 +295,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- 车机投屏专用入口（vivo互联投屏）：HomeActivity 克隆，taskAffinity 指向
+             vivo 车机包 —— vivo 框架拉它时 affinity 匹配进 vivo 自己的车机任务，
+             home 角色不丢、任务不被踢。不带 CATEGORY_HOME（不影响手机桌面解析）。 -->
+        <activity
+            android:name=".CarHomeActivity"
+            android:taskAffinity="com.vivo.carlauncher"
+            android:exported="false"
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:launchMode="singleTask" />
+
         <!-- 悬浮球（批次 KB，野菜 BallService 同款）：桌面上常驻可拖拽圆球，
              单击回桌面/左滑返回/上滑最近任务。 -->
         <service
