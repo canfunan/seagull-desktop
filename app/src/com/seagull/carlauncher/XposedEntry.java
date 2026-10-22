@@ -444,7 +444,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
                                 Object lp = param.args[1];
                                 if (lp instanceof android.view.WindowManager.LayoutParams) {
                                     int type = ((android.view.WindowManager.LayoutParams) lp).type;
-                                    if (type == android.view.WindowManager.LayoutParams.TYPE_NAVIGATION_BAR) {
+                                    if (type == 2019) {   // TYPE_NAVIGATION_BAR 裸值（@hide，公开 jar 无此常量）
                                         param.setResult(null);
                                         log("vivo 车机底栏已拦截（NAVIGATION_BAR addView）");
                                     }
