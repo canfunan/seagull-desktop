@@ -145,6 +145,7 @@ public class MediaListenerService extends NotificationListenerService {
         connected = true;
         Log.i(TAG, "通知监听已连接");
         refresh(appCtx);
+        startCarWatch();   // 车机投屏守护：自动接线 + 掉了自愈
         // L1：重连后回放现有导航通知（不然服务重启后岛横幅要等下一次播报才回来）
         try {
             StatusBarNotification[] act = getActiveNotifications();
@@ -414,6 +415,74 @@ public class MediaListenerService extends NotificationListenerService {
         } catch (Throwable t) {
             return -1f;
         }
+    }
+
+    /* ---------------- 车机投屏守护（自动接线 + 掉了自愈） ---------------- */
+
+    private static volatile boolean carWatchRunning;
+    private static Thread carWatchThread;
+
+    /**
+     * 车机投屏守护（vivo互联投屏·用户两大痛点的解药）：
+     *   ① 「不可能每次都要你接线」—— 车机屏一出现（vivo互联连上）自动把
+     *      海鸥桌面推上去，用户零操作；
+     *   ② 「海鸥桌面也会掉线」—— 投影断 / app 被杀 / config change 掉了，
+     *      5 秒内发现并 root 重推，自愈。
+     * 本服务是系统级常驻（通知监听授权绑着，杀不掉），最适合当守护宿主。
+     * 轮询用 root（su dumpsys）—— 代价可控（5s 一次，只读）。
+     */
+    public static void startCarWatch() {
+        if (carWatchRunning) return;
+        carWatchRunning = true;
+        carWatchThread = new Thread(() -> {
+            Log.i(TAG, "车机投屏守护启动（5s 轮询）");
+            while (carWatchRunning) {
+                try {
+                    if (connected) guardCarScreen();
+                } catch (Throwable t) {
+                    Log.w(TAG, "守护轮询异常: " + t);
+                }
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException ie) {
+                    break;
+                }
+            }
+            Log.i(TAG, "车机投屏守护退出");
+        }, "seagull-carwatch");
+        carWatchThread.setDaemon(true);
+        carWatchThread.start();
+    }
+
+    public static void stopCarWatch() {
+        carWatchRunning = false;
+        if (carWatchThread != null) carWatchThread.interrupt();
+    }
+
+    /** 一轮巡检：车机屏在而海鸥桌面不在 → root 重推。 */
+    private static void guardCarScreen() {
+        if (appCtx == null) return;
+        // 1. 车机屏在不在（vivo_car_screen 的 displayId）
+        String disp = Caps.exec("dumpsys display | grep -B8 vivo_car_screen | grep -oE 'displayId [0-9]+' | tail -1 | grep -oE '[0-9]+'");
+        if (disp == null || disp.trim().isEmpty()) return;   // 车机没连，不用管
+        final int did;
+        try {
+            did = Integer.parseInt(disp.trim());
+        } catch (NumberFormatException e) {
+            return;
+        }
+        if (did <= 0) return;
+        // 2. 海鸥桌面在不在车机屏上
+        String acts = Caps.exec("dumpsys activity activities | grep -c 'com.seagull.carlauncher/.HomeActivity.*d" + did + "'");
+        boolean onScreen = acts != null && acts.trim().startsWith("0") == false
+                && !"0".equals(acts.trim());
+        if (onScreen) return;   // 在，不用管
+        // 3. 不在 → root 重推（自动接线 / 掉了自愈）
+        String out = Caps.exec("am start --display " + did
+                + " -f 0x18800000 -n com.seagull.carlauncher/.HomeActivity");
+        Log.i(TAG, "车机守护：桌面不在车机屏 d" + did + " → 已重推 | "
+                + (out == null ? "null" : out.trim().replace('
+', ' ')));
     }
 
     private static boolean snapshotPlaying() { return snap.playing; }
