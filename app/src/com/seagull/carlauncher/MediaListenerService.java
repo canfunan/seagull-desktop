@@ -474,7 +474,7 @@ public class MediaListenerService extends NotificationListenerService {
               + "if [ -z \"$D\" ]; then exit 0; fi; "
               + "N=$(dumpsys activity activities | grep -cE 'com.seagull.carlauncher/.HomeActivity[^0-9]* d'$D'( |$)'); "
               + "if [ \"$N\" = \"0\" ]; then "
-              + "am start --display $D -f 0x18800000 -n com.seagull.carlauncher/.HomeActivity; "
+              + "am start --display $D -f 0x18200000 -n com.seagull.carlauncher/.HomeActivity; "
               + "echo REDEPLOYED_d$D; fi");
         if (out != null && out.contains("REDEPLOYED_d")) {
             Log.i(TAG, "车机守护：桌面掉了 → 自动重推 | " + out.trim());

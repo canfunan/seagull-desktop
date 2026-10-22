@@ -93,6 +93,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (BallService.isOn(this)) {
             try { startService(new Intent(this, BallService.class)); } catch (Throwable ignore) {}
         }
+        // 底栏遮盖层（vivo互联车机屏专用）：车机模式（car_mode extra）才起——
+        // 盖住 vivo.car.networking 加的 VivoCarToolBar（NAVIGATION_BAR 型 104dp）
+        if (carMode && ToolBarCoverService.isOn(this)) {
+            try { startService(new Intent(this, ToolBarCoverService.class)); } catch (Throwable ignore) {}
+        }
         setContentView(buildUi());
         refreshMini();
         ui.postDelayed(tick, 30_000L);
