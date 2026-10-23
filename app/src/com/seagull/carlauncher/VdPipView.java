@@ -40,7 +40,7 @@ public class VdPipView extends LinearLayout {
     private TextView status;
     private SurfaceView sv;
     private LayoutParams vlp;          // 在桌面 root 里的布局参数
-    private int vdId = -1;
+    private volatile int vdId = -1;    // NB21：boot 线程写、主线程触摸读，跨线程可见性
     private int inputFails;
     private boolean booted;
 

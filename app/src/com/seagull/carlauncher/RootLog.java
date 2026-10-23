@@ -51,7 +51,8 @@ public final class RootLog {
                 // 日志里有包名/窗口信息，收成 600 只留 root 和本 uid
                 chmodDone = true;
                 try {
-                    Runtime.getRuntime().exec(new String[]{"chmod", "600", PATH}).waitFor();
+                    Runtime.getRuntime().exec(new String[]{"chmod", "600", PATH})
+                            .waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
                 } catch (Throwable ignore) { }
             }
             if (f.length() > MAX_BYTES) rotate(f);

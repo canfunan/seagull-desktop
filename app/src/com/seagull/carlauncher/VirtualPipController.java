@@ -48,6 +48,7 @@ public final class VirtualPipController {
 
     private static String sTargetPkg;   // 用户在推荐应用里点选的（null = 自动探测）
     private static boolean sEnabled;    // 画中画开关（桌面里嵌不嵌 VdPipView）
+    private static boolean sTargetLoaded;   // NB21：点选目标持久化懒加载标记
 
     /** 车联助手锚点启动 flags 原值 411041792 = NEW_TASK | NEW_DOCUMENT | EXCLUDE_FROM_RECENTS。 */
     private static final int ANCHOR_FLAGS = 411041792;
@@ -78,7 +79,19 @@ public final class VirtualPipController {
     public static synchronized boolean isActive() { return sDisplayId >= 0; }
 
     /** 推荐应用点选（RootPanel 用）。传 null = 回到自动探测。 */
-    public static synchronized void setTarget(String pkg) { sTargetPkg = pkg; }
+    public static synchronized void setTarget(Context ctx, String pkg) {
+        sTargetPkg = pkg;
+        sTargetLoaded = true;
+        // NB21：点选持久化 —— 之前是纯内存态，进程被杀（后台清理）后丢用户点选，
+        // 冷启回落自动探测（变成手机版高德），画中画目标悄悄漂移。
+        try {
+            android.content.SharedPreferences sp = ctx.getApplicationContext()
+                    .getSharedPreferences("seagull", Context.MODE_PRIVATE);
+            if (pkg == null) sp.edit().remove("pipTarget").apply();
+            else sp.edit().putString("pipTarget", pkg).apply();
+        } catch (Throwable ignored) {
+        }
+    }
 
     /**
      * 画中画开关：桌面按它决定嵌不嵌 VdPipView（车联同款：pip 是 Activity 内视图）。
@@ -118,6 +131,16 @@ public final class VirtualPipController {
      */
     public static String pickTarget(Context ctx) {
         synchronized (VirtualPipController.class) {
+            if (!sTargetLoaded) {
+                // NB21：冷启懒加载持久化的用户点选（进程被杀后不失忆）
+                try {
+                    sTargetPkg = ctx.getApplicationContext()
+                            .getSharedPreferences("seagull", Context.MODE_PRIVATE)
+                            .getString("pipTarget", null);
+                } catch (Throwable ignored) {
+                }
+                sTargetLoaded = true;
+            }
             if (sTargetPkg != null) return sTargetPkg;
         }
         for (String p : RECOMMEND) {
@@ -198,8 +221,10 @@ public final class VirtualPipController {
         if (id < 0 || pkg == null) return "虚拟屏未创建";
         String comp = resolveComponent(ctx, pkg);
         if (comp == null) return "解析不到 " + pkg + " 的入口 Activity";
-        if (anchorAndMove(ctx, pkg)) return "锚点+move-task";
-        if (directStart(ctx, pkg)) return "直启";
+        // NB21：id/pkg 全程用开头的 final 快照传参，部署链不再直读静态字段
+        // （redeploy 线程与 boot 线程并发时，读到被 release() 清零的 sDisplayId）。
+        if (anchorAndMove(ctx, pkg, id)) return "锚点+move-task";
+        if (directStart(ctx, pkg, id)) return "直启";
         if (amStartDisplay(id, comp)) return "root am start";
         // 车联没有的最后一层保险：daemon setLaunchDisplayId（批次 V 路径， MirrorSlot 同款）
         try {
@@ -220,12 +245,12 @@ public final class VirtualPipController {
      * 失败时用补丁版脚本再试一次（兼容两种格式 + 宽松 id 提取）。
      * 逐字保留「不杀目标应用」：搬的是活任务（车联原文如此）。
      */
-    private static boolean anchorAndMove(Context ctx, String pkg) {
+    private static boolean anchorAndMove(Context ctx, String pkg, int displayId) {
         try {
             Intent i = new Intent(ctx, VdPipAnchorActivity.class);
             i.setFlags(ANCHOR_FLAGS);
             ActivityOptions o = ActivityOptions.makeBasic();
-            o.setLaunchDisplayId(sDisplayId);
+            o.setLaunchDisplayId(displayId);
             ctx.startActivity(i, o.toBundle());
         } catch (Throwable t) {
             Log.w(TAG, "锚点创建失败", t);
@@ -260,13 +285,13 @@ public final class VirtualPipController {
     }
 
     /** 复刻 c1/h.b 第一步：getLaunchIntentForPackage + setLaunchDisplayId 直启。 */
-    private static boolean directStart(Context ctx, String pkg) {
+    private static boolean directStart(Context ctx, String pkg, int displayId) {
         try {
             Intent i = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
             if (i == null) return false;
             i.setFlags(269500416);   // NEW_TASK | RESET_TASK_IF_NEEDED（车联原值）
             ActivityOptions o = ActivityOptions.makeBasic();
-            o.setLaunchDisplayId(sDisplayId);
+            o.setLaunchDisplayId(displayId);
             ctx.startActivity(i, o.toBundle());
             return true;
         } catch (Throwable t) {
@@ -280,11 +305,18 @@ public final class VirtualPipController {
         return suExec("am start --display " + id + " -f " + AM_START_FLAGS + " -n " + comp) == 0;
     }
 
-    /** 车联同款：Runtime.exec 数组形式 su -c，waitFor 拿退出码（不经 sh 引号转义地狱）。 */
+    /** 车联同款：Runtime.exec 数组形式 su -c，waitFor 拿退出码（不经 sh 引号转义地狱）。
+     *  NB21：加 8s 超时 —— 之前无超时，su 授权弹窗无人点时 waitFor 永远阻塞，
+     *  boot/redeploy 线程卡死，画中画状态永远停在「部署中…」（体感就是"没生效"）。 */
     private static int suExec(String script) {
         try {
             Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", script});
-            return p.waitFor();
+            if (!p.waitFor(8, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                Log.w(TAG, "su 超时（8s，多半是授权弹窗没人点）");
+                return -1;
+            }
+            return p.exitValue();
         } catch (Throwable t) {
             Log.w(TAG, "su 执行失败", t);
             return -1;

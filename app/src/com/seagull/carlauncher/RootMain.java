@@ -230,6 +230,8 @@ public final class RootMain {
             }
             r.close();
             p.destroy();   // 审计 L8：读完即杀，别留僵尸
+            // NB21：守护进程路径补超时兜底 —— readLine 遇异常流会无限阻塞
+            if (!p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly();
         } catch (Throwable t) {
             Log.w(TAG, "selfUid dumpsys 也失败: " + t);
         }

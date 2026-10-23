@@ -2798,3 +2798,48 @@ UI 文案/注释统一替换：菜园 → 极简屏（JSON key `garden*` 与类�
 2. **摆设开关的成因 = 文案先行、功能没落地**（gardenEnabled 就是
    典型）。规矩：设置页每加一个开关，同批次必须有消费点，或不开 UI。
 3. 验证闭环靠用户截图 + 反编译源码行号交叉，不再靠推理。
+
+---
+
+## NB21 · 三轮全量代码复盘（2026-10-24）
+
+用户要求「深度复盘所有代码三次」。三轮视角：① 正确性/崩溃面（主线程精读
+画中画管线全文件）② 线程安全/生命周期（子代理全量扫描）③ 资源/性能/
+一致性（子代理全量扫描）。
+
+### 修复清单（7 项）
+
+1. **suExec 无超时**（VirtualPipController，P1）：su 授权弹窗无人点时
+   waitFor 永远阻塞 → boot/redeploy 线程卡死 → 画中画永远「部署中…」
+   （用户体感"没生效"的一个隐藏根因）。加 8s 超时 + destroyForcibly。
+2. **画中画点选目标不持久化**（P1）：sTargetPkg 纯内存态，进程被杀后
+   用户在推荐应用里点选的目标丢失，冷启回落自动探测（目标悄悄漂移成
+   手机版高德）。持久化到 prefs pipTarget + 冷启懒加载，与 pipEnabled
+   开关同款机制。
+3. **部署链静态字段竞态**（P2）：anchorAndMove/directStart 直读
+   sDisplayId，redeploy 线程与 boot 线程并发时可读到被 release() 清零
+   的值。改为 deploy 开头 final 快照逐层传参。
+4. **VdPipView.vdId 跨线程可见性**（P2）：boot 线程写、主线程触摸转发
+   读，无 volatile。补 volatile。
+5. **RootMain dumpsys 无超时**（P2）：守护进程 selfUid 路径 readLine
+   遇异常流无限阻塞。补 5s waitFor 兜底。
+6. **RootLog chmod waitFor 无超时**（P3）：补 3s 超时。
+7. **RootPanel setTarget 签名更新**：两处调用点随 ② 更新。
+
+### 排除的疑点（审计过、判定无问题）
+
+- RootPanel「点谁画谁」：RootPanelActivity:281 确认 setTarget(pkg) 在位。
+- NegScreenView 2 秒 tick：refreshSwitchState 走 Settings.Global 直读
+  （ContentResolver），零 su 调用，非热路径风险。
+- 设置页 98 个行控件字段：NB20 已全量审计，均有真实消费点。
+- RootPanel/HomeActivity getIntent() NPE：子代理误报（Activity 规范
+  保证非 null，且 82 行有显式判空）。
+- VdPipView probe postDelayed：各只跑一次，无堆积。
+
+### 自愈链完整性结论（三轮复盘后的画中画自愈全景）
+
+- 进程活着 + 屏活着：onResume → redeploy 重搬（幂等）✓
+- 进程活着 + 任务被拉回主屏：同上自愈 ✓
+- 进程被杀重开：syncVdPip 按持久化开关重挂视图 → surfaceCreated 重建
+  屏 → pickTarget 按持久化点选部署 ✓（本批 ② 补齐最后一环：目标不漂移）
+- su 卡死：本批 ① 兜底，8s 后走四条部署链的下一层 ✓

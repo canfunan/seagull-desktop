@@ -259,7 +259,7 @@ public class RootPanelActivity extends BaseActivity {
          * 不需要悬浮窗授权；点推荐应用 → 回桌面即出现）。 */
         col.addView(section("虚拟屏画中画"));
         col.addView(btn("启动画中画（自动选应用）", () -> op("虚拟屏画中画", () -> {
-            VirtualPipController.setTarget(null);
+            VirtualPipController.setTarget(this, null);
             return startPip();
         })));
         col.addView(section("推荐应用（点谁画谁）"));
@@ -278,7 +278,7 @@ public class RootPanelActivity extends BaseActivity {
             final String label = rec[0] + (installed ? "" : "（未装，点了会失败）");
             final String pkg = rec[1];
             col.addView(btn(label, () -> op("画中画·" + pkg, () -> {
-                VirtualPipController.setTarget(pkg);
+                VirtualPipController.setTarget(this, pkg);
                 return startPip();
             })));
         }
