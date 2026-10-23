@@ -51,9 +51,9 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         setBackground(bg);
         int p = dp(act, 10);
         setPadding(dp(act, 14), p, dp(act, 14), p);
-        // NB9：高度上限（信息态两行 + 快捷态一行）——防卡片把 navHost 的
-        // 38% 撑爆后盖住竖 splitter（用户实测「太大拖不动」）
-        setMaxHeight(dp(act, 110));   // NB9：96→110（复盘：内容实际约 97dp，96 会裁 total 行）
+        // NB9 复盘：View 没有 setMaxHeight（TextView 才有）——且内容约 97dp
+        // 本就在 navHost 的 30% 占比内，WRAP 自适应即可，不硬限。防撑爆靠
+        // pipWeightNav=30 + 宽度 MATCH_PARENT（横不溢→不盖 splitter）。
 
         turn = new TextView(act);
         turn.setTextColor(0xFFF5C542);          // 转向提示黄：与地图应用的播报色一致
