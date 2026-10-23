@@ -371,7 +371,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         // 画中画2的上面」= PipBoard 右侧 40% 的上区（navHost）。NB6 我误判
         // 「翻页看不到是 bug」挂到 root 全局——那是全局糊脸，用户从没要过。
         // 板外（壁纸页/负一屏/应用页/不开板）不显示，开板才在右上区出现。
-        if (pip != null) pip.attachNavCard(navCard);
+        if (pip != null) {
+            pip.attachNavCard(navCard);
+            // NB12：回家/公司「绑画中画当前挂的哪个导航 app 就起哪个」
+            navCard.setNavPkgProvider(pip::currentNavPkg);
+        }
 
         // 系统画中画形态下的精简视图（系统 PiP 里只显示这一层）
         pipBox = new TextView(this);

@@ -771,6 +771,23 @@ public final class PipBoard extends LinearLayout {
     }
 
     /** 批次 NB：NavCard reparent 入口 —— 板可见时进右上区，板隐藏时回左上（调用方摆）。 */
+    /** NB12：当前画中画挂着的导航 app 包名（槽1/槽2 任一装着地图就返回它，
+     *  没有回 null）——NavCard 的回家/公司按钮据此「绑哪个导航软件就起哪个」。 */
+    public String currentNavPkg() {
+        for (int slot = 1; slot <= 2; slot++) {
+            String p = pkgOf(slot);
+            if (p != null && NAV_PKGS_FOR_HOME.contains(p)) return p;
+        }
+        return null;
+    }
+
+    /** 回家/公司支持的地图包（按画中画当前挂载识别）。 */
+    private static final java.util.Set<String> NAV_PKGS_FOR_HOME =
+            new java.util.HashSet<>(java.util.Arrays.asList(
+                    "com.autonavi.minimap", "com.autonavi.amapauto",
+                    "com.baidu.BaiduMap", "com.baidu.naviauto",
+                    "com.tencent.map"));
+
     public void attachNavCard(android.view.View nav) {
         if (navHost == null || nav == null) return;
         if (nav.getParent() == navHost) return;

@@ -37,6 +37,8 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
     private final TextView dist;
     private final TextView road;
     private final TextView total;
+    /** NB12：画中画当前导航包提供者（HomeActivity 注入 pip::currentNavPkg）。 */
+    private java.util.concurrent.Callable<String> navPkgProvider;
     private final android.os.Handler ui = new android.os.Handler();
     private final Runnable staleTask = this::showQuick;
 
@@ -107,7 +109,27 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         AmapProtocolClient.addSink(this);
     }
 
-    /** 快捷态按钮：起高德 POI 搜索（高德对「回家/公司」关键词解析用户收藏地址）。 */
+    /** NB12：按包拼回家/公司的搜索 URI（各图厂 scheme 不同）。 */
+    private static String homeUri(String pkg, String keyword) {
+        if (pkg == null) return null;
+        if (pkg.startsWith("com.autonavi")) {
+            return "androidamap://poi?sourceApplication=seagull&keywords=" + keyword + "&dev=0";
+        }
+        if (pkg.startsWith("com.baidu")) {
+            return "baidumap://map/place/search?query=" + keyword + "&src=seagull";
+        }
+        if (pkg.startsWith("com.tencent")) {
+            return "qqmap://map/search?keyword=" + keyword + "&referer=seagull";
+        }
+        return null;
+    }
+
+    /** 注入画中画当前导航包提供者（HomeActivity.buildUi 里调）。 */
+    public void setNavPkgProvider(java.util.concurrent.Callable<String> p) {
+        this.navPkgProvider = p;
+    }
+
+    /** 快捷态按钮：起导航 app 的回家/公司搜索（各厂解析用户收藏地址）。 */
     private TextView quickBtn(Activity act, String label, String keyword) {
         TextView b = new TextView(act);
         b.setText(label);
@@ -115,26 +137,29 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         b.setTextSize(15);
         b.setPadding(dp(act, 14), dp(act, 8), dp(act, 14), dp(act, 8));
         b.setOnClickListener(v -> {
-            // NB9 复盘实测：amapauto（车机版）不认 androidamap://poi（unable to
-            // resolve）、AUTO_WIDGET_GO_HOME 是 vivo protected 广播且 amapauto 被
-            // frozen——两条都死；minimap（手机版）实测 URI 能起。故 minimap 优先，
-            // amapauto 留作万一（它哪天支持了 poi URI 就自动走前面）。
-            for (String pkg : new String[]{"com.autonavi.minimap", "com.autonavi.amapauto"}) {
+            // NB12：识别画中画1/2 当前挂的导航 app——绑哪个就起哪个（用户原话）；
+            // 槽位没挂地图回落 minimap（实测 URI 能起）。各包 URI：
+            //   高德 androidamap://poi / 百度 baidumap://map/place/search /
+            //   腾讯 qqmap://map/search
+            String navPkg = navPkgProvider != null ? navPkgProvider.get() : null;
+            java.util.List<String> order = new java.util.ArrayList<>();
+            if (navPkg != null) order.add(navPkg);
+            order.add("com.autonavi.minimap");
+            for (String pkg : order) {
+                String uri = homeUri(pkg, keyword);
+                if (uri == null) continue;
                 try {
                     android.content.Intent i = new android.content.Intent(
-                            android.content.Intent.ACTION_VIEW,
-                            android.net.Uri.parse(
-                                "androidamap://poi?sourceApplication=seagull&keywords="
-                                + keyword + "&dev=0"));
+                            android.content.Intent.ACTION_VIEW, android.net.Uri.parse(uri));
                     i.setPackage(pkg);
-                    i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    i.addFlags(android.content.Intent.FLAG_ACTIVITY.NEW_TASK
+                            | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
                     act.startActivity(i);
-                    return;   // 起成功就停
+                    return;
                 } catch (Throwable ignore) {
-                    // 这个包不可用（没装/URI 不支持）试下一个
                 }
             }
-            Log.w(TAG, "起高德搜索失败（两包都不可用）: " + keyword);
+            Log.w(TAG, "起导航搜索失败: " + keyword);
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
         lp.leftMargin = dp(act, 8);
@@ -241,31 +266,36 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
     @Override public void onGuide(AmapProtocolClient.Guide g) {
         if (g == null || !enabled || forcedHidden) return;
         showInfo();
-        // 主行（嘟嘟格式实测对齐）：距离 + 转向箭头 + 转向词 + 「进入」+ 下一道路名
-        //   icon 是 int（高德 id 制，实测 GuideInfoProtocolData.getIcon() 返回 int）
+        // 主行（NB12：对齐嘟嘟实测排版）：
+        //   转向箭头 | 距离(+后) | 转向词 + 路名（第二行）
         turn.setText(arrowOf(g.icon));
         String word = arrowTextOf(g.icon);
         String distTxt = fmtDist(g.nextSegRemainDis);
-        dist.setText(distTxt.isEmpty() ? "" : distTxt + (word.isEmpty() ? "" : "后"));
-        String roadName = !g.nextRoadName.isEmpty() ? "进入 " + g.nextRoadName : g.curRoadName;
-        road.setText((word.isEmpty() ? "" : word + " ") + roadName);
-        // 次行：全程距离 + 时间 + ETA（用户实测在跑的格式）
+        // 「现在」是 0 距离的专用词，不能再拼「后」（实测出过「现在后」）
+        boolean atNow = g.nextSegRemainDis <= 0;
+        dist.setText(atNow ? distTxt : distTxt + (word.isEmpty() ? "" : "后"));
+        // 路名回退链：下一道路名 → 当前路名 → 空（只留转向词，不摆空行）
+        String roadName = !g.nextRoadName.isEmpty() ? "进入 " + g.nextRoadName
+                : (!g.curRoadName.isEmpty() ? g.curRoadName : "");
+        road.setText(((word.isEmpty() ? "" : word + " ") + roadName).trim());
+        // 次行：全程距离 · 时间 · ETA（\t 在 TextView 不渲染，用 · 分隔）
         StringBuilder sb = new StringBuilder();
         sb.append(fmtDist(g.routeRemainDis));
-        if (g.routeRemainTime > 0) sb.append("\t").append(fmtTime(g.routeRemainTime));
-        if (!g.etaText.isEmpty()) sb.append("\t").append(g.etaText);
+        if (g.routeRemainTime > 0) sb.append(" · ").append(fmtTime(g.routeRemainTime));
+        if (!g.etaText.isEmpty()) sb.append(" · ").append(g.etaText);
         total.setText(sb.toString());
         total.setMaxLines(1);
         total.setEllipsize(android.text.TextUtils.TruncateAt.END);
     }
 
-    /** icon id → 转向词（高德 id 制：2/3/4/12/14 右转组、6/7/8 左转组、5/9 掉头）。 */
+    /** icon id → 转向词（NB12：分组与 arrowOf 逐条对齐——之前漏 13/10/11 且 11 错标直行）。 */
     private static String arrowTextOf(int id) {
         switch (id) {
             case 2: case 3: case 4: case 12: case 14: return "右转";
-            case 6: case 7: case 8: return "左转";
+            case 6: case 7: case 8: case 13: return "左转";
             case 5: case 9: return "掉头";
-            case 11: return "直行";
+            case 10: return "并入";
+            case 11: return "靠左";
             default: return "";
         }
     }
@@ -313,7 +343,7 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
 
     private static String arrowOf(int id) {
         switch (id) {
-            case 2: case 3: case 4: case 12: case 14: return "↗";   // 右转组
+            case 2: case 3: case 4: case 12: case 14: return "↱";   // 右转组（NB12：↗→↱ 与「右转」词一致）
             case 5: case 9: return "⤿";                              // 掉头
             case 6: case 7: case 8: case 13: return "↖";             // 左转组
             case 10: return "⇀";                                     // 并入/靠右
