@@ -221,6 +221,10 @@ public final class VirtualPipController {
         if (id < 0 || pkg == null) return "虚拟屏未创建";
         String comp = resolveComponent(ctx, pkg);
         if (comp == null) return "解析不到 " + pkg + " 的入口 Activity";
+        // NB22：目标进程死了 move-task 必败（搬的是活任务，am stack list 里
+        // 根本没有 taskId）——这是「杀后台后画中画拉不回来」的真正根因。
+        // 先探测：死了就在主屏拉活，等任务出现再走锚点+搬。
+        ensureTargetAlive(pkg);
         // NB21：id/pkg 全程用开头的 final 快照传参，部署链不再直读静态字段
         // （redeploy 线程与 boot 线程并发时，读到被 release() 清零的 sDisplayId）。
         if (anchorAndMove(ctx, pkg, id)) return "锚点+move-task";
@@ -233,6 +237,30 @@ public final class VirtualPipController {
             Log.w(TAG, "daemon launch 异常", t);
         }
         return "落屏失败（四条路全败）";
+    }
+
+    /**
+     * NB22：目标进程保活探测。move-task 只能搬「已存在的活任务」——目标被
+     * 后台清理杀掉后 am stack list 里没有它的 taskId，脚本 exit 41，部署链
+     * 跌进直启（Android 9+ 第三方直启私有屏常被静默重定向回主屏 → 黑屏，
+     * 用户体感「拉不回来」）。修法：死 → 主屏拉活（monkey 起入口，落主屏
+     * 无妨，随即被 move-task 搬走）→ 等任务注册 → 再搬。
+     * 只在 boot/redeploy 后台线程调用（内部 sleep）。
+     */
+    private static void ensureTargetAlive(String pkg) {
+        try {
+            String pid = Caps.exec("pidof " + pkg);
+            if (pid != null && !pid.trim().isEmpty()) return;   // 活着，直接搬
+            Log.i(TAG, pkg + " 进程已死（后台清理），主屏拉活再搬");
+            Caps.exec("monkey -p " + pkg + " -c android.intent.category.LAUNCHER 1");
+            try {
+                Thread.sleep(1800);   // 冷启 → 任务注册进 stack list 的窗口
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "ensureTargetAlive 探测失败", t);
+        }
     }
 
     /**
@@ -257,6 +285,13 @@ public final class VirtualPipController {
         }
         int code = suExec(legacyScript(pkg));
         if (code == 0) return true;
+        if (code == 41) {
+            // NB22：41 = 目标任务在 stack list 里不存在（拉活没赶上/race）。
+            // 补一次拉活 + 等待，再跑补丁版脚本搬第二次。
+            Log.w(TAG, "exit 41 任务不存在，补拉活 " + pkg + " 后重搬");
+            ensureTargetAlive(pkg);
+            return suExec(modernScript(pkg)) == 0;
+        }
         Log.w(TAG, "车联原版脚本 exit=" + code + "，试新格式补丁");
         return suExec(modernScript(pkg)) == 0;
     }

@@ -187,11 +187,17 @@ public class VdPipView extends LinearLayout {
         }, "seagull-vd-boot").start();
     }
 
-    /** 黑屏二分探针，结论直接进状态行。 */
+    /** 黑屏二分探针，结论直接进状态行；NB22：实测屏黑 = 目标没落屏，自动重搬。 */
     private void probe() {
         new Thread(() -> {
             String r = VirtualPipController.probeContent();
             boolean err = r.startsWith("屏黑") || r.startsWith("截屏") || r.equals("屏未建");
+            if (r.startsWith("屏黑")) {
+                // 任务被拉回主屏 / 部署 race → 后台重跑一次锚点+move-task
+                // （redeploy 自带 isActive 判定与 ensureTargetAlive 拉活）。
+                VirtualPipController.redeploy(act);
+                r += " · 自动重搬";
+            }
             setStatus(r, err);
         }, "seagull-vd-probe").start();
     }
