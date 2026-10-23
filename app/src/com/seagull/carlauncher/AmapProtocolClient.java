@@ -411,6 +411,8 @@ public final class AmapProtocolClient {
 
     private static String opt(JSONObject o, String k) {
         String v = o.optString(k, "");
-        return v == null || "null".equals(v) ? "" : v;
+        if (v == null || "null".equals(v)) return "";
+        return v.trim();   // NB16：空白串归空——高德推过「有 key 但值为空格」的帧，
+                           // 不 trim 会骗过 isEmpty() 把距离行渲染成不可见空串
     }
 }

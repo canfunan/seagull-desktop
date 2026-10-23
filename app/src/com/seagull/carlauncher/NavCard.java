@@ -364,14 +364,20 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
             turn.setText(!info.op.isEmpty() ? arrowOfOp(info.op) : arrowOf(info.iconId));
         }
         int m = NavInfoReceiver.parseMeters(info.dist, info.unit);
-        dist.setText(m > 0 ? fmtDist(m) : info.dist + info.unit);
+        // NB16：空值不覆盖 —— vivo hook 通道部分帧（只有 icon 没有 dist/路名）不得
+        // 擦掉协议源已填的字段（用户实测「只剩 18公里·19分钟一行」的另一个元凶）
+        if (m > 0) {
+            dist.setText(fmtDist(m));
+        } else if (!info.dist.isEmpty() && !info.unit.isEmpty()) {
+            dist.setText(info.dist + info.unit);
+        }
         // 路名：TITLE_1 优先；转向瞬间（当前路空）给 op + where
         String name = !info.t1.isEmpty() ? info.t1
                 : (!info.op.isEmpty() ? info.op + " " + info.where : info.where);
-        road.setText(name);
+        if (!name.trim().isEmpty()) road.setText(name.trim());
         String tail = !info.op.isEmpty() ? info.op : "";
         if (!info.where.isEmpty()) tail += (tail.isEmpty() ? "" : " · ") + info.where;
-        total.setText(tail.isEmpty() ? "" : tail);
+        if (!tail.isEmpty()) total.setText(tail);
     }
 
     /** 批次 NB5：导航结束回快捷态（回家/公司），不再整条隐藏。 */
@@ -393,23 +399,29 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         // 主行（NB15：对齐官方渲染 —— 反编译 GuideInfoModel_JsonLubeParser +
         // GuideInfoProtocolData 坐实，车机屏渲染的数字其实是 *Auto 现成文案）：
         //   转向箭头 | 距离文案 | 转向词 + 进入路名
+        // NB16：三个源（协议/车联/hook）交替推帧、字段互补不全——谁空谁不覆盖，
+        // 「空帧擦掉上一帧」就是用户实测「只剩 18公里·19分钟一行」的根因。
         int iconId = g.newIcon != 0 ? g.newIcon : g.icon;
-        turn.setText(arrowOf(iconId));
+        if (iconId > 0) {
+            turn.setText(arrowOf(iconId));
+        }
         String word = arrowTextOf(iconId);
         // 距离行：官方现成文案优先（"198米"/"即将"），数字字段临近路口归 0 时
         // 它是唯一活口（用户实测「即将 右转 进」= 数字 0 + Auto 没取）
         if (!g.nextSegRemainDisAuto.isEmpty()) {
             dist.setText(g.nextSegRemainDisAuto);
-        } else {
-            boolean atNow = g.nextSegRemainDis <= 0;
-            dist.setText(atNow ? "即将" : fmtDist(g.nextSegRemainDis) + (word.isEmpty() ? "" : "后"));
-        }
-        // 路名回退链：下一道路名 → 当前路名 → 空（只留转向词，不摆空行）
+        } else if (g.nextSegRemainDis > 0) {
+            dist.setText(fmtDist(g.nextSegRemainDis) + (word.isEmpty() ? "" : "后"));
+        }   // 双空（路口间歇帧）不覆盖——保留上一帧距离
+        // 路名回退链：下一道路名 → 当前路名 → 不覆盖
         String roadName = !g.nextRoadName.isEmpty() ? "进入 " + g.nextRoadName
                 : (!g.curRoadName.isEmpty() ? g.curRoadName : "");
-        road.setText(((word.isEmpty() ? "" : word + " ") + roadName).trim());
+        if (!roadName.isEmpty() || !word.isEmpty()) {
+            road.setText((word.isEmpty() ? "" : word + " ") + roadName);
+        }
         // 次行：全程距离 · 时间 · ETA（官方 routeRemainDistanceAuto/routeRemainTimeAuto
-        // 文案优先 —— 与车机屏同源，解决「手机 18公里/19分钟 vs 卡 18.1/20」不同步）
+        // 文案优先 —— 与车机屏同源，解决「手机 18公里/19分钟 vs 卡 18.1/20」不同步）。
+        // NB16：总长超限丢 ETA —— 用户实测「预计01:」被硬截断。
         StringBuilder sb = new StringBuilder();
         if (!g.routeRemainDistanceAuto.isEmpty()) {
             sb.append(g.routeRemainDistanceAuto);
@@ -418,8 +430,10 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
             sb.append(fmtDist(g.routeRemainDis));
             if (g.routeRemainTime > 0) sb.append(" · ").append(fmtTime(g.routeRemainTime));
         }
-        if (!g.etaText.isEmpty()) sb.append(" · ").append(g.etaText);
-        total.setText(sb.toString());
+        if (!g.etaText.isEmpty() && sb.length() + g.etaText.length() <= 18) {
+            sb.append(" · ").append(g.etaText);
+        }
+        if (sb.length() > 0) total.setText(sb.toString());
         total.setMaxLines(1);
         total.setEllipsize(android.text.TextUtils.TruncateAt.END);
     }
@@ -451,13 +465,18 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
             return;
         }
         showInfo();
-        turn.setText(arrowOf(s.maneuverId));
-        dist.setText(fmtDist(s.segmentRemainM) + (s.speedKph > 0 ? "  " + s.speedKph + "km/h" : ""));
+        if (s.maneuverId > 0) turn.setText(arrowOf(s.maneuverId));
+        // NB16：空值不覆盖（与 onGuide 同纪律——车联源部分帧不得擦掉协议源已填的字段）
+        if (s.segmentRemainM > 0) {
+            dist.setText(fmtDist(s.segmentRemainM) + (s.speedKph > 0 ? "  " + s.speedKph + "km/h" : ""));
+        }
         // 路名优先当前路，转向瞬间（当前路空）给"进入 + 下一路"
         String name = !s.roadName.isEmpty() ? s.roadName
                 : (!s.nextRoadName.isEmpty() ? "进入 " + s.nextRoadName : "");
-        road.setText(name);
-        total.setText("全程剩 " + fmtTime(s.routeRemainS) + " · " + fmtDist(s.routeRemainM));
+        if (!name.isEmpty()) road.setText(name);
+        if (s.routeRemainM > 0 || s.routeRemainS > 0) {
+            total.setText(fmtDist(s.routeRemainM) + " · " + fmtTime(s.routeRemainS));
+        }
     }
 
     /**
