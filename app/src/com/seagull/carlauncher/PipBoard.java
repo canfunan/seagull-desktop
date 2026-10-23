@@ -37,6 +37,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -1533,7 +1534,14 @@ public final class PipBoard extends LinearLayout {
 
     /** 宿主长按/点空态后调它。选完即部署；「清空该槽」拆屏并停掉画中画里的应用。 */
     public static void showPicker(Activity act, int which, PipBoard board) {
-        List<HomeActivity.AppEntry> apps = HomeActivity.loadApps(act);
+        // 用户要求（1023）：「选择画中画应用只显示适配的应用，不适配的默认
+        // 不能添加」—— 没进 PipAdapted 名单的 app 挂上画布也是黑屏/尺寸错/
+        // 启动被拒（技能问题模型），选它等于给用户找别扭。直接不渲染。
+        List<HomeActivity.AppEntry> all = HomeActivity.loadApps(act);
+        List<HomeActivity.AppEntry> apps = new ArrayList<>();
+        for (HomeActivity.AppEntry e : all) {
+            if (PipAdapted.isAdapted(e.pkg)) apps.add(e);
+        }
         LinearLayout col = new LinearLayout(act);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setBackgroundColor(Skin.c(R.color.ground));
@@ -1545,6 +1553,16 @@ public final class PipBoard extends LinearLayout {
         title.setTextColor(Skin.c(R.color.text));
         title.setTextSize(16);
         col.addView(title);
+
+        if (apps.isEmpty()) {
+            TextView empty = new TextView(act);
+            empty.setText("暂无适配的应用\n(已安装的适配应用会显示在这里)");
+            empty.setTextColor(0x99FFFFFF);
+            empty.setTextSize(13);
+            int ep = (int) (14 * act.getResources().getDisplayMetrics().density);
+            empty.setPadding(ep, ep, ep, ep);
+            col.addView(empty);
+        }
 
         for (HomeActivity.AppEntry e : apps) {
             TextView tv = new TextView(act);
