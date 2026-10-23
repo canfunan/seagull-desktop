@@ -107,6 +107,22 @@ public class XposedEntry implements IXposedHookLoadPackage {
             "com.kugou.android.auto",        // 酷狗音乐车机版
             "cn.kuwo.kwmusiccarsnp",         // 酷我音乐车机版
             "com.baidu.naviauto",            // 百度地图汽车版
+            // ↓↓↓ 批次 NEW-1023：当天安装的车机/TV 版（用户要求全加）
+            "com.luna.music",                // 落雪音乐（手机版）
+            "com.luna.music.car",            // 落雪音乐车机版
+            "com.tencent.wecarnavi",         // 腾讯WE车机导航
+            "com.mapbar.android.mapbarmap",  // 图吧地图
+            "com.sygic.aura",                // Sygic 导航
+            "com.ktkid.video",               // 酷奇视频
+            "com.bilibili.bilithings",       // B站 Things
+            "com.huya.android.pad",          // 虎牙TV
+            "com.tencent.qqlivepad",         // 腾讯视频TV
+            "com.qiyi.video.pad",            // 爱奇艺TV
+            "com.vcinema.cinema.pad",        // 影院pad
+            "com.ximalayaos.pad.tingkid",    // 喜马拉雅儿童
+            "bubei.tingshu.hd",              // 布贝听书
+            "com.tv.loveyoga.hz",            // 瑜伽TV
+            "com.ukids.client.tv",           // 优酷少儿
     };
 
     /**

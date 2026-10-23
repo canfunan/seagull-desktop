@@ -53,6 +53,8 @@ public class MediaListenerService extends NotificationListenerService {
             "com.kugou.android",               // 酷狗手机版
             "com.netease.cloudmusic.iot",      // 网易云车机版
             "com.netease.cloudmusic",          // 网易云手机版
+            "com.luna.music",                  // 落雪音乐（手机版）
+            "com.luna.music.car",              // 落雪音乐车机版
     };
 
     /**

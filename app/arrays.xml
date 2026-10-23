@@ -26,6 +26,20 @@
         <item>com.baidu.carlife.vivo</item>
         <item>com.vivo.car.networking</item>
         <item>com.vivo.carlauncher</item>
+        <item>com.luna.music.car</item>
+        <item>com.tencent.wecarnavi</item>
+        <item>com.mapbar.android.mapbarmap</item>
+        <item>com.sygic.aura</item>
+        <item>com.ktkid.video</item>
+        <item>com.bilibili.bilithings</item>
+        <item>com.huya.android.pad</item>
+        <item>com.tencent.qqlivepad</item>
+        <item>com.qiyi.video.pad</item>
+        <item>com.vcinema.cinema.pad</item>
+        <item>com.ximalayaos.pad.tingkid</item>
+        <item>bubei.tingshu.hd</item>
+        <item>com.tv.loveyoga.hz</item>
+        <item>com.ukids.client.tv</item>
         <item>com.samsung.android.carlink</item>
         <item>com.luna.music</item>
     </string-array>
