@@ -426,15 +426,17 @@ public final class LauncherModel {
     /** 默认横屏（用户要求：桌面默认横屏；竖屏党可在 设置 → 显示 里改）。 */
     public Orientation orientation = Orientation.LANDSCAPE;
     /** 双画中画左右权重（批次 N：默认 1:1；下一批预设 7:3 / 3:7）。改它 VD 尺寸跟着变，保持 1:1。 */
-    public int pipWeightA = 1;
-    public int pipWeightB = 1;
+    public int pipWeightA = 60;   // 批次 NB：默认 60/40（用户拍板——导航在左 60%）
+    public int pipWeightB = 40;
+    /** 批次 NB：右侧竖排上(导航卡)/下(槽2)占比（100 制，竖 splitter 拖拽持久化）。 */
+    public int pipWeightNav = 38;
     public boolean keepScreenOn = false;
     public boolean hideSystemBars = false;
     public boolean topInfoBar = true;          // 顶部信息栏
     public boolean autoNetworkTime = true;
 
     /** 画布权重钳制：0/负数是配置事故，回落 1（1:1）。 */
-    private static int clampWeight(int w) { return w > 0 && w <= 10 ? w : 1; }
+    private static int clampWeight(int w) { return w > 0 && w <= 100 ? w : 1; }
 
     /** 按当前屏幕方向取外边距 / 缝。 */
     public int marginHOf(boolean portrait) { return portrait ? portMarginH : marginH; }
@@ -1163,6 +1165,7 @@ public final class LauncherModel {
             o.put("orientation", orientation.name());
             o.put("pipWeightA", pipWeightA);
             o.put("pipWeightB", pipWeightB);
+            o.put("pipWeightNav", pipWeightNav);
             o.put("keepOn", keepScreenOn);
             o.put("hideBars", hideSystemBars);
             o.put("infoBar", topInfoBar);
@@ -1492,6 +1495,7 @@ public final class LauncherModel {
             orientation = optEnum(o, "orientation", Orientation.class, orientation);
             pipWeightA = clampWeight(o.optInt("pipWeightA", pipWeightA));
             pipWeightB = clampWeight(o.optInt("pipWeightB", pipWeightB));
+            pipWeightNav = clampWeight(o.optInt("pipWeightNav", pipWeightNav));
             keepScreenOn = o.optBoolean("keepOn", false);
             hideSystemBars = o.optBoolean("hideBars", false);
             topInfoBar = o.optBoolean("infoBar", true);
@@ -1721,8 +1725,8 @@ public final class LauncherModel {
         portMarginV = 8;
         portGap = 6;
         orientation = Orientation.LANDSCAPE;
-        pipWeightA = 1;
-        pipWeightB = 1;
+        pipWeightA = 60;
+        pipWeightB = 40;
         keepScreenOn = false;
         hideSystemBars = false;
         topInfoBar = true;

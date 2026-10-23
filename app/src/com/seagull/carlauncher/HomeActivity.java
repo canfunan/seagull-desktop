@@ -212,6 +212,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         Lyrics.start(this);         // 一秒一跳，组件条/菜园的歌词都从它出
         Lyrics.removeSink(islandSink);
         Lyrics.addSink(islandSink); // sink 恒为同一实例：CopyOnWrite 集合会永久持死
+        // 批次 NB：导航信息 sink（NavInfoReceiver 同款保活纪律——先摘后挂防重复）
+        if (navCard != null) {
+            NavInfoReceiver.removeSink(navCard);
+            NavInfoReceiver.addSink(navCard);
+        }
         refreshMini();              // 媒体条跟着会话状态走（没会话整条隐藏）
         // 常驻画中画被系统拉回主屏时搬回去（节流在 MirrorHost 里）
         MirrorHost.healHome(this);
@@ -246,6 +251,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (pip != null) pip.onDestroy();   // 只断 Surface，VD 留给 MirrorHost 常驻
         if (navCard != null) navCard.detach();   // 摘导航订阅（AmapNavClient 单例存活）
         Lyrics.removeSink(islandSink);      // sink 保活纪律：Activity 走了一定摘掉
+        if (navCard != null) NavInfoReceiver.removeSink(navCard);   // 批次 NB 同纪律
         Weather.onUpdated = null;           // K1：静态钩子别持死旧桌面
         NavNotiParser.setListener(null);    // L1：同上
         try { if (pkgReceiver != null) unregisterReceiver(pkgReceiver); } catch (Throwable ignore) {}
@@ -349,13 +355,21 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         root.addView(island, new FrameLayout.LayoutParams(dp(model == null ? 320 : model.islandWidth),
                 dp(40), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
 
-        // 顶栏导航卡片（批次 AN）：高德在导航时才出现，压在画布上方；无导航 GONE 不占位。
-        // 位置放左上（岛在顶部居中），不拦截点击 —— 车机纪律：只有信息、没有按钮。
+        // 顶栏导航卡片（批次 AN）：高德在导航时才出现；无导航 GONE 不占位。
+        // 车机纪律：只有信息、没有按钮 —— 司机看的，不是让司机点的。
+        // 【批次 NB】位置从左上角搬进 PipBoard 右侧 40% 的上区（用户拍板的布局：
+        // 左 60% 画中画1=导航 / 右上导航卡 / 右下画中画2，竖 splitter 可拖）。
+        // pip 在 buildMainPage() 里先建（见上），此时 attach 即可；PipBoard 跟着
+        // 主界面页翻页，壁纸页不看导航卡是一期已知边界。
         navCard = new NavCard(this);
         navCard.setEnabled(model == null || model.navEnabled);
-        FrameLayout.LayoutParams nlp =
-                new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT);
-        nlp.leftMargin = dp(16);
+        // NB6：挂 root 层右上（不依赖 pager 页）——NB5 挂在 PipBoard 的 navHost，
+        // 翻到壁纸页/负一屏时 mainPage 不可见，卡片跟着消失（用户实测「没有导航
+        // 卡片」的根因）。root 层常驻：四页 + 车机模式纯桌面都显示。
+        // PipBoard.navHost/attachNavCard 保留（板内模式备用），此处不再用。
+        FrameLayout.LayoutParams nlp = new FrameLayout.LayoutParams(-2, -2,
+                Gravity.TOP | Gravity.RIGHT);
+        nlp.rightMargin = dp(16);
         nlp.topMargin = dp(52);
         root.addView(navCard, nlp);
 

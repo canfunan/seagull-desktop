@@ -74,6 +74,8 @@ public class MediaListenerService extends NotificationListenerService {
     @Override public void onCreate() {
         super.onCreate();
         appCtx = getApplicationContext();
+        // 批次 NB：三地图归一化导航信息广播（vivo UCarMapService 通道，常驻收）
+        NavInfoReceiver.register(appCtx);
         // 野菜同款自授权（批次 MB）：没授权就自己授 —— 不弹设置 UI、不重启、
         // 不动系统设置界面。授权后系统自动重绑本服务，onListenerConnected 跟着来。
         ensureAccess(appCtx);

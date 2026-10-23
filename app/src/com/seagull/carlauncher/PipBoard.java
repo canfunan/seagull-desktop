@@ -122,6 +122,13 @@ public final class PipBoard extends LinearLayout {
     private int singleWhich = 1;
     private boolean draggingSplit;
     private float splitDownRaw, splitDownRatio;
+    /* 批次 NB：右侧竖排（上=导航卡 NavCard，下=槽2）+ 竖 splitter */
+    private LinearLayout rightCol;
+    private FrameLayout navHost;
+    private View vSplitter;
+    private boolean draggingVSplit;
+    private float vSplitDownRaw, vSplitDownRatio;
+    private float vPreviewRatio = -1f;
     /**
      * 拖动中的预览占比（&lt;0 = 没在拖）。
      *
@@ -230,7 +237,18 @@ public final class PipBoard extends LinearLayout {
         addView(colA, new LinearLayout.LayoutParams(0, -1, Math.max(1, this.model.pipWeightA)));
         splitter = buildSplitter();
         addView(splitter, new LinearLayout.LayoutParams(dp(SPLIT_W), -1));
-        addView(colB, new LinearLayout.LayoutParams(0, -1, Math.max(1, this.model.pipWeightB)));
+        // 右侧 40% 竖排：上=导航卡宿主（navHost，批次 NB），中=竖 splitter，下=槽2
+        // （colB 原样搬进来，MirrorSlot/SurfaceView/nudge/自愈全不动）
+        rightCol = new LinearLayout(act);
+        rightCol.setOrientation(LinearLayout.VERTICAL);
+        navHost = new FrameLayout(act);
+        rightCol.addView(navHost, new LinearLayout.LayoutParams(-1, 0,
+                Math.max(1, model.pipWeightNav)));
+        vSplitter = buildVSplitter();
+        rightCol.addView(vSplitter, new LinearLayout.LayoutParams(-1, dp(SPLIT_W)));
+        rightCol.addView(colB, new LinearLayout.LayoutParams(-1, 0,
+                Math.max(1, 100 - model.pipWeightNav)));
+        addView(rightCol, new LinearLayout.LayoutParams(0, -1, Math.max(1, this.model.pipWeightB)));
 
         // 进程级常驻槽：上次退出没拆屏，直接拿回来接着用
         slotA = MirrorHost.slot(act, "pip1");
@@ -618,6 +636,12 @@ public final class PipBoard extends LinearLayout {
         previewPaint.setStyle(android.graphics.Paint.Style.STROKE);
         previewPaint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
         c.drawLine(x, dp(8), x, getHeight() - dp(8), previewPaint);
+        // 批次 NB：竖 preview（右侧上/下分界）—— 只画右半区
+        if (vPreviewRatio > 0f) {
+            float left = getWidth() * currentRatio();
+            float y = getHeight() * vPreviewRatio;
+            c.drawLine(left + dp(SPLIT_W), y, getWidth() - dp(4), y, previewPaint);
+        }
     }
 
     private static float clampRatio(float r) {
@@ -635,16 +659,16 @@ public final class PipBoard extends LinearLayout {
 
     /** 设占比并立即改两块画布的 weight；persist=true 时落盘（松手那一下）。 */
     private void applySplitRatio(float ratio, boolean persist) {
-        if (colA == null || colB == null) return;
+        if (colA == null || rightCol == null) return;
         ratio = clampRatio(ratio);
         int a = Math.max(1, Math.round(ratio * 100f));
         int b = Math.max(1, 100 - a);
         LinearLayout.LayoutParams la = (LinearLayout.LayoutParams) colA.getLayoutParams();
-        LinearLayout.LayoutParams lb = (LinearLayout.LayoutParams) colB.getLayoutParams();
+        LinearLayout.LayoutParams lb = (LinearLayout.LayoutParams) rightCol.getLayoutParams();
         la.weight = a;
         lb.weight = b;
         colA.setLayoutParams(la);
-        colB.setLayoutParams(lb);
+        rightCol.setLayoutParams(lb);
         if (persist) {
             try {
                 model.pipWeightA = a;
@@ -655,6 +679,111 @@ public final class PipBoard extends LinearLayout {
                 Log.w(TAG, "画布占比落盘失败", t);
             }
         }
+    }
+
+    /** 竖 splitter（批次 NB）：右侧 40% 的上(导航卡)/下(槽2)分界，拖拽改 navHost 高度。
+     *  与横 splitter 同套纪律：拖动只画预览线，松手才改 layout（一次 resize）。 */
+    private View buildVSplitter() {
+        final View h = new View(act) {
+            private final android.graphics.Paint p = new android.graphics.Paint(
+                    android.graphics.Paint.ANTI_ALIAS_FLAG);
+
+            @Override protected void onDraw(android.graphics.Canvas c) {
+                if (draggingVSplit) return;
+                float cy = getHeight() / 2f;
+                float cx = getWidth() / 2f;
+                p.setStyle(android.graphics.Paint.Style.FILL);
+                p.setColor(0x1FFFFFFF);
+                c.drawRoundRect(cx - dp(36), cy - dp(9), cx + dp(36), cy + dp(9),
+                        dp(9), dp(9), p);
+                p.setStyle(android.graphics.Paint.Style.STROKE);
+                p.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+                p.setStrokeWidth(Math.max(2f, dp(2)));
+                p.setColor(0x66FFFFFF);
+                c.drawLine(cx - dp(22), cy, cx + dp(22), cy, p);
+            }
+        };
+        h.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    draggingVSplit = true;
+                    vSplitDownRaw = e.getRawY();
+                    vSplitDownRatio = currentVRatio();
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                    h.invalidate();
+                    return true;
+                case MotionEvent.ACTION_MOVE: {
+                    if (!draggingVSplit) return true;
+                    int hh = PipBoard.this.getHeight();
+                    if (hh <= 0) return true;
+                    float dy = e.getRawY() - vSplitDownRaw;
+                    float r = vSplitDownRatio + dy / hh;
+                    vPreviewRatio = Math.max(0.15f, Math.min(0.85f, r));
+                    PipBoard.this.invalidate();
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL: {
+                    if (!draggingVSplit) return true;
+                    draggingVSplit = false;
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                    float r = vPreviewRatio > 0f ? vPreviewRatio : currentVRatio();
+                    vPreviewRatio = -1f;
+                    applyVSplitRatio(r, true);
+                    PipBoard.this.invalidate();
+                    h.invalidate();
+                    return true;
+                }
+                default:
+                    return true;
+            }
+        });
+        return h;
+    }
+
+    /** 当前右侧上(导航卡)占比（0~1）。 */
+    private float currentVRatio() {
+        float n = Math.max(1, model.pipWeightNav);
+        float c = Math.max(1, 100 - model.pipWeightNav);
+        return n / (n + c);
+    }
+
+    /** 设右侧上/下占比并改 navHost/colB 的 weight；persist 时落盘。 */
+    private void applyVSplitRatio(float ratio, boolean persist) {
+        if (navHost == null || colB == null) return;
+        int n = Math.max(15, Math.min(85, Math.round(ratio * 100f)));
+        int c = Math.max(1, 100 - n);
+        LinearLayout.LayoutParams ln = (LinearLayout.LayoutParams) navHost.getLayoutParams();
+        LinearLayout.LayoutParams lc = (LinearLayout.LayoutParams) colB.getLayoutParams();
+        ln.weight = n;
+        lc.weight = c;
+        navHost.setLayoutParams(ln);
+        colB.setLayoutParams(lc);
+        if (persist) {
+            try {
+                model.pipWeightNav = n;
+                model.save();
+                Log.i(TAG, "右侧上(导航卡)/下(槽2)占比已落盘 = " + n + ":" + c);
+            } catch (Throwable t) {
+                Log.w(TAG, "右侧占比落盘失败", t);
+            }
+        }
+    }
+
+    /** 批次 NB：NavCard reparent 入口 —— 板可见时进右上区，板隐藏时回左上（调用方摆）。 */
+    public void attachNavCard(android.view.View nav) {
+        if (navHost == null || nav == null) return;
+        if (nav.getParent() == navHost) return;
+        android.view.ViewGroup p = (android.view.ViewGroup) nav.getParent();
+        if (p != null) p.removeView(nav);
+        navHost.addView(nav, new FrameLayout.LayoutParams(-2, -2,
+                android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL));
+    }
+
+    /** 批次 NB：NavCard 从右上区摘走（还给 HomeActivity 摆左上）。 */
+    public void detachNavCard(android.view.View nav) {
+        if (nav == null) return;
+        if (nav.getParent() == navHost) navHost.removeView(nav);
     }
 
     /* ------------------------- 键条（批次 AA~S） -------------------------
@@ -682,31 +811,50 @@ public final class PipBoard extends LinearLayout {
     public boolean isSingle() { return singleMode; }
 
     private void applySingleVisuals() {
-        if (colA == null || colB == null) return;
+        if (colA == null || colB == null || rightCol == null) return;
+        // 层级（批次 NB 后）：PipBoard[ colA | splitter | rightCol[ navHost | vSplitter | colB ] ]
+        // single 铺满 = 一侧 weight 给满、另一侧整个 GONE；rightCol 内部权重跟着还原
         LinearLayout.LayoutParams la = (LinearLayout.LayoutParams) colA.getLayoutParams();
+        LinearLayout.LayoutParams lr = (LinearLayout.LayoutParams) rightCol.getLayoutParams();
         LinearLayout.LayoutParams lb = (LinearLayout.LayoutParams) colB.getLayoutParams();
+        LinearLayout.LayoutParams ln = navHost != null
+                ? (LinearLayout.LayoutParams) navHost.getLayoutParams() : null;
         if (singleMode) {
             boolean a = singleWhich == 1;
             colA.setVisibility(a ? View.VISIBLE : View.GONE);
-            colB.setVisibility(a ? View.GONE : View.VISIBLE);
             la.weight = a ? 1 : 0;
-            lb.weight = a ? 0 : 1;
+            rightCol.setVisibility(a ? View.GONE : View.VISIBLE);
+            lr.weight = a ? 0 : 1;
+            if (!a) {
+                // 槽2 铺满：右侧内部导航卡/竖把手让位，colB 吃满 rightCol
+                if (navHost != null) navHost.setVisibility(View.GONE);
+                if (vSplitter != null) vSplitter.setVisibility(View.GONE);
+                lb.weight = 1;
+            }
             if (splitter != null) {
                 splitter.setVisibility(View.GONE);
                 splitter.requestLayout();
             }
         } else {
             colA.setVisibility(View.VISIBLE);
-            colB.setVisibility(View.VISIBLE);
             la.weight = Math.max(1, model.pipWeightA);
-            lb.weight = Math.max(1, model.pipWeightB);
+            rightCol.setVisibility(View.VISIBLE);
+            lr.weight = Math.max(1, model.pipWeightB);
+            if (navHost != null) {
+                navHost.setVisibility(View.VISIBLE);
+                if (ln != null) ln.weight = Math.max(1, model.pipWeightNav);
+            }
+            if (vSplitter != null) vSplitter.setVisibility(View.VISIBLE);
+            lb.weight = Math.max(1, 100 - model.pipWeightNav);
             if (splitter != null) {
                 splitter.setVisibility(View.VISIBLE);
                 splitter.invalidate();
             }
         }
         colA.setLayoutParams(la);
+        rightCol.setLayoutParams(lr);
         colB.setLayoutParams(lb);
+        if (ln != null && navHost != null) navHost.setLayoutParams(ln);
         applyKeybar(singleMode ? singleWhich : 0);
         applyFocusVisuals(false);
         reattachAll();

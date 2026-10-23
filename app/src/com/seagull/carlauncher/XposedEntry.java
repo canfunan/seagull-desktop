@@ -236,6 +236,16 @@ public class XposedEntry implements IXposedHookLoadPackage {
             } catch (Throwable t) {
                 log("底栏屏蔽失败: " + t);
             }
+            // 批次 NB：导航数据（三地图归一化）—— g6.e.a(Bundle) 是 vivo 自己的
+            // UCarMapInfo 解析器（高德/百度/腾讯手机版经 UCarMapService.showNavInfo
+            // 推来、pq/k MapManager 消费前的唯一解析点），after 拿解好的 9 字段
+            try {
+                hookVivoNavInfo(lpp.classLoader);
+                hookVivoNavClear(lpp.classLoader);
+                log("已挂载 vivo.car.networking → 导航数据(g6.e.a)+清除(X3)");
+            } catch (Throwable t) {
+                log("导航数据 hook 失败: " + t);
+            }
             return;
         }
 
@@ -261,6 +271,43 @@ public class XposedEntry implements IXposedHookLoadPackage {
                 log("系统框架 PiP 标志钩子失败: " + t);
             }
             return;
+        }
+
+        if ("com.autonavi.minimap".equals(pkg)) {
+            // 批次 NB2：高德手机版 Ucar 模式数据（反编译 classes8.dex 坐实）——
+            // minimap 内置 com.ucar.map.connect.UCarMapConnector（车机模式客户端）：
+            // 导航数据由 defpackage.bs6.a() 组装成 Bundle（ucar.map.bundle.* 9 字段），
+            // 经 UCarMapConnector.f(bs6) 推给 UCarMapService。hook bs6.a() after
+            // 直接拿组装好的 Bundle —— 比 hook vivo 侧（g6.e.a）更优：
+            //   ① 高德是普通 app，注入 100% 稳（vivo.car.networking 是系统 app，
+            //      注入看 zn-daemon/lspd 状态，本轮实测翻过车）；
+            //   ② 数据是原味 Bundle（vivo 侧还过 50ms 节流合并）；
+            //   ③ Icon（转向图标）随 Bundle 直传，海鸥不用箭头文本映射。
+            // 整个 Bundle 塞广播（Bundle 是 Parcelable），海鸥侧原样解。
+            try {
+                hookAmapUcar(lpp.classLoader);
+                log("已挂载 minimap → Ucar 导航数据(bs6.a)");
+            } catch (Throwable t) {
+                log("高德 Ucar hook 失败: " + t);
+            }
+        }
+
+        if ("com.autonavi.amapauto".equals(pkg)) {
+            // 批次 NB4：高德车机版导航数据（用户「车机版这个导航卡片应该行」评估坐实）——
+            // defpackage.a80.k(GuideInfoProtocolData) 是车机版 TBT 数据 → 协议
+            // Model 的唯一组装入口（车机屏导航 UI 就消费它发的协议），每次导航
+            // 更新必调。hook before 拿 GuideInfoProtocolData（参数），反射调它的
+            // **语义 getter**（getCurRoadName/getNextRoadName/getRouteRemainDis/
+            * getSegRemainDis/getCurSpeed/getLimitedSpeed/getType/getIcon/...）——
+            // 不碰混淆的 GuideInfoModel 字母 getter，零对应成本。
+            // 字段比 minimap 的 Ucar 线全一个量级：全程剩余距离/时间、本段剩余、
+            // 当前速度、限速、电子眼距离、图标、下一道路名。
+            try {
+                hookAmapAutoGuide(lpp.classLoader);
+                log("已挂载 amapauto → 车机版导航数据(a80.k)");
+            } catch (Throwable t) {
+                log("车机版导航 hook 失败: " + t);
+            }
         }
 
         if (isNetease(pkg)) {
@@ -313,7 +360,13 @@ public class XposedEntry implements IXposedHookLoadPackage {
             log("H4 失败: " + t);
         }
         // C0 总闸（批次 AG→PIP 重写）：见 hookExecStartActivity 上方注释。
-        if (curated) {
+        // 安装条件 TARGETS ∪ CAR_PKGS（用户 1023 实测修正）：原来只 curated
+        // （TARGETS 7 个）装 C0，CAR_PKGS 的车机/TV 版（WE导航 30 个
+        // singleTask、酷奇 192 个、爱奇艺 139 个、虎牙 38 个……）没装 ——
+        // 应用内点 singleTask Activity → 系统建任务合成 displayId → 归属
+        // 检查拒 → 跳应用自己的界面（「挂载一个窗口还是跳转到应用自己的
+        // 界面」的根因）。C0 v8 的 launchMode 判据就是治这个的。
+        if (curated || hit(pkg)) {
             try {
                 hookExecStartActivity();
             } catch (Throwable t) {
@@ -590,6 +643,194 @@ public class XposedEntry implements IXposedHookLoadPackage {
                         }
                     }
                 });
+    }
+
+    /**
+     * 批次 NB：三地图归一化导航数据（反编译 base_net classes2/5 坐实）：
+     *   g6.e = UCarMapInfo，a(Bundle) 把地图 app 经 UCarMapService.showNavInfo
+     *   推来的 Bundle 解成结构化字段（vivo 白名单只收三个手机版：minimap/
+     *   BaiduMap/tencent.map，归一化后转向 id 用高德 id 制）：
+     *     a=DIRECTION_ICON_ID  b=DIRECTION_ICON(Icon)  c=DISTANCE
+     *     d=DISTANCE_UNIT  e=OPERATION  f=WHERE  g=TITLE_1  h=TITLE_2
+     *     i=CROSSING_ICON
+     * after 里读返回值 e 对象的公开字段 → 广播给海鸥（CanvasLaunchReceiver 同款
+     * 通道，extras 带全部标量字段）→ NavCard 刷新。
+     * 反射读字段（混淆类字段名 a/b/c... 是 jadx 视图，真机字段名以反射 getField
+     * 兜底逐个试；拿不到就跳过得了的字段，绝不让导航 hook 崩 vivo 进程）。
+     */
+    private void hookVivoNavInfo(ClassLoader cl) {
+        XposedHelpers.findAndHookMethod("g6.e", cl, "a", android.os.Bundle.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object info = param.getResult();
+                            if (info == null) return;
+                            Object bundle = param.args[0];
+                            if (!(bundle instanceof android.os.Bundle)) return;
+                            android.os.Bundle b = (android.os.Bundle) bundle;
+                            // 直接从 Bundle 读（key 是明文常量，不依赖混淆字段名）
+                            int iconId = b.getInt("ucar.map.bundle.DIRECTION_ICON_ID");
+                            String dist = str(b.getString("ucar.map.bundle.DISTANCE"));
+                            String unit = str(b.getString("ucar.map.bundle.DISTANCE_UNIT"));
+                            String op = str(b.getString("ucar.map.bundle.OPERATION"));
+                            String where = str(b.getString("ucar.map.bundle.WHERE"));
+                            String t1 = str(b.getString("ucar.map.bundle.TITLE_1"));
+                            String t2 = str(b.getString("ucar.map.bundle.TITLE_2"));
+                            if (dist.isEmpty() && t1.isEmpty()) return;   // 空更新不推
+                            android.content.Intent i = new android.content.Intent(
+                                    com.seagull.carlauncher.Constants.ACTION_NAV_INFO);
+                            i.setPackage(com.seagull.carlauncher.Constants.SELF_PACKAGE);
+                            i.putExtra("iconId", iconId);
+                            i.putExtra("dist", dist);
+                            i.putExtra("unit", unit);
+                            i.putExtra("op", op);
+                            i.putExtra("where", where);
+                            i.putExtra("t1", t1);
+                            i.putExtra("t2", t2);
+                            // g6.e.a 是静态方法（thisObject==null），context 走
+                            // ActivityThread.currentApplication() 反射拿
+                            Class<?> at = Class.forName("android.app.ActivityThread");
+                            Object app = at.getMethod("currentApplication").invoke(null);
+                            if (!(app instanceof android.content.Context)) return;
+                            ((android.content.Context) app).sendBroadcast(i);
+                        } catch (Throwable t) {
+                            // 导航 hook 绝不影响 vivo 投影进程 —— 全吞
+                        }
+                    }
+                });
+    }
+
+    /**
+     * 批次 NB：导航结束清除 —— UCarMapService.X3(Bundle) = removeNavInfo（地图
+     * 退出导航时调）。不发数据，只发清除广播让 NavCard 隐藏（否则导航卡片
+     * 导航结束了还挂在右上区）。
+     */
+    private void hookVivoNavClear(ClassLoader cl) {
+        XposedHelpers.findAndHookMethod(
+                "com.vivo.vivo_car_display.navigation.comm.impl.UCarMapService",
+                cl, "X3", android.os.Bundle.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Class<?> at = Class.forName("android.app.ActivityThread");
+                            Object app = at.getMethod("currentApplication").invoke(null);
+                            if (!(app instanceof android.content.Context)) return;
+                            android.content.Intent i = new android.content.Intent(
+                                    com.seagull.carlauncher.Constants.ACTION_NAV_CLEAR);
+                            i.setPackage(com.seagull.carlauncher.Constants.SELF_PACKAGE);
+                            ((android.content.Context) app).sendBroadcast(i);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+    }
+
+    /**
+     * 批次 NB2：高德手机版 Ucar 数据源（比 vivo 侧更优，见 dispatch 注释）。
+     * hook defpackage.bs6.a() after —— 返回的 Bundle 含：
+     *   DIRECTION_ICON(Icon) / OPERATION / WHERE / DISTANCE / DISTANCE_UNIT /
+     *   CROSSING_ICON(Icon) / TITLE_1(null) / TITLE_2(null)
+     * 整个 Bundle 通过 ACTION_NAV_INFO 广播回海鸥（extra "b"）。
+     * 清除通道：bs6 为空/全 null 的组装（导航结束）时发 ACTION_NAV_CLEAR。
+     */
+    private void hookAmapUcar(ClassLoader cl) {
+        XposedHelpers.findAndHookMethod("defpackage.bs6", cl, "a",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object r = param.getResult();
+                            if (!(r instanceof android.os.Bundle)) return;
+                            android.os.Bundle b = (android.os.Bundle) r;
+                            // 全空 = 导航结束的收尾组装 → 发清除
+                            boolean empty = true;
+                            for (String k : new String[]{
+                                    "ucar.map.bundle.DISTANCE", "ucar.map.bundle.OPERATION",
+                                    "ucar.map.bundle.WHERE", "ucar.map.bundle.TITLE_1"}) {
+                                if (b.getString(k) != null) { empty = false; break; }
+                            }
+                            Class<?> at = Class.forName("android.app.ActivityThread");
+                            Object app = at.getMethod("currentApplication").invoke(null);
+                            if (!(app instanceof android.content.Context)) return;
+                            android.content.Context ctx = (android.content.Context) app;
+                            android.content.Intent i = new android.content.Intent(
+                                    com.seagull.carlauncher.Constants.ACTION_NAV_INFO);
+                            i.setPackage(com.seagull.carlauncher.Constants.SELF_PACKAGE);
+                            i.putExtra("b", b);
+                            if (empty) {
+                                i.setAction(com.seagull.carlauncher.Constants.ACTION_NAV_CLEAR);
+                            }
+                            ctx.sendBroadcast(i);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+    }
+
+    /** GuideInfoProtocolData 的语义 getter（混淆类里唯一可靠的读法）。 */
+    private static final String[] GP_GETTERS = {
+            "getCurRoadName", "getNextRoadName", "getRouteRemainDis",
+            "getRouteRemainTime", "getSegRemainDis", "getSegRemainTime",
+            "getCurSpeed", "getLimitedSpeed", "getType", "getIcon",
+            "getCameraDist", "getCameraSpeed", "getCarDirection",
+    };
+
+    /**
+     * 批次 NB4：高德车机版导航数据源。hook defpackage.a80.k before，
+     * 反射 GuideInfoProtocolData 语义 getter 拿全字段，广播回海鸥。
+     * 同一 ACTION_NAV_INFO 通道（NavInfoReceiver 的 "b" Bundle extra）。
+     */
+    private void hookAmapAutoGuide(ClassLoader cl) {
+        // 参数类型用类名字符串（LSPosed 的 findAndHookMethod 重载吃字符串）——
+        // 不能 Class.forName：handleLoadPackage 早期 GuideInfoProtocolData 还没
+        // 加载，forName 直接 ClassNotFound，钩子装不上（复盘抓的）
+        XposedHelpers.findAndHookMethod("defpackage.a80", cl,
+                "k", "com.autonavi.amapauto.jni.protocol.data.GuideInfoProtocolData",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            Object data = param.args[0];
+                            if (data == null) return;
+                            android.os.Bundle b = new android.os.Bundle();
+                            boolean any = false;
+                            for (String g : GP_GETTERS) {
+                                try {
+                                    Object v = XposedHelpers.callMethod(data, g);
+                                    if (v == null) continue;
+                                    if (v instanceof String) {
+                                        b.putString(g, (String) v);
+                                        if (!((String) v).isEmpty()) any = true;
+                                    } else if (v instanceof Integer) {
+                                        b.putInt(g, (Integer) v);
+                                        if ((Integer) v != 0) any = true;
+                                    } else if (v instanceof Double) {
+                                        b.putDouble(g, ((Double) v).doubleValue());
+                                        if ((Double) v != 0d) any = true;
+                                    }
+                                } catch (Throwable skipOne) {
+                                    // 单个 getter 没有/签名不符就跳过，别牵连全批
+                                }
+                            }
+                            if (!any) return;
+                            Class<?> at = Class.forName("android.app.ActivityThread");
+                            Object app = at.getMethod("currentApplication").invoke(null);
+                            if (!(app instanceof android.content.Context)) return;
+                            android.content.Intent i = new android.content.Intent(
+                                    com.seagull.carlauncher.Constants.ACTION_NAV_INFO);
+                            i.setPackage(com.seagull.carlauncher.Constants.SELF_PACKAGE);
+                            i.putExtra("b", b);
+                            ((android.content.Context) app).sendBroadcast(i);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+    }
+
+    private static String str(String s) {
+        return s == null ? "" : s;
     }
 
     private void hookCarlifeCastPrepared(ClassLoader cl) {
