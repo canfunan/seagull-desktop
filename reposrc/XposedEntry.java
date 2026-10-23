@@ -787,7 +787,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
         // 不能 Class.forName：handleLoadPackage 早期 GuideInfoProtocolData 还没
         // 加载，forName 直接 ClassNotFound，钩子装不上（复盘抓的）
         XposedHelpers.findAndHookMethod("defpackage.a80", cl,
-                "k", "com.autonavi.amapauto.protocol.model.service.GuideInfoProtocolData",
+                "k", "com.autonavi.amapauto.jni.protocol.data.GuideInfoProtocolData",
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
