@@ -116,6 +116,8 @@ public final class AmapProtocolClient {
             data.writeStrongBinder(cb);
             binder.transact(2, data, reply, 1);
             reply.readException();
+            handshake(binder);   // ★ 注册后必发版本握手（pk0.e → h1 protocolId=99999），
+                                 // 漏了它高德 3 秒后销毁 binder（实测稳定复现）
             return true;
         } catch (RemoteException e) {
             Log.w(TAG, "注册失败: " + e);
@@ -123,6 +125,34 @@ public final class AmapProtocolClient {
         } catch (Throwable t) {
             Log.w(TAG, "注册异常", t);
             return false;
+        } finally {
+            data.recycle();
+            reply.recycle();
+        }
+    }
+
+    /**
+     * 版本握手（照扒 defpackage.pk0.e → lw.n → svc.h1）：
+     * protocolId=99999 的 requestVersion JSON。高德 SdkClient 注册后第一件事，
+     * 不发的客户端会被服务端在数秒后销毁 binder（实测：注册成功 3 秒 binderDied）。
+     */
+    private void handshake(IBinder binder) {
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            String json = "{\"requestCode\":\"0\",\"responseCode\":\"0\","
+                    + "\"needResponse\":true,\"protocolId\":99999,\"versionName\":\"0\","
+                    + "\"requestAuthor\":\"" + CLIENT_TYPE + "\","
+                    + "\"message\":\"\",\"messageType\":\"request\",\"statusCode\":0,"
+                    + "\"data\":{\"versionName\":\"3.2.0.20190521\"}}";
+            data.writeInterfaceToken(IFACE);
+            data.writeString(CLIENT_TYPE);
+            data.writeString(json);
+            binder.transact(1, data, reply, 0);   // code 1 = h1（同步，reply 有 NoException）
+            reply.readException();
+            Log.i(TAG, "版本握手已发送（protocolId=99999）");
+        } catch (Throwable t) {
+            Log.w(TAG, "握手失败", t);
         } finally {
             data.recycle();
             reply.recycle();
