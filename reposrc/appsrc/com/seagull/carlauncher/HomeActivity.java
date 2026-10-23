@@ -363,7 +363,15 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         // 主界面页翻页，壁纸页不看导航卡是一期已知边界。
         navCard = new NavCard(this);
         navCard.setEnabled(model == null || model.navEnabled);
-        if (pip != null) pip.attachNavCard(navCard);
+        // NB6：挂 root 层右上（不依赖 pager 页）——NB5 挂在 PipBoard 的 navHost，
+        // 翻到壁纸页/负一屏时 mainPage 不可见，卡片跟着消失（用户实测「没有导航
+        // 卡片」的根因）。root 层常驻：四页 + 车机模式纯桌面都显示。
+        // PipBoard.navHost/attachNavCard 保留（板内模式备用），此处不再用。
+        FrameLayout.LayoutParams nlp = new FrameLayout.LayoutParams(-2, -2,
+                Gravity.TOP | Gravity.RIGHT);
+        nlp.rightMargin = dp(16);
+        nlp.topMargin = dp(52);
+        root.addView(navCard, nlp);
 
         // 系统画中画形态下的精简视图（系统 PiP 里只显示这一层）
         pipBox = new TextView(this);
