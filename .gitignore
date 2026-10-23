@@ -14,3 +14,4 @@ keystore/
 *.tmp
 *.log
 .DS_Store
+reference/original-yecai/

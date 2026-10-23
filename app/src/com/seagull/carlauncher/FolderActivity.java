@@ -17,7 +17,7 @@ import android.widget.Toast;
 
 /**
  * 文件夹：打开查看 / 改名 / 解散 / 把某个应用移出。
- * 对齐野菜桌面「桌面」组里的整理能力。
+ * 对齐海鸥桌面「桌面」组里的整理能力。
  */
 public class FolderActivity extends BaseActivity {
 

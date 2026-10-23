@@ -30,12 +30,12 @@ import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
 /**
- * 设置分区页：按 EXTRA_SECTION 渲染 17 个分区之一（文案逐字对齐野菜桌面）。
+ * 设置分区页：按 EXTRA_SECTION 渲染 17 个分区之一（文案逐字对齐海鸥桌面）。
  *
  * 职责：把 LauncherModel 已有的配置字段接上 UI 与持久化。
  * 「有则增强，无则隐藏」：需要 root / 特殊权限的操作只在能力可用时出现。
  * 各分区的完整功能落地节点：布局(已有) Dock(P0-5) 快捷栏(P0-6) 主题(P0-7) 菜园(P1-1)
- * 小白点(P1-2) 天气(P1-3) 歌词(P1-4) 任务引擎(P1-5) 野菜岛(P1-6) 触摸通道(P2-3)。
+ * 小白点(P1-2) 天气(P1-3) 歌词(P1-4) 任务引擎(P1-5) 海鸥岛(P1-6) 触摸通道(P2-3)。
  */
 public class SettingsSectionActivity extends BaseActivity {
 
@@ -120,7 +120,7 @@ public class SettingsSectionActivity extends BaseActivity {
             case "ball": return "小白点";
             case "theme": return "主题与壁纸";
             case "screen": return "屏幕";
-            case "island": return "野菜岛";
+            case "island": return "海鸥岛";
             case "weather": return "天气";
             case "lyrics": return "歌词";
             case "window": return "窗口";
@@ -546,7 +546,7 @@ public class SettingsSectionActivity extends BaseActivity {
         actionRow("进一次菜园看看", "看看现在的样子", v ->
                 startActivity(new Intent(this, GardenActivity.class)));
         note("点上面「进一次菜园看看」进菜园，菜园里再长按一次出来。"
-                + "桌面右下角的小白点（野菜键）也能进菜园。菜园的压暗跟外观里的背景遮罩是两份，互不影响。");
+                + "桌面右下角的小白点（小白点）也能进菜园。菜园的压暗跟外观里的背景遮罩是两份，互不影响。");
     }
 
     private void ballBody() {
@@ -577,7 +577,7 @@ public class SettingsSectionActivity extends BaseActivity {
         });
         note("点一下回桌面，长按进菜园，直接拖能挪位置，松手自动贴边。"
                 + "Dock 关着时，点一下改成出全部应用。");
-        note("菜园里那片叶子跟悬浮球是同一个野菜键，位置大小共用。");
+        note("菜园里那片叶子跟悬浮球是同一个小白点，位置大小共用。");
     }
 
     private void themeBody() {
@@ -885,10 +885,10 @@ public class SettingsSectionActivity extends BaseActivity {
     }
 
     private void islandBody() {
-        toggleRow("显示野菜岛", model.islandEnabled, () -> { model.islandEnabled = !model.islandEnabled; });
+        toggleRow("显示海鸥岛", model.islandEnabled, () -> { model.islandEnabled = !model.islandEnabled; });
         sliderRow("距顶部偏移（挖孔 / 圆角）", 0, 80, model.islandOffsetY, " dp", v -> { model.islandOffsetY = v; });
         sliderRow("宽度", 200, 480, model.islandWidth, " dp", v -> { model.islandWidth = v; });
-        toggleRow("野菜岛显示歌词", model.islandLyric, () -> { model.islandLyric = !model.islandLyric; });
+        toggleRow("海鸥岛显示歌词", model.islandLyric, () -> { model.islandLyric = !model.islandLyric; });
         note("歌词长时省略；状态栏隐藏时浮在窗口上。浮层在后续版本接入。");
     }
 

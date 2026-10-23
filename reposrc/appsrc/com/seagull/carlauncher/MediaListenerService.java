@@ -58,7 +58,7 @@ public class MediaListenerService extends NotificationListenerService {
     };
 
     /**
-     * 通知文本键位（野菜桌面普通版同款策略）：歌词行在音乐 app 的通知
+     * 通知文本键位（参考桌面普通版同款策略）：歌词行在音乐 app 的通知
      * text/bigText 里（落雪直接放当前歌词行；其余 app 放歌名/歌手 —— 与
      * title 相同则不算歌词）。按优先级取第一个非空且不等于 title 的。
      */
@@ -76,13 +76,13 @@ public class MediaListenerService extends NotificationListenerService {
         appCtx = getApplicationContext();
         // 批次 NB：三地图归一化导航信息广播（vivo UCarMapService 通道，常驻收）
         NavInfoReceiver.register(appCtx);
-        // 野菜同款自授权（批次 MB）：没授权就自己授 —— 不弹设置 UI、不重启、
+        // 海鸥同款自授权（批次 MB）：没授权就自己授 —— 不弹设置 UI、不重启、
         // 不动系统设置界面。授权后系统自动重绑本服务，onListenerConnected 跟着来。
         ensureAccess(appCtx);
     }
 
     /**
-     * 通知监听自授权（野菜桌面普通版 LyricNotificationListener 同款机制）：
+     * 通知监听自授权（参考桌面普通版 LyricNotificationListener 同款机制）：
      * 反射调 NotificationManager 隐藏方法 setNotificationListenerAccessGranted
      * 直接授予本服务访问权 —— 系统内存态立即更新并自动重绑，全程无 UI、无重启。
      * 反射失败（个别 ROM 收紧隐藏 API）回落写 enabled_notification_listeners

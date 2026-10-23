@@ -11,12 +11,12 @@ import android.view.KeyEvent;
 import android.view.accessibility.AccessibilityEvent;
 
 /**
- * 按键映射（批次 KM，复刻野菜桌面普通版 KeyMapService）：
+ * 按键映射（批次 KM，复刻参考桌面普通版 KeyMapService）：
  * AccessibilityService 拦截硬件按键 → 按映射表改派动作。
  *
  * 为什么用 AccessibilityService：它是唯一能在**不 root 改框架**的前提下
  * 拿到原始硬件键事件并「吃掉」的官方通道（canRequestFilterKeyEvents）。
- * 野菜同款：serviceInfo.flags |= FLAG_REQUEST_FILTER_KEY_EVENTS(32)。
+ * 参考实现同款：serviceInfo.flags |= FLAG_REQUEST_FILTER_KEY_EVENTS(32)。
  *
  * 默认映射（车机桌面最常用，可在 RootPanel 改 persist.seagull.keymap 覆盖）：
  *   音量+ (24) → 下一曲      音量- (25) → 上一曲      耳机键 (79) → 播放/暂停

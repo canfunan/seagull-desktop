@@ -1351,7 +1351,7 @@ NEVER_FIX_ORIENTATION 的接受度未验证，失败仅记日志。
 
 健壮性：
 15. **`factoryReset` 名不副实**：`resetScalars()` 只回 16 个标量，Dock/菜园/小白点/
-    野菜岛/天气/歌词/窗口/触摸/快捷按钮全系列漏重置（用户实测过：重置后字号还是 130%）。
+    海鸥岛/天气/歌词/窗口/触摸/快捷按钮全系列漏重置（用户实测过：重置后字号还是 130%）。
     → 补全全部标量字段。
 16. **两处泄漏/健壮**：`DesktopView` 歌词 sink 构造时匿名注册、从不摘除，换肤重建
     每次泄漏一整棵旧视图树 → 单实例 + onAttached/onDetached 配套；`HomeActivity` 换肤
@@ -1521,7 +1521,7 @@ Skin.apply 时机等）列 TODO P2-16，下批复盘继续。RootMain 线程-per
 
 - 新增 `GardenActivity.java`：三种摆法（居中大钟 / 左上时钟+底部歌词 / 大字时间日期）；遮罩走 `gardenDim`，与外观的 `wallDim` 是两份；时钟带 `setShadowLayer` 当字底；叶子点=全部应用、长按=退出；返回键回桌面。
 - 新增 `BallService.java`：`TYPE_APPLICATION_OVERLAY` 悬浮球，拖动时改 `WindowManager.LayoutParams.x/y`，松手贴最近的左右边并 `model.save()`；点=回桌面（Dock 关着时改成出全部应用）、长按=进菜园；长按判定用设置里的 `longPressMs`。
-- `LauncherModel`：新增 `ballAlpha`（5.12）；`ballX/ballY/ballSize` 由菜园叶子与悬浮球共用（它们是同一个「野菜键」）。
+- `LauncherModel`：新增 `ballAlpha`（5.12）；`ballX/ballY/ballSize` 由菜园叶子与悬浮球共用（它们是同一个「小白点」）。
 - `HomeActivity` 底栏加「叶」：点=全部应用，长按=进菜园（`gardenEnabled` 关着时提示去设置开）。
 - `BootReceiver` 开机后按 `ballEnabled` 拉起悬浮球。
 - `SettingsSectionActivity`：菜园分区加「进一次菜园看看」；小白点分区接上 `BallService.setEnabled()`、透明度滑杆、回默认位置。
@@ -1529,7 +1529,7 @@ Skin.apply 时机等）列 TODO P2-16，下批复盘继续。RootMain 线程-per
 
 **复盘**
 
-- 做对：菜园和悬浮球共用一份位置/大小，模型没膨胀成两套字段；「野菜键」在两个场景是同一个东西，拆成两份迟早对不上。
+- 做对：菜园和悬浮球共用一份位置/大小，模型没膨胀成两套字段；「小白点」在两个场景是同一个东西，拆成两份迟早对不上。
 - 做错：叶子背景色一开始写成 `Skin.c(R.color.leaf) & 0x66FFFFFF` —— 这是把 alpha 换成了不透明的白，等于白圆底。正确写法是 `(0x66 << 24) | (color & 0x00FFFFFF)`。这类「alpha 与 RGB 用同一个掩码混搭」的错，肉眼在编译期看不出来，只有 review 能抓到。
 - 决策：菜园不给悬浮窗权限、不做成 Service —— 它就是一个 Activity，进菜园时别的应用本来就在后台跑，「画中画藏起来」不需要额外动作。
 - 决策：长按用 `postDelayed` 而不是 `GestureDetector`，少一个类；代价是手指按住不动也会触发，符合「长按进菜园」的直觉。
@@ -1573,7 +1573,7 @@ Skin.apply 时机等）列 TODO P2-16，下批复盘继续。RootMain 线程-per
 
 ---
 
-## 批次 H — P1-5 任务引擎 + P1-6 野菜岛 + P1-7 关于
+## 批次 H — P1-5 任务引擎 + P1-6 海鸥岛 + P1-7 关于
 
 **目标**：任务能真的自己跑；顶部胶囊能显示；关于页能查更新并自更新。
 
@@ -1582,7 +1582,7 @@ Skin.apply 时机等）列 TODO P2-16，下批复盘继续。RootMain 线程-per
 - 新增 `TaskEngine.java`：`fireDesktop`（同进程只跑一次）/ `fireBoot` / `arm`（每分钟对表）三个触发，动作层实现 `OPEN_APP / OPEN_PIP / REMOVE_FROM_HOME / DELAY`。
 - `LauncherModel.Task` 加 `atMin`（定时触发的「每天第几分钟」），`describe()` 会把时间说成人话（`每天 07:30`）；`appNameOf/shortName` 把包名换成应用名。
 - 新增 `IslandView.java`：顶部居中胶囊，`onDraw` 里圆角矩形 + 主副两行文字，超宽尾部省略；`bind(model)` 按设置摆位置并取内容。
-- `HomeActivity`：`root` 上挂 `IslandView`（不进 `mainCol`，免得被布局挤动），onResume 与 30 秒 tick 都 `bind`，另注册 `Lyrics.Sink` 让岛上歌词一秒一跳；点一下进野菜岛设置分区。
+- `HomeActivity`：`root` 上挂 `IslandView`（不进 `mainCol`，免得被布局挤动），onResume 与 30 秒 tick 都 `bind`，另注册 `Lyrics.Sink` 让岛上歌词一秒一跳；点一下进海鸥岛设置分区。
 - `SettingsSectionActivity`：定时任务多问一句「每天几点几分」；关于页接上「检查更新」（GitHub releases/latest 对版本）与「自更新」（下 apk 到 filesDir → 系统安装器）；指纹改用 `GET_SIGNING_CERTIFICATES`。
 - `BootReceiver`：开机跑 `TaskEngine.fireBoot`。
 
@@ -1591,7 +1591,7 @@ Skin.apply 时机等）列 TODO P2-16，下批复盘继续。RootMain 线程-per
 - 做对：定时任务用「每分钟对一次表」而不是 `AlarmManager`。`AlarmManager` 要权限、要 exact alarm 白名单（API 31+ 还收紧），一分钟精度对「每天 07:30 打开导航」完全够用；多出来的代价只是一分钟误差。
 - 做错：`Task.describe()` 在 `static` 嵌套类里调实例方法 `appNameOf`，编译不过。拆成 `static shortName()`（截包名尾巴）与实例 `appNameOf()` 两份——任务列表里 `allApps` 已经加载过，用实例那份能显示真名，静态上下文才用短名。
 - 决策：13.6「在画中画打开应用」用官方 `android.support.picture_in_picture` extra，Android 没有「强制别人进 PiP」的 API。矩阵里标 🟡 并写清原因，不假装 100% 生效。
-- 决策：野菜岛浮在桌面自己这层（`FrameLayout` 顶层），不新开悬浮窗。跨应用浮起来要再造一个 Overlay Service；等 8.6 真被用到再上，ponytail 已写进类注释。
+- 决策：海鸥岛浮在桌面自己这层（`FrameLayout` 顶层），不新开悬浮窗。跨应用浮起来要再造一个 Overlay Service；等 8.6 真被用到再上，ponytail 已写进类注释。
 - 决策：8.7 挖孔/圆角检测没做，用手动偏移代替。自动检测要读 `DisplayCutout`，拿不到就得靠 `WindowInsets` 猜，收益不抵成本。
 
 **验证**：`typecheck.sh` 通过；CI（`5197fce`，批次 G）`completed success`。

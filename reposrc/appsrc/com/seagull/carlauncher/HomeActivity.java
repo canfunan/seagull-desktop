@@ -81,14 +81,14 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         lastSkin = skinSignature();
         carMode = getIntent() != null && getIntent().getBooleanExtra("car_mode", false);
         selfReport();
-        // 通知监听自授权（野菜同款）：底栏音乐条的数据源 —— 没授权系统只返回
+        // 通知监听自授权（海鸥同款）：底栏音乐条的数据源 —— 没授权系统只返回
         // 空会话列表、横幅整条隐藏。反射直授，系统随即重绑 MediaListenerService，
         // 全程无 UI 无重启。
         MediaListenerService.ensureAccess(this);
         // 授权→重绑是异步的（服务 onListenerConnected 才连上）：首次 bindMedia
         // 多半拿不到数据，2s 后补刷一次（回归修复：横幅不显示）
         ui.postDelayed(this::refreshMini, 2000L);
-        KeyMapService.ensureAccess(this);   // 按键映射 root 授权（野菜同款无障碍通道）
+        KeyMapService.ensureAccess(this);   // 按键映射 root 授权（海鸥同款无障碍通道）
         BallService.ensureAccess(this);     // 悬浮球 overlay root 授权
         if (BallService.isOn(this)) {
             try { startService(new Intent(this, BallService.class)); } catch (Throwable ignore) {}
@@ -347,7 +347,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         dlp.bottomMargin = dp(DOCK_BOTTOM);
         root.addView(dock, dlp);
 
-        // 野菜岛：顶部居中的胶囊，浮在桌面上
+        // 海鸥岛：顶部居中的胶囊，浮在桌面上
         island = new IslandView(this);
         island.setOnClickListener(v -> startActivity(new Intent(this, SettingsSectionActivity.class)
                 .putExtra(SettingsSectionActivity.EXTRA_SECTION, "island")));

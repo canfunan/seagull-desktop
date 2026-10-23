@@ -305,7 +305,7 @@ public class RootPanelActivity extends BaseActivity {
         dpiHint.setPadding(dp(4), 0, 0, dp(4));
         col.addView(dpiHint);
 
-        /* 桌面组件（批次 MB/KB/KM，野菜复刻）：悬浮球 / 按键映射开关。
+        /* 桌面组件（批次 MB/KB/KM，海鸥复刻）：悬浮球 / 按键映射开关。
          * 都是立即生效（prop + 服务起停），不用重启。 */
         col.addView(section("桌面组件"));
         col.addView(btn("悬浮球开关（当前 " + (BallService.isOn(this) ? "开" : "关") + "）",
@@ -358,7 +358,7 @@ public class RootPanelActivity extends BaseActivity {
     /** 开画中画（目标应用已由 setTarget 定好）：置开关后回桌面，
      *  HomeActivity.onResume 会把 VdPipView 挂到桌面最上层（车联同款流程）。 */
     private SysOps.R startPip() {
-        VirtualPipController.setEnabled(true);
+        VirtualPipController.setEnabled(this, true);   // NB18：持久化，进程被杀也能自愈
         finish();
         return new SysOps.R(true, "已回桌面 —— 画中画嵌在桌面里，状态在画中画顶栏。");
     }

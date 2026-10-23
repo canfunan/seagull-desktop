@@ -26,9 +26,9 @@ import java.util.Set;
 /**
  * 桌面数据层：应用清单 + 全部配置的单一事实源。
  *
- * 对齐野菜桌面的设置结构（去掉账号与云端组后剩 5 组 / 17 分区）：
+ * 对齐海鸥桌面的设置结构（去掉账号与云端组后剩 5 组 / 17 分区）：
  *   桌面       → 布局 | Dock 栏 | 快捷栏 | 菜园 | 小白点
- *   外观       → 主题与壁纸 | 屏幕 | 野菜岛
+ *   外观       → 主题与壁纸 | 屏幕 | 海鸥岛
  *   天气与歌词 → 天气 | 歌词
  *   高级功能   → 窗口 | 触摸 | 自动化任务 | 开机动画
  *   系统与工具 → 系统 | 车机工具 | 关于
@@ -443,7 +443,7 @@ public final class LauncherModel {
     public int marginVOf(boolean portrait) { return portrait ? portMarginV : marginV; }
     public int gapOf(boolean portrait) { return portrait ? portGap : gap; }
 
-    /* ==================== 状态：野菜岛 ==================== */
+    /* ==================== 状态：海鸥岛 ==================== */
 
     public boolean islandEnabled = false;
     public int islandOffsetY = 0;      // 距顶部（挖孔/圆角）
@@ -1170,7 +1170,7 @@ public final class LauncherModel {
             o.put("hideBars", hideSystemBars);
             o.put("infoBar", topInfoBar);
             o.put("autoTime", autoNetworkTime);
-            /* 野菜岛 */
+            /* 海鸥岛 */
             o.put("island", islandEnabled);
             o.put("islandY", islandOffsetY);
             o.put("islandW", islandWidth);
@@ -1672,7 +1672,7 @@ public final class LauncherModel {
 
     /**
      * 标量配置回默认值（defaults() 只管列表类那一组，这里管剩下的）。
-     * 必须覆盖全部标量字段：旧实现只重置 16 个，Dock/菜园/小白点/野菜岛/
+     * 必须覆盖全部标量字段：旧实现只重置 16 个，Dock/菜园/小白点/海鸥岛/
      * 天气/歌词/窗口/触摸/快捷按钮全留在用户调校值上，「恢复出厂」名不副实
      * （用户实测过：重置后字号还是 130%）。
      */
@@ -1731,7 +1731,7 @@ public final class LauncherModel {
         hideSystemBars = false;
         topInfoBar = true;
         autoNetworkTime = true;
-        /* 野菜岛 */
+        /* 海鸥岛 */
         islandEnabled = false;
         islandOffsetY = 0;
         islandWidth = 320;

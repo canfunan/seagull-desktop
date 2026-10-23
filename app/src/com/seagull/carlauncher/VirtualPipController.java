@@ -80,10 +80,37 @@ public final class VirtualPipController {
     /** 推荐应用点选（RootPanel 用）。传 null = 回到自动探测。 */
     public static synchronized void setTarget(String pkg) { sTargetPkg = pkg; }
 
-    /** 画中画开关：桌面按它决定嵌不嵌 VdPipView（车联同款：pip 是 Activity 内视图）。 */
-    public static synchronized boolean isEnabled() { return sEnabled; }
+    /**
+     * 画中画开关：桌面按它决定嵌不嵌 VdPipView（车联同款：pip 是 Activity 内视图）。
+     * NB18：持久化到 prefs —— 之前是纯内存态，进程被杀（后台清理/车机回收）后
+     * 开关静默归零，桌面重开时 syncVdPip 判 false 不挂载，用户只能到 root 面板
+     * 重新「删除再开启」才能挂回（用户实测原话）。现在冷启懒加载 prefs 自愈。
+     */
+    private static boolean sLoaded;
 
-    public static synchronized void setEnabled(boolean e) { sEnabled = e; }
+    public static synchronized boolean isEnabled(Context ctx) {
+        if (!sLoaded) {
+            try {
+                sEnabled = ctx.getApplicationContext()
+                        .getSharedPreferences("seagull", Context.MODE_PRIVATE)
+                        .getBoolean("pipEnabled", false);
+            } catch (Throwable ignored) {
+            }
+            sLoaded = true;
+        }
+        return sEnabled;
+    }
+
+    public static synchronized void setEnabled(Context ctx, boolean e) {
+        sEnabled = e;
+        sLoaded = true;
+        try {
+            ctx.getApplicationContext()
+                    .getSharedPreferences("seagull", Context.MODE_PRIVATE)
+                    .edit().putBoolean("pipEnabled", e).apply();
+        } catch (Throwable ignored) {
+        }
+    }
 
     /**
      * 目标应用：用户点选 > 手机版高德 > 车机版高德；都没装返回 null。

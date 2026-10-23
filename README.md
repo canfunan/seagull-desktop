@@ -1,6 +1,6 @@
 # 海鸥桌面 · Seagull Desktop
 
-> 公开版多窗口车机桌面。对标 **野菜桌面**（`cn.wayecai.launcher` v1.7.3）的功能结构，
+> 公开版多窗口车机桌面。对标 **海鸥桌面**（`cn.wayecai.launcher` v1.7.3）的功能结构，
 > **去掉账号 / 会员 / 云端体系**，做成一个装上就能用的普通桌面。
 
 - 包名：`com.seagull.carlauncher`
@@ -27,7 +27,7 @@ seagull-desktop/
 │   ├── ARCHITECTURE.md        # 架构与模块职责（先读这个）
 │   ├── DEVLOG.md              # 批次 A~I 的目标 / 改动 / 复盘
 │   ├── TECHNIQUES.md          # 关键技术：L0~L3 窗口档位、MediaProjection、触摸注入
-│   ├── ORIGINAL-ANALYSIS.md   # 野菜桌面逆向分析结论
+│   ├── ORIGINAL-ANALYSIS.md   # 海鸥桌面逆向分析结论
 │   ├── REFERENCE-REPOS.md     # 参考仓库索引与可复用点
 │   └── DEVICE-NOTES.md        # 真机环境笔记（Redmi K60 / HyperOS / KernelSU）
 └── reference/                 # 参考资料（原样留档，便于溯源）
@@ -113,7 +113,7 @@ P0（桌面可用）→ P1（特色功能）→ P2（root 增强层）三个阶�
 | E | 屏幕（边距 / 缝 / 方向 / 横竖屏两套 / 信息栏） | ✅ |
 | F | 菜园（三种摆法）+ 小白点悬浮球 | ✅ |
 | G | 天气（Open-Meteo）+ 歌词（媒体会话三来源） | ✅ |
-| H | 自动化任务 + 野菜岛 + 关于页（查更新 / 自更新） | ✅ |
+| H | 自动化任务 + 海鸥岛 + 关于页（查更新 / 自更新） | ✅ |
 | I | root 增强层：触摸转发 / 窗口搬运 / 系统监控 | ✅ |
 
 ### 已经跑通的
@@ -122,7 +122,7 @@ P0（桌面可用）→ P1（特色功能）→ P2（root 增强层）三个阶�
   root `am start --display <id>` 把任意第三方应用搬上去 + root `input -d <id>` 注入触摸。
   真机验证通过（`DisplayDeviceInfo{"seagull-l3test", 960x540, type VIRTUAL, owner com.seagull.carlauncher}`）。
 - **L2 系统画中画**：标准 PiP API，无 root 可用。
-- **应用网格 / Dock / 文件夹 / 搜索 / 菜园 / 野菜岛**：公开 API。
+- **应用网格 / Dock / 文件夹 / 搜索 / 菜园 / 海鸥岛**：公开 API。
 - **主题换肤与全局字号**：`Skin` + `BaseActivity`，一处生效。
 - **天气与歌词**：Open-Meteo 公开接口 + `MediaSessionManager`（读别的应用的播放会话无需权限）。
 - **系统操作层**：亮度、音量、Wi-Fi、蓝牙、飞行模式、自动校时、强停、清理缓存、CPU/温度/内存读数。
@@ -159,5 +159,5 @@ P0（桌面可用）→ P1（特色功能）→ P2（root 增强层）三个阶�
 ## 许可
 
 本项目源码用于学习与自有设备使用。`reference/` 下材料版权归各自作者。
-目标应用「野菜桌面」为第三方商业软件，本项目**不包含**其任何代码，
+目标应用「海鸥桌面」为第三方商业软件，本项目**不包含**其任何代码，
 仅依据公开可见的 UI 文案与设置结构做功能对齐。

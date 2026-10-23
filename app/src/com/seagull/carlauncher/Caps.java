@@ -142,7 +142,7 @@ public final class Caps {
         Boolean cached = sBridgeOn;
         if (cached != null && now - sBridgeAt < 10_000) return cached;
         // 默认开（2026-10-21）：root 建 TRUSTED 屏 + setLaunchDisplayId 落屏是挂载主路径
-        // （野菜公签版同构，NEXUS 实验分支实测 amapauto 落屏成功）。系统 PiP 标志那条
+        // （海鸥公签版同构，NEXUS 实验分支实测 amapauto 落屏成功）。系统 PiP 标志那条
         // （system_server 钩子）已弃 —— 本机 vivo ROM 上注入不稳（包名 system、
         // imageless 降级、scope 被裁），不值得再投入。
         // 显式 setprop persist.seagull.rootbridge 0 才关，回退旧三路。

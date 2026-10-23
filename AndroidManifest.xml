@@ -29,7 +29,7 @@
     <uses-permission android:name="android.permission.REORDER_TASKS" />
     <uses-permission android:name="android.permission.GET_TASKS" />
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
-    <!-- 野菜桌面普通版同款（签名级，root 放行）：可信屏/蓝牙特权/电源/麦克风前台服务 -->
+    <!-- 海鸥桌面普通版同款（签名级，root 放行）：可信屏/蓝牙特权/电源/麦克风前台服务 -->
     <uses-permission android:name="android.permission.ADD_TRUSTED_DISPLAY" />
     <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" />
     <uses-permission android:name="android.permission.DEVICE_POWER" />
@@ -309,7 +309,7 @@
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:launchMode="singleTask" />
 
-        <!-- 悬浮球（批次 KB，野菜 BallService 同款）：桌面上常驻可拖拽圆球，
+        <!-- 悬浮球（批次 KB，海鸥 BallService 同款）：桌面上常驻可拖拽圆球，
              单击回桌面/左滑返回/上滑最近任务。 -->
         <service
             android:name=".BallService"
@@ -320,7 +320,7 @@
             android:name=".ToolBarCoverService"
             android:exported="false" />
 
-        <!-- 按键映射（批次 KM，野菜 KeyMapService 同款）：AccessibilityService
+        <!-- 按键映射（批次 KM，海鸥 KeyMapService 同款）：AccessibilityService
              拦截硬件键改派动作（音量键切歌/耳机键播放暂停/回桌面）。 -->
         <service
             android:name=".KeyMapService"

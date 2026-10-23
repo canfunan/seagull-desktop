@@ -284,9 +284,9 @@ public class VdPipView extends LinearLayout {
         requestLayout();
     }
 
-    /** 关闭：摘视图 + 拆屏 + 摘开关，桌面 onResume 同步干净。 */
+    /** 关闭：摘视图 + 拆屏 + 摘开关（NB18：持久化），桌面 onResume 同步干净。 */
     private void close() {
-        VirtualPipController.setEnabled(false);
+        VirtualPipController.setEnabled(getContext(), false);
         VirtualPipController.release();
         android.view.ViewGroup p = (android.view.ViewGroup) getParent();
         if (p != null) p.removeView(this);

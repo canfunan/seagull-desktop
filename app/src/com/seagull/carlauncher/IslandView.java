@@ -9,7 +9,7 @@ import android.view.View;
 import android.widget.FrameLayout;
 
 /**
- * 野菜岛 —— 顶部居中的胶囊。
+ * 海鸥岛 —— 顶部居中的胶囊。
  *
  * 内容按设置走：宽 islandWidth、距顶 islandOffsetY（挖孔/圆角留位置）、
  * 岛上显示什么（当前实现：时钟；开了 islandLyric 就换成歌词）。

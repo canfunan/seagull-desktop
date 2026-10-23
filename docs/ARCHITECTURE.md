@@ -105,7 +105,7 @@ HomeActivity.onCreate
   ├─ prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
   ├─ model = new LauncherModel(this)      ← loadApps() + load()
   ├─ selfReport()                          ← 打 SeagullDiag 日志
-  ├─ setContentView(buildUi())             ← 顶栏 + DesktopView + 底栏 + 野菜岛
+  ├─ setContentView(buildUi())             ← 顶栏 + DesktopView + 底栏 + 海鸥岛
   └─ desktop.refresh()
 
 HomeActivity.onResume

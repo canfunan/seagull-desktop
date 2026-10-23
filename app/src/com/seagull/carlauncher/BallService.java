@@ -15,7 +15,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 /**
- * 悬浮球（批次 KB，复刻野菜桌面普通版 BallService）：
+ * 悬浮球（批次 KB，复刻参考桌面普通版 BallService）：
  * 桌面上常驻的可拖拽圆球 —— 单击回桌面、左滑返回、上滑最近任务。
  * WindowManager TYPE_APPLICATION_OVERLAY 悬浮窗 + 手势分发。
  *

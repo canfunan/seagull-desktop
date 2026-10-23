@@ -81,18 +81,19 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         lastSkin = skinSignature();
         carMode = getIntent() != null && getIntent().getBooleanExtra("car_mode", false);
         selfReport();
-        // 通知监听自授权（野菜同款）：底栏音乐条的数据源 —— 没授权系统只返回
+        // 通知监听自授权（参考实现同款）：底栏音乐条的数据源 —— 没授权系统只返回
         // 空会话列表、横幅整条隐藏。反射直授，系统随即重绑 MediaListenerService，
         // 全程无 UI 无重启。
         MediaListenerService.ensureAccess(this);
         // 授权→重绑是异步的（服务 onListenerConnected 才连上）：首次 bindMedia
         // 多半拿不到数据，2s 后补刷一次（回归修复：横幅不显示）
         ui.postDelayed(this::refreshMini, 2000L);
-        KeyMapService.ensureAccess(this);   // 按键映射 root 授权（野菜同款无障碍通道）
+        KeyMapService.ensureAccess(this);   // 按键映射 root 授权（参考实现同款无障碍通道）
         BallService.ensureAccess(this);     // 悬浮球 overlay root 授权
         if (BallService.isOn(this)) {
             try { startService(new Intent(this, BallService.class)); } catch (Throwable ignore) {}
         }
+        KeepAliveService.ensure(this);      // KB18：保活前台服务（常驻通知提进程优先级）
         // 底栏遮盖层（vivo互联车机屏专用）：车机模式（car_mode extra）才起——
         // 盖住 vivo.car.networking 加的 VivoCarToolBar（NAVIGATION_BAR 型 104dp）
         if (carMode && ToolBarCoverService.isOn(this)) {
@@ -305,9 +306,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
 
     /* ------------------------- UI 构建 ------------------------- */
 
-    /** 画中画开关 ↔ VdPipView 挂载同步。skin 重建后 getParent()==null 会重新挂。 */
+    /** 画中画开关 ↔ VdPipView 挂载同步。skin 重建后 getParent()==null 会重新挂。
+     *  NB18：开关持久化 —— 进程被杀重开后这里从 prefs 恢复 true，视图重建、
+     *  Surface 回调重新建屏+搬任务，画中画自愈（无需再删了重开）。 */
     private void syncVdPip() {
-        boolean want = VirtualPipController.isEnabled();
+        boolean want = VirtualPipController.isEnabled(this);
         if (want && (vdPip == null || vdPip.getParent() == null)) {
             android.view.ViewGroup content = findViewById(android.R.id.content);
             if (content != null) {
@@ -351,7 +354,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         dlp.bottomMargin = dp(DOCK_BOTTOM);
         root.addView(dock, dlp);
 
-        // 野菜岛：顶部居中的胶囊，浮在桌面上
+        // 海鸥岛：顶部居中的胶囊，浮在桌面上
         island = new IslandView(this);
         island.setOnClickListener(v -> startActivity(new Intent(this, SettingsSectionActivity.class)
                 .putExtra(SettingsSectionActivity.EXTRA_SECTION, "island")));

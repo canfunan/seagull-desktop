@@ -14,7 +14,7 @@ import android.widget.Toast;
 
 /**
  * 布局模式选择器 + 组件条配置。
- * 对齐野菜桌面的「布局」（一个窗口占满/主副/三等分…）与「快捷栏」设置组。
+ * 对齐海鸥桌面的「布局」（一个窗口占满/主副/三等分…）与「快捷栏」设置组。
  * 这里的"布局"作用于桌面自身的分区，不依赖任何特权 —— 公开版可完整交付。
  */
 public class LayoutModeActivity extends BaseActivity {

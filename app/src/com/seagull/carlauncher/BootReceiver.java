@@ -30,6 +30,7 @@ public class BootReceiver extends BroadcastReceiver {
         } catch (Throwable t) {
             Log.w(TAG, "拉起悬浮球失败", t);
         }
+        KeepAliveService.ensure(ctx);   // KB18：保活前台服务（常驻通知）
     }
 
     private void toHome(Context ctx) {
