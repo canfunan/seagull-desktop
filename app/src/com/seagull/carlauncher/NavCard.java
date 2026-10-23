@@ -272,7 +272,7 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         return sec / 3600 + "小时" + (sec % 3600 + 59) / 60 + "分";
     }
 
-    private static int dp(Activity act, float v) {
+    private static int dp(Context act, float v) {   // NB7: Activity→Context（onNavInfo 里 getContext() 要用）
         return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
                 act.getResources().getDisplayMetrics()));
     }
