@@ -164,7 +164,10 @@ public final class AmapProtocolClient {
     }
 
     /** IJsonProtocolReceiveInterface.Stub 复刻（DESCRIPTOR 逐字一致）。 */
-    private final android.os.Binder recvStub = new android.os.Binder() {
+    // NB10：Binder 必须带 DESCRIPTOR 构造——无参构造的 getInterfaceDescriptor()
+    // 返回 null，高德侧 RemoteCallbackList.register/asInterface 流程读它直接 NPE
+    // （crashed service 第二真凶，flags 修了还崩就是它）。
+    private final android.os.Binder recvStub = new android.os.Binder(RECV_IFACE) {
         @Override
         protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
                 throws RemoteException {
