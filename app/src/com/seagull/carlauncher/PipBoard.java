@@ -718,7 +718,12 @@ public final class PipBoard extends LinearLayout {
                     if (hh <= 0) return true;
                     float dy = e.getRawY() - vSplitDownRaw;
                     float r = vSplitDownRatio + dy / hh;
-                    vPreviewRatio = Math.max(0.15f, Math.min(0.85f, r));
+                    // NB14：像素最小（colB 保 240px）替代比例 0.15-0.85——
+                    // 用户实测「只能变小不能变大」：85% 上限 + 15% 最小双卡，
+                    // 画中画2 稍一拖就顶住。现在保底 240px，其余全给导航卡片。
+                    float minNav = Math.min(0.9f, 240f / hh);
+                    float maxNav = 1f - Math.min(0.9f, 240f / hh);
+                    vPreviewRatio = Math.max(minNav, Math.min(maxNav, r));
                     PipBoard.this.invalidate();
                     return true;
                 }
@@ -751,7 +756,14 @@ public final class PipBoard extends LinearLayout {
     /** 设右侧上/下占比并改 navHost/colB 的 weight；persist 时落盘。 */
     private void applyVSplitRatio(float ratio, boolean persist) {
         if (navHost == null || colB == null) return;
-        int n = Math.max(15, Math.min(85, Math.round(ratio * 100f)));
+        // NB14：与拖动预览同套像素最小（240px）——松手落盘也按它
+        int hh = PipBoard.this.getHeight();
+        int lo = 15, hi = 85;
+        if (hh > 0) {
+            lo = Math.max(15, Math.min(90, Math.round(240f / hh * 100f)));
+            hi = Math.min(90, Math.max(15, 100 - lo));
+        }
+        int n = Math.max(lo, Math.min(hi, Math.round(ratio * 100f)));
         int c = Math.max(1, 100 - n);
         LinearLayout.LayoutParams ln = (LinearLayout.LayoutParams) navHost.getLayoutParams();
         LinearLayout.LayoutParams lc = (LinearLayout.LayoutParams) colB.getLayoutParams();

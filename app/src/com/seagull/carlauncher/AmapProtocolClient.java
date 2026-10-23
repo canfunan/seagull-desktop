@@ -283,6 +283,10 @@ public final class AmapProtocolClient {
 
     private void onProtocol(String json) {
         try {
+            // NB14：协议原文日志（截断 600 字符）——用户实测「现在右转进入」疑似
+            // 距离字段没取对，下次导航直接看原文对齐 key（导航数据不敏感，仍截断）
+            Log.i(TAG, "protocol: " + (json.length() > 600
+                    ? json.substring(0, 600) + "...(" + json.length() + "B)" : json));
             JSONObject o = new JSONObject(json);
             // 协议包裹：可能是 {"protocolId":30407,"data":{...}} 或平铺——两层都试
             JSONObject f = o.has("data") && o.get("data") instanceof JSONObject

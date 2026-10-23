@@ -306,9 +306,10 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         turn.setText(arrowOf(g.icon));
         String word = arrowTextOf(g.icon);
         String distTxt = fmtDist(g.nextSegRemainDis);
-        // 「现在」是 0 距离的专用词，不能再拼「后」（实测出过「现在后」）
+        // NB14：0 距离不显「现在」（用户实测嫌「现在右转进入」不对）——显「即将」，
+        // 有距离才「XXX米后」。距离字段异常（0/负）时距离行只作提示不摆数字。
         boolean atNow = g.nextSegRemainDis <= 0;
-        dist.setText(atNow ? distTxt : distTxt + (word.isEmpty() ? "" : "后"));
+        dist.setText(atNow ? "即将" : distTxt + (word.isEmpty() ? "" : "后"));
         // 路名回退链：下一道路名 → 当前路名 → 空（只留转向词，不摆空行）
         String roadName = !g.nextRoadName.isEmpty() ? "进入 " + g.nextRoadName
                 : (!g.curRoadName.isEmpty() ? g.curRoadName : "");
