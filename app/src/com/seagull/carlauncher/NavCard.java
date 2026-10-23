@@ -141,7 +141,14 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
             // 槽位没挂地图回落 minimap（实测 URI 能起）。各包 URI：
             //   高德 androidamap://poi / 百度 baidumap://map/place/search /
             //   腾讯 qqmap://map/search
-            String navPkg = navPkgProvider != null ? navPkgProvider.get() : null;
+            // Callable.call() 抛受检异常——lambda 里接不住，必须 try（71500d5 编译错）
+            String navPkg = null;
+            if (navPkgProvider != null) {
+                try {
+                    navPkg = navPkgProvider.call();
+                } catch (Exception ignore) {
+                }
+            }
             java.util.List<String> order = new java.util.ArrayList<>();
             if (navPkg != null) order.add(navPkg);
             order.add("com.autonavi.minimap");
