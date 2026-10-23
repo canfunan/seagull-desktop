@@ -159,7 +159,7 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
                     android.content.Intent i = new android.content.Intent(
                             android.content.Intent.ACTION_VIEW, android.net.Uri.parse(uri));
                     i.setPackage(pkg);
-                    i.addFlags(android.content.Intent.FLAG_ACTIVITY.NEW_TASK
+                    i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
                             | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
                     act.startActivity(i);
                     return;
