@@ -168,9 +168,43 @@ public final class RootOps {
                 && !out.contains("Exception")
                 && !out.contains("Warning")
                 && !out.contains("Abort");
+        // 【批次 ZM·落点校验+两连修复（用户 1023 实测「挂载一个窗口还是跳转到
+        // 应用自己的界面」）】am start 回显 ok 不等于落对了屏：用户在手机屏开过
+        // 目标 app → d0 留有旧任务（affinity=包名）→ 带 NEW_TASK 的启动被系统
+        // 判定 LAUNCH_MULTIPLE 复用 d0 旧任务 → 界面在手机屏（实测优酷少儿
+        // 复现：t106 整个任务落 d0，d15 零实例）。校验真实落点，落错才修：
+        //   ① 先打一发 NEW_TASK|CLEAR_TASK（0x10008000）清空旧任务栈
+        //   ② 再干净启（NEW_TASK）—— 复用的已是空任务，系统按 --display 落画布
+        // （现场实测两连稳定：PrivacyActivity+NewHomeActivity 同任务落 d15）
+        // 只在落错时清栈：正在导航/放歌的任务有 exists→moveToAnchorRoot 路，
+        // 走不到这；走到这的都是没任务或搬失败的，清栈不断用户状态。
+        if (ok && !landedOnDisplay(pkg, displayId)) {
+            Log.i(TAG, "launchOnDisplay[" + pkg + "] 落点校验失败（疑似复用 d0 旧任务）→ 两连修复");
+            Caps.exec("am start --user 0 --display " + displayId
+                    + " -f 0x10008000 -n " + comp);
+            out = Caps.exec("am start --user 0 --display " + displayId
+                    + " -f 0x10000000 -n " + comp);
+            ok = out != null && out.contains("Starting")
+                    && !out.contains("Error") && !out.contains("Exception");
+            Log.i(TAG, "launchOnDisplay[" + pkg + "] 两连修复后 ok=" + ok
+                    + " landed=" + landedOnDisplay(pkg, displayId));
+        }
         Log.i(TAG, "launchOnDisplay " + comp + " -> display " + displayId + " ok=" + ok
                 + " " + (out == null ? "" : out.trim()));
         return ok;
+    }
+
+    /** 落点校验：目标包在指定 display 上有没有 Activity（dumpsys 实况，不信 am 回显）。 */
+    private static boolean landedOnDisplay(String pkg, int displayId) {
+        try {
+            // 精确匹配 displayId 边界：' d15' 会误中 d150/d15x，个位数（d1）
+            // 更会误中 d15 —— 必须 ( |}|行尾) 收尾
+            String out = Caps.exec("dumpsys activity activities | grep '" + pkg + "/'"
+                    + " | grep -cE ' d" + displayId + "( |\\}|$)'");
+            return out != null && !out.trim().isEmpty() && !out.trim().equals("0");
+        } catch (Throwable t) {
+            return true;   // 查不动就放过，别把正常路径堵死
+        }
     }
 
     /** 组件名白名单：只允许 包名/类名（可含 $），杜绝用户输入拼进 root 命令列表。 */
