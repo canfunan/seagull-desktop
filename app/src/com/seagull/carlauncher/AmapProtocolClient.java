@@ -30,7 +30,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *   IJsonProtocolReceiveInterface（...IJsonProtocolReceiveInterface）：
  *     code 1 = O(String) 收 JSON 推送   code 2 = V0(String) 请求响应
  * 注册后高德把车机屏同源协议推过来，GuideInfoModel（protocolId 30407）
- * 60 字段：nextSegRemainDis/nextRoadName/routeRemainDis/routeRemainTime/
+ * 60 字段：segRemainDis/nextRoadName/routeRemainDis/routeRemainTime/
  * curSpeed/limitedSpeed/cameraDist/routeRemainTrafficLightNum/etaText...
  *
  * 契约照扒 defpackage.lw（高德官方 SdkClient 参考实现）：bind →
@@ -60,12 +60,16 @@ public final class AmapProtocolClient {
         public int icon;                      // icon（int——高德图标 id 制，
                                               // 2/3/4=右转组 6/7/8=左转组 5=掉头）
         public int newIcon;                   // NB15：新版图标 id（官方取值 newIcon 优先，0 回落 icon）
-        public int nextSegRemainDis;          // 下一段剩余距离（米）
+        public int segRemainDis;              // NB17：本段剩余距离（米）——官方 Parser 第 30 行
+                                              // 真实 key「segRemainDis」！左屏「186米」= 它。
+                                              // NB14-16 一直误读 nextSegRemainDis（下下段，
+                                              // 常态为 0）——「即将」和距离空白的总根因
         public int nextSegRemainTime;         // 下一段剩余时间（秒）
-        public String nextSegRemainDisAuto = ""; // NB15：官方现成文案（"198米"/"即将"）——
-                                              // 车机屏就渲染它（GuideInfoProtocolData getter），
-                                              // 数字字段临近路口归 0 时唯一活口
-        public String nextRoadName = "";      // 下一道路名
+        public String segRemainDisAuto = "";  // NB17：本段剩余官方现成文案（"186米"）——
+                                              // 真实 key「segRemainDisAuto」（Parser 第 57 行），
+                                              // 与左屏同源
+        public String nextRoadName = "";      // 下一道路名（与 segRemainDis 配对构成
+                                              // 「186米后右转进入沂河路」，已实测有值）
         public String nextNextRoadName = "";  // 再下一道路名
         public int routeRemainDis;            // 全程剩余距离（米）
         public int routeRemainTime;           // 全程剩余时间（秒）
@@ -374,9 +378,9 @@ public final class AmapProtocolClient {
             final Guide g = new Guide();
             g.icon = f.optInt("icon", 0);
             g.newIcon = f.optInt("newIcon", 0);
-            g.nextSegRemainDis = f.optInt("nextSegRemainDis", 0);
+            g.segRemainDis = f.optInt("segRemainDis", 0);       // NB17：真实 key（本段剩余）
             g.nextSegRemainTime = f.optInt("nextSegRemainTime", 0);
-            g.nextSegRemainDisAuto = opt(f, "nextSegRemainDisAuto");
+            g.segRemainDisAuto = opt(f, "segRemainDisAuto");    // NB17：真实 key（官方文案）
             g.nextRoadName = opt(f, "nextRoadName");
             g.nextNextRoadName = opt(f, "nextNextRoadName");
             g.routeRemainDis = f.optInt("routeRemainDis", 0);
@@ -393,7 +397,7 @@ public final class AmapProtocolClient {
             g.sapaName = opt(f, "sapaName");
             g.sapaDist = f.optInt("sapaDist", 0);
             final boolean end = g.routeRemainDis <= 0 && g.nextRoadName.isEmpty()
-                    && g.nextSegRemainDis <= 0 && g.nextSegRemainDisAuto.isEmpty();
+                    && g.segRemainDis <= 0 && g.segRemainDisAuto.isEmpty();
             main.post(() -> {
                 for (Listener l : sinks) {
                     try {

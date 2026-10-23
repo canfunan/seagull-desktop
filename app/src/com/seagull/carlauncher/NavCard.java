@@ -406,13 +406,14 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
             turn.setText(arrowOf(iconId));
         }
         String word = arrowTextOf(iconId);
-        // 距离行：官方现成文案优先（"198米"/"即将"），数字字段临近路口归 0 时
-        // 它是唯一活口（用户实测「即将 右转 进」= 数字 0 + Auto 没取）
-        if (!g.nextSegRemainDisAuto.isEmpty()) {
-            dist.setText(g.nextSegRemainDisAuto);
-        } else if (g.nextSegRemainDis > 0) {
-            dist.setText(fmtDist(g.nextSegRemainDis) + (word.isEmpty() ? "" : "后"));
-        }   // 双空（路口间歇帧）不覆盖——保留上一帧距离
+        // 距离行（NB17：真实 key segRemainDis/segRemainDisAuto——本段剩余距离，
+        // 官方 Parser 第 30/57 行。之前误读 nextSeg*（下下段，常态 0）导致
+        // 「即将」和距离空白。官方文案「186米」优先，数字兜底）：
+        if (!g.segRemainDisAuto.isEmpty()) {
+            dist.setText(g.segRemainDisAuto);
+        } else if (g.segRemainDis > 0) {
+            dist.setText(fmtDist(g.segRemainDis));   // 官方格式纯距离，不加"后"
+        }   // 双空不覆盖——保留上一帧距离
         // 路名回退链：下一道路名 → 当前路名 → 不覆盖
         String roadName = !g.nextRoadName.isEmpty() ? "进入 " + g.nextRoadName
                 : (!g.curRoadName.isEmpty() ? g.curRoadName : "");
