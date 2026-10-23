@@ -216,6 +216,9 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (navCard != null) {
             NavInfoReceiver.removeSink(navCard);
             NavInfoReceiver.addSink(navCard);
+            // 批次 NC：高德车机版协议通道 sink（同保活纪律）
+            AmapProtocolClient.removeSink(navCard);
+            AmapProtocolClient.addSink(navCard);
         }
         refreshMini();              // 媒体条跟着会话状态走（没会话整条隐藏）
         // 常驻画中画被系统拉回主屏时搬回去（节流在 MirrorHost 里）
@@ -252,6 +255,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         if (navCard != null) navCard.detach();   // 摘导航订阅（AmapNavClient 单例存活）
         Lyrics.removeSink(islandSink);      // sink 保活纪律：Activity 走了一定摘掉
         if (navCard != null) NavInfoReceiver.removeSink(navCard);   // 批次 NB 同纪律
+        if (navCard != null) AmapProtocolClient.removeSink(navCard);   // 批次 NC 同纪律
         Weather.onUpdated = null;           // K1：静态钩子别持死旧桌面
         NavNotiParser.setListener(null);    // L1：同上
         try { if (pkgReceiver != null) unregisterReceiver(pkgReceiver); } catch (Throwable ignore) {}
@@ -363,15 +367,11 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         // 主界面页翻页，壁纸页不看导航卡是一期已知边界。
         navCard = new NavCard(this);
         navCard.setEnabled(model == null || model.navEnabled);
-        // NB6：挂 root 层右上（不依赖 pager 页）——NB5 挂在 PipBoard 的 navHost，
-        // 翻到壁纸页/负一屏时 mainPage 不可见，卡片跟着消失（用户实测「没有导航
-        // 卡片」的根因）。root 层常驻：四页 + 车机模式纯桌面都显示。
-        // PipBoard.navHost/attachNavCard 保留（板内模式备用），此处不再用。
-        FrameLayout.LayoutParams nlp = new FrameLayout.LayoutParams(-2, -2,
-                Gravity.TOP | Gravity.RIGHT);
-        nlp.rightMargin = dp(16);
-        nlp.topMargin = dp(52);
-        root.addView(navCard, nlp);
+        // NB8（回滚 NB6 的错误）：卡片只属于画中画板——用户原话「导航卡片在
+        // 画中画2的上面」= PipBoard 右侧 40% 的上区（navHost）。NB6 我误判
+        // 「翻页看不到是 bug」挂到 root 全局——那是全局糊脸，用户从没要过。
+        // 板外（壁纸页/负一屏/应用页/不开板）不显示，开板才在右上区出现。
+        if (pip != null) pip.attachNavCard(navCard);
 
         // 系统画中画形态下的精简视图（系统 PiP 里只显示这一层）
         pipBox = new TextView(this);

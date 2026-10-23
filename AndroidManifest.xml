@@ -1,0 +1,348 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.seagull.carlauncher">
+
+    <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="33" />
+
+    <!-- 桌面 / 基础 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 批次 S-RESTORE：对齐车联助手(com.leting)权限面，8 项差的全部补上 -->
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- 悬浮窗（L1 镜像卡片 / L3 虚拟屏卡片） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
+    <uses-permission android:name="android.permission.GET_TASKS" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <!-- 野菜桌面普通版同款（签名级，root 放行）：可信屏/蓝牙特权/电源/麦克风前台服务 -->
+    <uses-permission android:name="android.permission.ADD_TRUSTED_DISPLAY" />
+    <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" />
+    <uses-permission android:name="android.permission.DEVICE_POWER" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        特权级权限（复刻蓝图 §5「硬前提」，与参考车联助手 AndroidManifest 逐条对齐）。
+        所有这些是 signature|privileged 级：普通安装时申请也无害（不会授予），
+        装成 /system/priv-app（或厂商特权白名单）后即可直接使用「把别的 App 的
+        Activity 拉进私有虚拟屏 / 注入事件 / 停别人进程」这几条硬能力，不必每次
+        绕 su。海鸥同时保留 su 兜底（RootOps/PrivClient），两条腿走路：
+        特权在位走特权，不在位走 root，两条都断才彻底失败。
+        普通应用安装时这些声明不产生任何副作用（未持有即不授予，无运行时风险）。
+    -->
+    <uses-permission android:name="android.permission.INJECT_EVENTS" />
+    <uses-permission android:name="android.permission.CAPTURE_SECURE_VIDEO_OUTPUT" />
+    <uses-permission android:name="android.permission.FORCE_STOP_PACKAGES" />
+    <uses-permission android:name="android.permission.STATUS_BAR_SERVICE" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.BIND_APPWIDGET" />
+
+    <!-- 状态/设置类（root 或特权时才有意义，普通应用申请了也无害） -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+
+    <!-- J5 目的地卡：拉起高德/百度导航前的可见性声明（targetSdk 30+ 必须） -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="amapuri" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="baidumap" />
+        </intent>
+        <!-- 批次 NC：高德车机版协议服务（bind 可见性——Android 11+ 不声明 bindService 解析不到） -->
+        <intent>
+            <action android:name="com.autonavi.amapauto.aidl.json_protocol_service" />
+        </intent>
+        <package android:name="com.autonavi.amapauto" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.Seagull"
+        android:supportsRtl="false">
+
+        <!--
+            LSPosed 模块声明（批次 W，见 XposedEntry）：让 LSPosed 管理器把本 APK
+            列为模块。经典入口（assets/xposed_init → XposedEntry）。
+
+            xposedminversion 是「本模块要求框架提供的 Xposed API 最低版本」，
+            必须 <= 框架的 XposedBridge.getXposedVersion()，否则 LSPosed 直接跳过加载
+            （模块在管理器里可见、作用域也在，但任何进程都进不去 —— 静默失效）。
+
+            取值 102（批次 S-DIAG 改定，之前 93/82 逐级放宽过）：判据是活体对照——
+            用户车机上正在工作的车联助手（com.leting，参照包备份在
+            canfunan/leting-carlink 私有仓）声明 102 且 hook 存活，证明本机
+            框架 API >= 102，声明 102 必过闸；同时与参考实现对齐，排除
+            「声明值低导致框架走兼容路径」的变量。我们用的经典 API 面
+            （XC_MethodHook/IXposedHookLoadPackage）与 82 桩完全兼容，纯声明差异。
+
+            真机上还出现过「源码已改、产物没重建」导致 APK 里仍是旧值的情况
+            （批次 X 复盘）—— 所以本文件改动后必须重新构建，光看源码不算。
+        -->
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposeddescription"
+            android:value="海鸥桌面：高德 PiP 尺寸缩放(60%) + H1/H2/H3 窗口语义 + D段窄屏竖屏配置改写(网易云车机版) + 网易云跨屏 displayId 注入" />
+        <meta-data android:name="xposedminversion" android:value="102" />
+        <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
+
+        <activity
+            android:name=".HomeActivity"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:clearTaskOnLaunch="true"
+            android:excludeFromRecents="true"
+            android:configChanges="density|fontScale|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustNothing|stateUnchanged">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <!--
+                又当默认桌面（HOME）又给个图标进 app：没有这一条，装完只在系统「默认桌面」
+                选择列表里出现，应用抽屉里不显示，想点进设置只能按 Home 键。
+                HOME 与 LAUNCHER 两个 intent-filter 共存是允许的，默认桌面功能不受影响。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="@string/settings_title"
+            android:configChanges="keyboardHidden|orientation|screenSize" />
+
+        <activity
+            android:name=".SettingsHubActivity"
+            android:exported="false"
+            android:label="@string/settings_title"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="keyboardHidden|orientation|screenSize" />
+
+        <activity
+            android:name=".SettingsSectionActivity"
+            android:exported="false"
+            android:configChanges="keyboardHidden|orientation|screenSize" />
+
+        <activity
+            android:name=".VirtualDisplayActivity"
+            android:exported="false"
+            android:label="@string/vd_title"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout" />
+
+        <activity
+            android:name=".RootPanelActivity"
+            android:exported="false"
+            android:label="@string/root_panel_title"
+            android:configChanges="keyboardHidden|orientation|screenSize" />
+
+        <!-- 画中画锚点（批次 W，复刻车联助手 PipAnchorActivity）：独立 taskAffinity
+             保证在私有虚拟屏上独立成 root task；excludeFromRecents 不进最近任务。
+             落屏主路 = 先把锚点放上屏（属主启动必然成功），再 root am stack move-task
+             把目标应用搬进同一 root task，绕开 Android 14 直启 display 限制。 -->
+        <activity
+            android:name=".VdPipAnchorActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false"
+            android:taskAffinity="com.seagull.carlauncher.pipanchor"
+            android:excludeFromRecents="true" />
+
+        <activity
+            android:name=".WindowTestActivity"
+            android:exported="false"
+            android:label="@string/window_test_title"
+            android:configChanges="keyboardHidden|orientation|screenSize" />
+
+        <activity
+            android:name=".MirrorRequestActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <activity
+            android:name=".AppListActivity"
+            android:exported="false"
+            android:label="@string/all_apps"
+            android:configChanges="keyboardHidden|orientation|screenSize" />
+
+        <activity
+            android:name=".SearchActivity"
+            android:exported="false"
+            android:label="搜索"
+            android:windowSoftInputMode="adjustResize|stateVisible"
+            android:configChanges="keyboardHidden|orientation|screenSize" />
+
+        <activity android:name=".FolderActivity" android:exported="false"
+            android:label="@string/folder_title" />
+        <activity android:name=".LayoutModeActivity" android:exported="false"
+            android:label="@string/layout_title" />
+        <activity
+            android:name=".MirrorActivity"
+            android:exported="false"
+            android:label="@string/mirror_title"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout" />
+
+        <!-- 画中画锚点（批次 R，复刻 CarWithX PipAnchorActivity）：常驻虚拟屏的空 task，
+             重钉落点 + 防空屏回收。excludeFromRecents + 独立 affinity + 透明主题。
+             singleTask（批次 S）：NEW_TASK 复用锚点 task 时只保留一个实例 ——
+             standard 模式下每次部署都会往锚点 task 里叠一个透明实例，永不 finish。 -->
+        <activity
+            android:name=".PipAnchorActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.seagull.carlauncher.anchor"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <activity
+            android:name=".GardenActivity"
+            android:exported="false"
+            android:label="菜园"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout" />
+
+        <activity android:name=".MusicActivity" android:exported="false"
+            android:label="本地音乐"
+            android:configChanges="keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout" />
+
+        <service
+            android:name=".BallService"
+            android:exported="false" />
+
+        <service
+            android:name=".PipProjectionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <service
+            android:name=".MediaListenerService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- L1 镜像卡片服务：持有 MediaProjection 卡片的生命周期。
+             运行时以 FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION 调 startForeground，
+             所以清单【必须】声明同名 type —— 不声明会抛
+             MissingForegroundServiceTypeException（旧注释的说法是反的：
+             声明不会炸，漏声明才会炸，异常被 catch 吞掉后服务进不了前台，随即被系统杀掉）。 -->
+        <service
+            android:name=".WindowService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <service
+            android:name=".RootShellService"
+            android:exported="false" />
+
+        <!-- M2 本地音乐播放：前台服务 + MediaSession（MiniPlayer/歌词自动联动） -->
+        <service
+            android:name=".MusicService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- 批次 W3 起画中画改为桌面内嵌视图（VdPipView，车联同款），
+             不再需要悬浮窗服务 —— PipOverlayService 已删除。 -->
+
+        <!--
+            APK 自更新：安装 intent 的 Uri 走 SeagullFileProvider（见同名 java，零依赖
+            自绘 FileProvider）。targetSdk 33 下 Uri.fromFile() = FileUriExposedException。
+        -->
+        <provider
+            android:name=".SeagullFileProvider"
+            android:authorities="com.seagull.carlauncher.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 车机投屏专用入口（vivo互联投屏）：HomeActivity 克隆，taskAffinity 指向
+             vivo 车机包 —— vivo 框架拉它时 affinity 匹配进 vivo 自己的车机任务，
+             home 角色不丢、任务不被踢。不带 CATEGORY_HOME（不影响手机桌面解析）。 -->
+        <activity
+            android:name=".CarHomeActivity"
+            android:exported="true"
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:launchMode="singleTask" />
+
+        <!-- 悬浮球（批次 KB，野菜 BallService 同款）：桌面上常驻可拖拽圆球，
+             单击回桌面/左滑返回/上滑最近任务。 -->
+        <service
+            android:name=".BallService"
+            android:exported="false" />
+
+        <!-- 底栏遮盖层（vivo互联投屏）：overlay 盖住 vivo 车机屏底栏 104px -->
+        <service
+            android:name=".ToolBarCoverService"
+            android:exported="false" />
+
+        <!-- 按键映射（批次 KM，野菜 KeyMapService 同款）：AccessibilityService
+             拦截硬件键改派动作（音量键切歌/耳机键播放暂停/回桌面）。 -->
+        <service
+            android:name=".KeyMapService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- 画布跨包启动改道（批次 PIP）：模块在目标应用进程里取消必然失败的
+             跨包启动，广播组件过来，本接收器以 root 直启到画布屏。 -->
+        <receiver
+            android:name=".CanvasLaunchReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.seagull.carlauncher.CANVAS_LAUNCH" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>

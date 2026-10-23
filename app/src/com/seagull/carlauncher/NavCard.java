@@ -25,7 +25,7 @@ import android.widget.TextView;
  * forcedHidden（系统 PiP）才整条隐藏。
  */
 public final class NavCard extends LinearLayout implements AmapNavClient.Listener,
-        NavInfoReceiver.Listener {
+        NavInfoReceiver.Listener, AmapProtocolClient.Listener {
 
     private static final String TAG = "SeagullNavCard";
     /** 信息态保鲜：任一来源超过这么久没更新就回快捷态（导航可能已结束但没收到清除）。 */
@@ -100,6 +100,8 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         client.addListener(this);
         AmapNavClient.NavState last = client.last();   // 页面重建时立即恢复上一次状态
         if (last != null) onNavState(last);
+        // 批次 NC：高德车机版协议通道（主数据源——字段最全，跟车机屏同源）
+        AmapProtocolClient.addSink(this);
     }
 
     /** 快捷态按钮：起高德 POI 搜索（高德对「回家/公司」关键词解析用户收藏地址）。 */
@@ -166,9 +168,10 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         if (s != null) onNavState(s); else showQuick();
     }
 
-    /** 页面销毁时摘订阅（AmapNavClient 单例活得比页面久）。 */
+    /** 页面销毁时摘订阅（单例活得比页面久）。 */
     public void detach() {
         AmapNavClient.get(getContext()).removeListener(this);
+        AmapProtocolClient.removeSink(this);
     }
 
     /**
@@ -213,6 +216,44 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
 
     /** 批次 NB5：导航结束回快捷态（回家/公司），不再整条隐藏。 */
     @Override public void onNavClear() {
+        showQuick();
+    }
+
+    /**
+     * 批次 NC：高德车机版协议引导信息（AmapProtocolClient → GuideInfoModel
+     * 60 字段）。正常两行导航卡片（模仿腾讯 guide.f 契约）：
+     *   主行：转向图标 + 下一段距离（大字）+ 下一道路名
+     *   次行：全程剩余距离/时间 · ETA · 限速 · 红绿灯 · 电子眼
+     * 文本箭头映射（高德协议 icon 是资源名/url，本地没图——一期文本化，
+     * 二期按 icon 名映射本地 drawable）。
+     */
+    @Override public void onGuide(AmapProtocolClient.Guide g) {
+        if (g == null || !enabled || forcedHidden) return;
+        showInfo();
+        // 转向文本：环岛出口角优先，其次下一段距离推算的通用箭头
+        String arrow = "↑";
+        if (g.roundaboutOutAngle > 0) arrow = "⟳" + g.roundaboutOutAngle + "°";
+        else if (!g.nextNextRoadName.isEmpty()) arrow = "↗";   // 有下下段=即将转向
+        turn.setText(arrow);
+        // 主距离：下一段剩余（米→格式化）
+        dist.setText(fmtDist(g.nextSegRemainDis));
+        // 路名：下一道路名优先，空给当前路
+        road.setText(!g.nextRoadName.isEmpty() ? g.nextRoadName : g.curRoadName);
+        // 次行：全程 + 附加信息
+        StringBuilder sb = new StringBuilder();
+        sb.append("全程 ").append(fmtDist(g.routeRemainDis));
+        if (g.routeRemainTime > 0) sb.append("·").append(fmtTime(g.routeRemainTime));
+        if (!g.etaText.isEmpty()) sb.append("·").append(g.etaText);
+        if (g.trafficLights > 0) sb.append("·红绿灯").append(g.trafficLights);
+        if (g.limitedSpeed > 0) sb.append("·限速").append(g.limitedSpeed);
+        if (g.cameraDist > 0 && g.cameraDist < 2000) sb.append("·电子眼").append(fmtDist(g.cameraDist));
+        if (!g.sapaName.isEmpty()) sb.append("·").append(g.sapaName);
+        total.setText(sb.toString());
+        total.setMaxLines(2);
+    }
+
+    /** 批次 NC：协议空帧 = 导航结束 → 回快捷态。 */
+    @Override public void onGuideEnd() {
         showQuick();
     }
 
