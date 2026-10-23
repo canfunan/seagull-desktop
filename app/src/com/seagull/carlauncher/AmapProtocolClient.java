@@ -243,9 +243,17 @@ public final class AmapProtocolClient {
             i.setComponent(new ComponentName(SVC_PKG, SVC_CLS));
             boolean ok = appCtx.bindService(i, conn, Context.BIND_AUTO_CREATE);
             Log.i(TAG, "bindService " + (ok ? "请求已发" : "失败"));
-            bound = true;   // 失败也置位——onServiceDisconnected/rebind 兜底
+            // NB10：失败也要 5s 重试——bindService 返回 false 时 conn 的
+            // onServiceDisconnected **不会来**（根本没连上），旧代码 bound=true
+            // 一置就永久卡死（实测：amapauto enabled=0 时 bind 失败后再也不重试）
+            if (ok) {
+                bound = true;
+            } else {
+                scheduleReconnect();
+            }
         } catch (Throwable t) {
             Log.w(TAG, "bind 异常", t);
+            scheduleReconnect();   // 异常同理
         }
     }
 
