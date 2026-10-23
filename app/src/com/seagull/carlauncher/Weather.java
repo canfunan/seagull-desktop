@@ -30,7 +30,7 @@ import java.util.concurrent.Executors;
  *   AUTO_NET  按网络判断城市 —— 免 key 的 IP 定位接口不存在，
  *             所以退化���「沿用上次缓存的城市」（ponytail: 等有可用服务再接）
  *
- * 组件条、菜园、设置页都读同一份 model.weatherSummary/Detail/Forecast，
+ * 组件条、极简屏、设置页都读同一份 model.weatherSummary/Detail/Forecast，
  * 20 分钟自动更新由 arm() 单例定时器驱动（HomeActivity resume 时 arm）。
  */
 public final class Weather {

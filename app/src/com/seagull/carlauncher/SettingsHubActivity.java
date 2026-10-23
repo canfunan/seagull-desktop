@@ -23,7 +23,7 @@ import java.util.Locale;
  * 设置中心：5 组 / 17 分区入口 + 全局搜索（设置项名 + 应用名）。
  *
  * 分区结构与文案逐字对齐海鸥桌面（去掉「账号与云端」组）：
- *   桌面       → 布局 | Dock 栏 | 快捷栏 | 菜园 | 小白点
+ *   桌面       → 布局 | Dock 栏 | 快捷栏 | 极简屏 | 小白点
  *   外观       → 主题与壁纸 | 屏幕 | 海鸥岛
  *   天气与歌词 → 天气 | 歌词
  *   高级功能   → 窗口 | 触摸 | 自动化任务 | 开机动画
@@ -46,7 +46,7 @@ public class SettingsHubActivity extends BaseActivity {
             new Sec("layout", "布局", "桌面分区 组件条 显示名称 网格 模式 紧凑"),
             new Sec("dock", "Dock 栏", "位置 数量 宽度 图标大小 间距 透明度 自动收起 固定 时间 槽位 替换应用"),
             new Sec("quickbar", "快捷栏", "快捷开关 功能按钮 组件条 小dock 场景一键 场景 布屏"),
-            new Sec("garden", "菜园", "叶子 大时钟 歌词 压暗 摆法 遮罩"),
+            new Sec("garden", "极简屏", "叶子 大时钟 歌词 压暗 摆法 遮罩"),
             new Sec("ball", "小白点", "悬浮球 悬浮键 小白点 大小 位置 悬浮窗权限"),
             new Sec("blocks", "桌面组件块", "行车块 车速 海拔 航向 行程 倒数 倒计时 监控 内存 CPU 存储 音乐 本地音乐 G值 加速度 壁纸页 块"),
             new Sec("obd", "车辆数据", "车辆数据 OBD 行车电脑 转速 水温 电压 电瓶 亏电 油量 适配器 ELM327 蓝牙"),
@@ -194,7 +194,7 @@ public class SettingsHubActivity extends BaseActivity {
         switch (id) {
             case "dock": return m.dockPos.label + " · " + m.dockCount + " 个";
             case "quickbar": return m.quickbar.isEmpty() ? "未配置" : m.quickbar.size() + " 格";
-            case "garden": return (m.gardenEnabled ? "开 · " : "关 · ") + m.gardenStyle.label;
+            case "garden": return m.gardenStyle.label;   // NB20：gardenEnabled 摆设开关已删，摘要只报摆法
             case "ball": return m.ballEnabled ? "开" : "关";
             case "theme": {
                 String t = Theme.nameOf(m.themeId);

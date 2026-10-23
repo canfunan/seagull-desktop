@@ -34,7 +34,7 @@ import java.util.function.IntConsumer;
  *
  * 职责：把 LauncherModel 已有的配置字段接上 UI 与持久化。
  * 「有则增强，无则隐藏」：需要 root / 特殊权限的操作只在能力可用时出现。
- * 各分区的完整功能落地节点：布局(已有) Dock(P0-5) 快捷栏(P0-6) 主题(P0-7) 菜园(P1-1)
+ * 各分区的完整功能落地节点：布局(已有) Dock(P0-5) 快捷栏(P0-6) 主题(P0-7) 极简屏(P1-1)
  * 小白点(P1-2) 天气(P1-3) 歌词(P1-4) 任务引擎(P1-5) 海鸥岛(P1-6) 触摸通道(P2-3)。
  */
 public class SettingsSectionActivity extends BaseActivity {
@@ -116,7 +116,7 @@ public class SettingsSectionActivity extends BaseActivity {
             case "blocks": return "桌面组件块";
             case "obd": return "车辆数据";
             case "quickbar": return "快捷栏";
-            case "garden": return "菜园";
+            case "garden": return "极简屏";
             case "ball": return "小白点";
             case "theme": return "主题与壁纸";
             case "screen": return "屏幕";
@@ -532,7 +532,9 @@ public class SettingsSectionActivity extends BaseActivity {
     }
 
     private void gardenBody() {
-        toggleRow("长按叶子进菜园", model.gardenEnabled, () -> { model.gardenEnabled = !model.gardenEnabled; });
+        // 审计 NB20：删掉原「长按小白点进极简屏」开关 —— 纯摆设（model.gardenEnabled
+        // 无任何功能消费它，点了毫无作用，就是用户说的「只有显示没接入」）。
+        // 极简屏入口 = 下方「进一次极简屏看看」。小白点按需求只保留单击回桌面。
         sliderRow("壁纸压暗", 0, 100, model.gardenDim, " %", v -> { model.gardenDim = v; });
         choiceRow("摆法", model.gardenStyle.label, () -> {
             LauncherModel.GardenStyle[] vals = LauncherModel.GardenStyle.values();
@@ -543,10 +545,10 @@ public class SettingsSectionActivity extends BaseActivity {
                 model.save(); render();
             });
         });
-        actionRow("进一次菜园看看", "看看现在的样子", v ->
+        actionRow("进一次极简屏看看", "看看现在的样子", v ->
                 startActivity(new Intent(this, GardenActivity.class)));
-        note("点上面「进一次菜园看看」进菜园，菜园里再长按一次出来。"
-                + "桌面右下角的小白点（小白点）也能进菜园。菜园的压暗跟外观里的背景遮罩是两份，互不影响。");
+        note("点上面「进一次极简屏看看」进去；点小白点或按返回键随时回桌面。"
+                + "极简屏的压暗跟外观里的背景遮罩是两份，互不影响。");
     }
 
     private void ballBody() {
@@ -575,9 +577,8 @@ public class SettingsSectionActivity extends BaseActivity {
             if (model.ballEnabled) BallService.setEnabled(this, true);
             render();
         });
-        note("点一下回桌面，长按进菜园，直接拖能挪位置，松手自动贴边。"
-                + "Dock 关着时，点一下改成出全部应用。");
-        note("菜园里那片叶子跟悬浮球是同一个小白点，位置大小共用。");
+        note("点一下回桌面（任何界面都一样），拖动挪位置，松手自动贴边。");
+        note("极简屏里的小白点跟悬浮球是同一个球，位置大小共用。");
     }
 
     private void themeBody() {
@@ -1020,7 +1021,7 @@ public class SettingsSectionActivity extends BaseActivity {
             try { startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)); }
             catch (Throwable ignore) {}
         });
-        note("车载蓝牙歌词走媒体信息，不需通知权限。歌词组件在组件条里，菜园里也会显示同一份。");
+        note("车载蓝牙歌词走媒体信息，不需通知权限。歌词组件在组件条里，极简屏里也会显示同一份。");
     }
 
     private String splitLabel() {

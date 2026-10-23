@@ -43,7 +43,7 @@ import java.util.concurrent.Executors;
  *   LOCAL  本地 .lrc：在 Music 目录里找「歌手 - 歌名.lrc」
  *   ONLINE 在线（酷狗）：公开接口，免 key，先搜候选再按 id 下载 base64 的 lrc
  *
- * 一秒一跳：窗口行、状态栏通知、组件条/菜园都从同一份状态读（10.15 天然同步）。
+ * 一秒一跳：窗口行、状态栏通知、组件条/极简屏都从同一份状态读（10.15 天然同步）。
  * 缓存：filesDir/lyrics/<key>.lrc。
  */
 public final class Lyrics {
@@ -120,7 +120,7 @@ public final class Lyrics {
     /** 直连是否新鲜（UI 层问询封面/覆盖有效性）。 */
     public static boolean directLive() { return CarLink.fresh(DIRECT.ts, System.currentTimeMillis()); }
 
-    /** 歌词展示方（组件条、菜园、媒体卡片）实现它，每跳收到一次当前窗口。 */
+    /** 歌词展示方（组件条、极简屏、媒体卡片）实现它，每跳收到一次当前窗口。 */
     public interface Sink { void onLyric(String[] window, String title, String artist); }
 
     public static void addSink(Sink s) { SINKS.addIfAbsent(s); }
@@ -144,7 +144,7 @@ public final class Lyrics {
         MAIN.removeCallbacks(TICK);
     }
 
-    /** 给任意展示方取当前窗口（0=自动行数）。10.15 卡片与菜园共用这一个出口。 */
+    /** 给任意展示方取当前窗口（0=自动行数）。10.15 卡片与极简屏共用这一个出口。 */
     public static String[] window(Context ctx, LauncherModel m, int wantLines) {
         int n = wantLines > 0 ? wantLines : linesOf(m, ctx);
         // R3 直连行级覆盖：开关开+广播新鲜才生效，其余原管线（单点出口，

@@ -210,7 +210,7 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         NavNotiParser.setListener(() -> {
             if (island != null && model != null) island.bind(model);
         });
-        Lyrics.start(this);         // 一秒一跳，组件条/菜园的歌词都从它出
+        Lyrics.start(this);         // 一秒一跳，组件条/极简屏的歌词都从它出
         Lyrics.removeSink(islandSink);
         Lyrics.addSink(islandSink); // sink 恒为同一实例：CopyOnWrite 集合会永久持死
         // 批次 NB：导航信息 sink（NavInfoReceiver 同款保活纪律——先摘后挂防重复）

@@ -15,13 +15,14 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 /**
- * 悬浮球（批次 KB，复刻参考桌面普通版 BallService）：
- * 桌面上常驻的可拖拽圆球 —— 单击回桌面、左滑返回、上滑最近任务。
+ * 小白点（悬浮球，批次 KB，复刻参考桌面普通版 BallService；NB20 按用户需求简化）：
+ * 桌面上常驻的可拖拽圆球 —— **只有一个手势：点一下，无论在什么界面都回桌面主页**。
+ * 拖动仅用于挪位置（松手自动贴边记忆）。原左滑返回/上滑最近任务已按需求移除。
  * WindowManager TYPE_APPLICATION_OVERLAY 悬浮窗 + 手势分发。
  *
  * 授权（root 级）：overlay 需要 SYSTEM_ALERT_WINDOW（appops），
  * ensureAccess() 用 su appops set 直接放行 —— 不弹设置 UI 不重启。
- * 开关：prop persist.seagull.ball（1=开 0=关，默认开；HomeActivity 启动时拉起）。
+ * 开关：设置页「显示小白点」（model.ballEnabled，默认开）。
  */
 public class BallService extends Service {
 
@@ -75,7 +76,7 @@ public class BallService extends Service {
         ballImg.setImageDrawable(Skin.pill((alpha255 << 24) | 0x1B5E20));
         ballImg.setPadding(dp(this, 13), dp(this, 13), dp(this, 13), dp(this, 13));
         ballView.addView(ballImg, new FrameLayout.LayoutParams(size, size));
-        ballView.setContentDescription("悬浮球：单击回桌面，左滑返回，上滑最近任务，拖动移动");
+        ballView.setContentDescription("小白点：点一下回桌面，拖动挪位置");
 
         lp = new WindowManager.LayoutParams(
                 size, size,
@@ -121,14 +122,12 @@ public class BallService extends Service {
                     }
                     case MotionEvent.ACTION_UP: {
                         if (!dragging) {
-                            // 单击 = 回桌面
+                            // NB20：唯一手势 —— 点一下回桌面主页（任何界面都生效）
                             goHome();
                         } else {
-                            float dx = e.getRawX() - downX;
-                            float dy = e.getRawY() - downY;
+                            // 拖动只挪位置：写回 model（设置页「回到默认位置」可重置）
                             startX = lp.x;
                             startY = lp.y;
-                            // 位置写回 model（设置页「回到默认位置」可重置）
                             try {
                                 LauncherModel mm = cfg(BallService.this);
                                 if (mm != null) {
@@ -137,13 +136,6 @@ public class BallService extends Service {
                                     mm.save();
                                 }
                             } catch (Throwable ignore) {
-                            }
-                            if (Math.abs(dx) > dp(BallService.this, 60)
-                                    && Math.abs(dx) > Math.abs(dy)) {
-                                if (dx < 0) goBack();   // 左滑 = 返回
-                            } else if (dy < -dp(BallService.this, 60)
-                                    && Math.abs(dy) > Math.abs(dx)) {
-                                goRecents();            // 上滑 = 最近任务
                             }
                         }
                         return true;
@@ -162,14 +154,6 @@ public class BallService extends Service {
         startActivity(new Intent(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_HOME)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-    }
-
-    private void goBack() {
-        Caps.exec("input keyevent 4");
-    }
-
-    private void goRecents() {
-        Caps.exec("input keyevent 187");   // KEYCODE_APP_SWITCH
     }
 
     @Override

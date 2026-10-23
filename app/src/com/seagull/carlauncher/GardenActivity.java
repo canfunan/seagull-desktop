@@ -11,11 +11,11 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 /**
- * 菜园（TODO P1-1）：整屏只留大时钟 + 歌词 + 一片叶子。
+ * 极简屏（TODO P1-1）：整屏只留大时钟 + 歌词 + 一片叶子。
  *
  * 长按叶子进，再长按一次出（4.1 / 4.2）；点叶子出全部应用（4.9）。
  * 三种摆法（4.13）在 gardenStyle 里；压暗（4.5）与遮罩颜色（4.6）都走设置。
- * 应用继续在后台跑，不做任何保活动作 —— 菜园只是个界面。
+ * 应用继续在后台跑，不做任何保活动作 —— 极简屏只是个界面。
  */
 public class GardenActivity extends BaseActivity {
 
@@ -78,7 +78,7 @@ public class GardenActivity extends BaseActivity {
         return root;
     }
 
-    /** 菜园遮罩：壁纸在底下先铺一层，再按 gardenDim 压暗；浅色主题压黑。 */
+    /** 极简屏遮罩：壁纸在底下先铺一层，再按 gardenDim 压暗；浅色主题压黑。 */
     private void applyWall(FrameLayout root) {
         int w = getResources().getDisplayMetrics().widthPixels;
         int h = getResources().getDisplayMetrics().heightPixels;
@@ -93,7 +93,7 @@ public class GardenActivity extends BaseActivity {
             bd.setGravity(Gravity.FILL);
             root.setBackground(bd);
         }
-        // 菜园遮罩与外观遮罩分开：这里只按 gardenDim 压，不动 model.wallDim
+        // 极简屏遮罩与外观遮罩分开：这里只按 gardenDim 压，不动 model.wallDim
         int a = model.gardenDim * 255 / 100;
         View dim = new View(this);
         dim.setBackgroundColor(Color.argb(a, 0, 0, 0));
@@ -146,14 +146,14 @@ public class GardenActivity extends BaseActivity {
 
     private TextView leafView() {
         TextView t = new TextView(this);
-        t.setText("叶");
+        t.setText("●");   // NB20：圆点（原「叶」字是参考实现语境，海鸥叫小白点）
         t.setTextSize(model.ballSize / 3f);
         t.setTextColor(Skin.c(R.color.leaf));
         t.setGravity(Gravity.CENTER);
         t.setBackground(leafBg());
-        // 点一下出全部应用，长按一次退出菜园
-        t.setOnClickListener(v -> startActivity(new Intent(this, AppListActivity.class)));
-        t.setOnLongClickListener(v -> { finish(); return true; });
+        // NB20：小白点行为全局统一 —— 点一下回桌面（顺手退出极简屏）。
+        // 原先「点一下出全部应用」违背用户需求「点击无论什么界面都回桌面主页」。
+        t.setOnClickListener(v -> finish());
         return t;
     }
 
@@ -180,7 +180,7 @@ public class GardenActivity extends BaseActivity {
     @Deprecated
     @Override
     public void onBackPressed() {
-        finish();   // 4.8 返回键回桌面，不留在菜园
+        finish();   // 4.8 返回键回桌面，不留在极简屏
     }
 
     @Override protected void onResume() {

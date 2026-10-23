@@ -27,7 +27,7 @@ import java.util.Set;
  * 桌面数据层：应用清单 + 全部配置的单一事实源。
  *
  * 对齐海鸥桌面的设置结构（去掉账号与云端组后剩 5 组 / 17 分区）：
- *   桌面       → 布局 | Dock 栏 | 快捷栏 | 菜园 | 小白点
+ *   桌面       → 布局 | Dock 栏 | 快捷栏 | 极简屏 | 小白点
  *   外观       → 主题与壁纸 | 屏幕 | 海鸥岛
  *   天气与歌词 → 天气 | 歌词
  *   高级功能   → 窗口 | 触摸 | 自动化任务 | 开机动画
@@ -100,7 +100,7 @@ public final class LauncherModel {
         Perf(String l) { this.label = l; }
     }
 
-    /** 菜园摆法。 */
+    /** 极简屏摆法。 */
     public enum GardenStyle {
         CENTER_CLOCK("居中大钟"),
         LEFT_CLOCK_BOTTOM_LYRIC("左上时钟 + 底部歌词"),
@@ -270,7 +270,7 @@ public final class LauncherModel {
     public String quickBtn1 = "";     // 快捷开关 1（@fn:xxx）
     public String quickBtn2 = "";     // 快捷开关 2
 
-    /* ==================== 状态：菜园 ==================== */
+    /* ==================== 状态：极简屏 ==================== */
 
     public boolean gardenEnabled = true;
     public int gardenDim = 60;                 // 壁纸压暗 0~100
@@ -1078,7 +1078,7 @@ public final class LauncherModel {
             o.put("quickbars", qmaps);
             o.put("qbtn1", quickBtn1);
             o.put("qbtn2", quickBtn2);
-            /* 菜园 */
+            /* 极简屏 */
             o.put("garden", gardenEnabled);
             o.put("gardenDim", gardenDim);
             o.put("gardenStyle", gardenStyle.name());
@@ -1673,7 +1673,7 @@ public final class LauncherModel {
 
     /**
      * 标量配置回默认值（defaults() 只管列表类那一组，这里管剩下的）。
-     * 必须覆盖全部标量字段：旧实现只重置 16 个，Dock/菜园/小白点/海鸥岛/
+     * 必须覆盖全部标量字段：旧实现只重置 16 个，Dock/极简屏/小白点/海鸥岛/
      * 天气/歌词/窗口/触摸/快捷按钮全留在用户调校值上，「恢复出厂」名不副实
      * （用户实测过：重置后字号还是 130%）。
      */
@@ -1695,7 +1695,7 @@ public final class LauncherModel {
         dockShowClock = true;
         quickBtn1 = "";
         quickBtn2 = "";
-        /* 菜园 */
+        /* 极简屏 */
         gardenEnabled = true;
         gardenDim = 60;
         gardenStyle = GardenStyle.CENTER_CLOCK;
