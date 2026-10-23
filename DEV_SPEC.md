@@ -19,6 +19,17 @@
 5. **装机前先确认 APK 真下载成功** —— curl 后检查文件大小（>1MB），
    cp 到 /data/local/tmp 后确认存在，再 pm install。
    版本号用 `dumpsys package <pkg> | grep versionName` 核对。
+6. **push 后必须回读自证，装机前必须验特征码**（事故 NB-PUSH-LOST，
+   2026-10-23）—— push_many 推完立刻 `GET contents/<路径>?ref=<新commit>`
+   拉回内容，验证长度/特征串与本地一致；装机后 `pm path` 拉设备 APK 解压
+   dex grep 本轮功能特征串（infoMode/hookAmapAutoGuide/rightCol...）——
+   **特征码不在 = 这次推送丢了，别报告"装好了"**。
+   事故：NB2~NB6 五轮 push_many 的源码修改全部没进 main（本地 reposrc
+   一直是新的，commit 里却是旧内容——上传通道丢内容，根因待查）。表现：
+   设备装「新 UI 壳 + 旧逻辑」——NavCard 是批次 AN 旧版（无导航 GONE）
+   所以「默认没有导航卡片」，XposedEntry 旧版所以 NB2/NB4 的导航 hook
+   根本没装。**本地对不上 main 时，一律以「回读 commit 内容」为准，
+   不信 push 的返回值**。
 
 ## Git Data API 一次多文件推送模板
 
@@ -81,6 +92,16 @@ def push_many(msg, files):
     # 6. 更新 ref
     api("PATCH", "git/refs/heads/" + BRANCH, {"sha": new_commit["sha"]})
     print("一次推完:", len(files), "个文件 → commit", new_commit["sha"][:10])
+    # 7. 回读自证（铁律 6，事故 NB-PUSH-LOST）：长度不符直接炸，别把没推上去当成功
+    for repo_path, local in files:
+        back = api("GET", "contents/" + repo_path + "?ref=" + new_commit["sha"])
+        bc = base64.b64decode(back["content"])
+        lc = open(local, "rb").read()
+        if len(bc) != len(lc):
+            raise AssertionError("回读长度不符 " + repo_path + ": main=" + str(len(bc))
+                                 + " 本地=" + str(len(lc)) + "——重推！")
+        print("  ✓", repo_path.split("/")[-1], len(bc), "B 与本地一致")
+    return new_commit["sha"]
 
 # 用法：
 # push_many("feat: xxx", [
@@ -141,7 +162,10 @@ for r in json.load(sys.stdin)['workflow_runs'][:5]:
 2. `su -c "cp ... /data/local/tmp/x.apk && ls -la /data/local/tmp/x.apk"` —— 确认拷贝成功
 3. `pm install -r -t` 输出 `Success`
 4. `dumpsys package <pkg> | grep versionName` —— 版本号是新的
-5. 装机失败先看完整错误头（`INSTALL_PARSE_FAILED` = 清单问题，`SecurityException` = 权限/exported）
+5. **验特征码**（铁律 6）：`pm path` 拉设备 APK → 解压 dex → grep 本轮功能的
+   特征串（如 `infoMode`/`quickBtn`/`hookAmapAutoGuide`/`rightCol`）——**不在
+   就是推送丢了，别报告装好了，回铁律 6 重推**
+6. 装机失败先看完整错误头（`INSTALL_PARSE_FAILED` = 清单问题，`SecurityException` = 权限/exported）
 
 ## vivo 车机投屏现状（2026-10-22，关键结论备查）
 
