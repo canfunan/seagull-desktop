@@ -439,15 +439,35 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         total.setEllipsize(android.text.TextUtils.TruncateAt.END);
     }
 
-    /** icon id → 转向词（NB12：分组与 arrowOf 逐条对齐——之前漏 13/10/11 且 11 错标直行）。 */
+    /**
+     * icon id → 转向词。NB19 全面纠偏 —— 旧表（2/3/4=右转、6/7/8=左转、5/9=掉头）
+     * 是 NB12 拍脑袋分的组，与高德真实枚举完全错位，用户实测「左转显示右转」。
+     * 权威依据 = 高德官方 AMapNaviIconType（iOS 导航 SDK AMapNaviCommonObj.h
+     * 公开枚举，车机版协议 icon 同源 —— 铁证：车机版 GuideInfoProtocolData
+     * convertIcon() 把 21/22/24→11、23→12、25/26/28→17、27→18，与本表
+     * 11 进入环岛 / 12 驶出环岛 / 17、18 左行环岛逐字吻合）：
+     *   1 车图标 | 2 左转 | 3 右转 | 4 左前方 | 5 右前方 | 6 左后方 |
+     *   7 右后方 | 8 左转掉头 | 9 直行 | 10 途经点 | 11 进环岛 | 12 出环岛 |
+     *   13 服务区 | 14 收费站 | 15 目的地 | 16 隧道 | 17/18 左行环岛 |
+     *   19 右转掉头(左行) | 20 顺行 | 29+ 行人通道类
+     */
     private static String arrowTextOf(int id) {
         switch (id) {
-            case 2: case 3: case 4: case 12: case 14: return "右转";
-            case 6: case 7: case 8: case 13: return "左转";
-            case 5: case 9: return "掉头";
-            case 10: return "并入";
-            case 11: return "靠左";
-            default: return "";
+            case 2: return "左转";
+            case 3: return "右转";
+            case 4: return "左前方";
+            case 5: return "右前方";
+            case 6: return "左后方";
+            case 7: return "右后方";
+            case 8: case 19: return "掉头";
+            case 11: case 17: return "进入环岛";
+            case 12: case 18: return "驶出环岛";
+            case 13: return "服务区";
+            case 14: return "收费站";
+            case 15: return "到达目的地";
+            case 16: return "进入隧道";
+            case 1: case 9: case 20: return "直行";
+            default: return "";   // 0/1/29+ 无转向词
         }
     }
 
@@ -481,8 +501,9 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
     }
 
     /**
-     * maneuverId → 箭头。高德转向 id 按"左 6/7/8、右 2/3/4、掉头 5"归类
-     *（匝道/环岛等细分先归进左右大组），未知 id 一律直行并记日志（后续补全）。
+     * maneuverId → 箭头。NB19：按高德官方 AMapNaviIconType 全表重排
+     * （依据与分组论证见 arrowTextOf 注释）——旧表左右完全颠倒。
+     * 29+ 行人/通道类无转向语义，一律直行。
      */
     /** OPERATION 文本 → 箭头（高德给中文操作词，比 id 映射准）。 */
     private static String arrowOfOp(String op) {
@@ -499,14 +520,19 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
 
     private static String arrowOf(int id) {
         switch (id) {
-            case 2: case 3: case 4: case 12: case 14: return "↱";   // 右转组（NB12：↗→↱ 与「右转」词一致）
-            case 5: case 9: return "⤿";                              // 掉头
-            case 6: case 7: case 8: case 13: return "↖";             // 左转组
-            case 10: return "⇀";                                     // 并入/靠右
-            case 11: return "↰";                                     // 靠左
-            default:
-                if (id > 14) android.util.Log.i(TAG, "未映射转向 id=" + id + "，用直行箭头");
-                return "↑";
+            case 2: return "↰";                          // 左转
+            case 3: return "↱";                          // 右转
+            case 4: return "↖";                          // 左前方
+            case 5: return "↗";                          // 右前方
+            case 6: return "↙";                          // 左后方
+            case 7: return "↘";                          // 右后方
+            case 8: case 19: return "⤿";                 // 掉头
+            case 11: case 17: return "↻";                // 进入环岛
+            case 12: case 18: return "↺";                // 驶出环岛
+            case 13: return "P";                         // 服务区
+            case 14: return "▣";                         // 收费站
+            case 10: case 15: return "⚑";                // 途经点/目的地
+            case 1: case 9: case 20: default: return "↑"; // 直行/顺行/未知
         }
     }
 

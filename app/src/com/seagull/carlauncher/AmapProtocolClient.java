@@ -57,8 +57,10 @@ public final class AmapProtocolClient {
 
     /** 解析出来的一条导航引导信息（对应 GuideInfoModel 核心字段）。 */
     public static final class Guide {
-        public int icon;                      // icon（int——高德图标 id 制，
-                                              // 2/3/4=右转组 6/7/8=左转组 5=掉头）
+        public int icon;                      // icon（int——高德图标 id 制，官方
+                                              // AMapNaviIconType：2=左转 3=右转 4=左前方
+                                              // 5=右前方 8=掉头 9=直行 11/12=环岛；
+                                              // NB19 纠偏——旧注释左右颠倒）
         public int newIcon;                   // NB15：新版图标 id（官方取值 newIcon 优先，0 回落 icon）
         public int segRemainDis;              // NB17：本段剩余距离（米）——官方 Parser 第 30 行
                                               // 真实 key「segRemainDis」！左屏「186米」= 它。
