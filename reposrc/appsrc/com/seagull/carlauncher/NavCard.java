@@ -112,7 +112,24 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
             return;   // 空信息不隐藏（可能车联线的 onNavState 正在显示）
         }
         setVisibility(VISIBLE);
-        turn.setText(arrowOf(info.iconId));
+        // 转向指示：高德原味 Icon 优先（NB2），回落 OPERATION 文本映射，再回落 id 映射
+        boolean iconShown = false;
+        if (info.icon != null) {
+            try {
+                android.graphics.drawable.Drawable d = info.icon.loadDrawable(getContext());
+                if (d != null) {
+                    d.setBounds(0, 0, dp(getContext(), 30), dp(getContext(), 30));
+                    turn.setCompoundDrawables(null, d, null, null);
+                    turn.setText("");
+                    iconShown = true;
+                }
+            } catch (Throwable ignore) {
+            }
+        }
+        if (!iconShown) {
+            turn.setCompoundDrawables(null, null, null, null);
+            turn.setText(!info.op.isEmpty() ? arrowOfOp(info.op) : arrowOf(info.iconId));
+        }
         int m = NavInfoReceiver.parseMeters(info.dist, info.unit);
         dist.setText(m > 0 ? fmtDist(m) : info.dist + info.unit);
         // 路名：TITLE_1 优先；转向瞬间（当前路空）给 op + where
@@ -148,6 +165,19 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
      * maneuverId → 箭头。高德转向 id 按"左 6/7/8、右 2/3/4、掉头 5"归类
      *（匝道/环岛等细分先归进左右大组），未知 id 一律直行并记日志（后续补全）。
      */
+    /** OPERATION 文本 → 箭头（高德给中文操作词，比 id 映射准）。 */
+    private static String arrowOfOp(String op) {
+        if (op == null || op.isEmpty()) return "↑";
+        if (op.contains("掉头")) return "⤿";
+        if (op.contains("左") && op.contains("转")) return "↰";
+        if (op.contains("右") && op.contains("转")) return "↱";
+        if (op.contains("靠左")) return "↖";
+        if (op.contains("靠右")) return "↗";
+        if (op.contains("左")) return "↰";
+        if (op.contains("右")) return "↱";
+        return "↑";
+    }
+
     private static String arrowOf(int id) {
         switch (id) {
             case 2: case 3: case 4: case 12: case 14: return "↗";   // 右转组

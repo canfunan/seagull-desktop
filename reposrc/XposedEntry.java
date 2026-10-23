@@ -273,6 +273,25 @@ public class XposedEntry implements IXposedHookLoadPackage {
             return;
         }
 
+        if ("com.autonavi.minimap".equals(pkg)) {
+            // 批次 NB2：高德手机版 Ucar 模式数据（反编译 classes8.dex 坐实）——
+            // minimap 内置 com.ucar.map.connect.UCarMapConnector（车机模式客户端）：
+            // 导航数据由 defpackage.bs6.a() 组装成 Bundle（ucar.map.bundle.* 9 字段），
+            // 经 UCarMapConnector.f(bs6) 推给 UCarMapService。hook bs6.a() after
+            // 直接拿组装好的 Bundle —— 比 hook vivo 侧（g6.e.a）更优：
+            //   ① 高德是普通 app，注入 100% 稳（vivo.car.networking 是系统 app，
+            //      注入看 zn-daemon/lspd 状态，本轮实测翻过车）；
+            //   ② 数据是原味 Bundle（vivo 侧还过 50ms 节流合并）；
+            //   ③ Icon（转向图标）随 Bundle 直传，海鸥不用箭头文本映射。
+            // 整个 Bundle 塞广播（Bundle 是 Parcelable），海鸥侧原样解。
+            try {
+                hookAmapUcar(lpp.classLoader);
+                log("已挂载 minimap → Ucar 导航数据(bs6.a)");
+            } catch (Throwable t) {
+                log("高德 Ucar hook 失败: " + t);
+            }
+        }
+
         if (isNetease(pkg)) {
             try {
                 log("已挂载 " + pkg + " → 注入 setLaunchDisplayId");
@@ -684,6 +703,48 @@ public class XposedEntry implements IXposedHookLoadPackage {
                                     com.seagull.carlauncher.Constants.ACTION_NAV_CLEAR);
                             i.setPackage(com.seagull.carlauncher.Constants.SELF_PACKAGE);
                             ((android.content.Context) app).sendBroadcast(i);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+    }
+
+    /**
+     * 批次 NB2：高德手机版 Ucar 数据源（比 vivo 侧更优，见 dispatch 注释）。
+     * hook defpackage.bs6.a() after —— 返回的 Bundle 含：
+     *   DIRECTION_ICON(Icon) / OPERATION / WHERE / DISTANCE / DISTANCE_UNIT /
+     *   CROSSING_ICON(Icon) / TITLE_1(null) / TITLE_2(null)
+     * 整个 Bundle 通过 ACTION_NAV_INFO 广播回海鸥（extra "b"）。
+     * 清除通道：bs6 为空/全 null 的组装（导航结束）时发 ACTION_NAV_CLEAR。
+     */
+    private void hookAmapUcar(ClassLoader cl) {
+        XposedHelpers.findAndHookMethod("defpackage.bs6", cl, "a",
+                new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        try {
+                            Object r = param.getResult();
+                            if (!(r instanceof android.os.Bundle)) return;
+                            android.os.Bundle b = (android.os.Bundle) r;
+                            // 全空 = 导航结束的收尾组装 → 发清除
+                            boolean empty = true;
+                            for (String k : new String[]{
+                                    "ucar.map.bundle.DISTANCE", "ucar.map.bundle.OPERATION",
+                                    "ucar.map.bundle.WHERE", "ucar.map.bundle.TITLE_1"}) {
+                                if (b.getString(k) != null) { empty = false; break; }
+                            }
+                            Class<?> at = Class.forName("android.app.ActivityThread");
+                            Object app = at.getMethod("currentApplication").invoke(null);
+                            if (!(app instanceof android.content.Context)) return;
+                            android.content.Context ctx = (android.content.Context) app;
+                            android.content.Intent i = new android.content.Intent(
+                                    com.seagull.carlauncher.Constants.ACTION_NAV_INFO);
+                            i.setPackage(com.seagull.carlauncher.Constants.SELF_PACKAGE);
+                            i.putExtra("b", b);
+                            if (empty) {
+                                i.setAction(com.seagull.carlauncher.Constants.ACTION_NAV_CLEAR);
+                            }
+                            ctx.sendBroadcast(i);
                         } catch (Throwable ignored) {
                         }
                     }

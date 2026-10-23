@@ -34,18 +34,24 @@ public final class NavInfoReceiver {
     private static final CopyOnWriteArrayList<Listener> SINKS = new CopyOnWriteArrayList<>();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
-    /** 一条导航信息（vivo 归一化后的本段 TBT，字段与 Bundle key 一一对应）。 */
+    /** 一条导航信息（字段与 Bundle key 一一对应）。批次 NB2：加 icon（高德原味 Icon）。 */
     public static final class NavInfo {
-        public final int iconId;       // DIRECTION_ICON_ID（三地图统一高德 id 制）
+        public final int iconId;       // DIRECTION_ICON_ID（vivo 线才有）
         public final String dist;      // DISTANCE（如 "300"）
         public final String unit;      // DISTANCE_UNIT（米/公里）
         public final String op;        // OPERATION（如 "左转"）
         public final String where;     // WHERE（路口描述）
         public final String t1;        // TITLE_1（下一道路名）
         public final String t2;        // TITLE_2（再下一道路名）
+        public final android.graphics.drawable.Icon icon;   // DIRECTION_ICON（高德线原味）
 
         public NavInfo(int iconId, String dist, String unit, String op,
                        String where, String t1, String t2) {
+            this(iconId, dist, unit, op, where, t1, t2, null);
+        }
+
+        public NavInfo(int iconId, String dist, String unit, String op,
+                       String where, String t1, String t2, android.graphics.drawable.Icon icon) {
             this.iconId = iconId;
             this.dist = dist == null ? "" : dist;
             this.unit = unit == null ? "" : unit;
@@ -53,6 +59,7 @@ public final class NavInfoReceiver {
             this.where = where == null ? "" : where;
             this.t1 = t1 == null ? "" : t1;
             this.t2 = t2 == null ? "" : t2;
+            this.icon = icon;
         }
 
         public boolean isEmpty() {
@@ -85,6 +92,32 @@ public final class NavInfoReceiver {
                             l.onNavClear();
                         } catch (Throwable t) {
                             Log.w(TAG, "clear 分发失败", t);
+                        }
+                    }
+                });
+                return;
+            }
+            // 批次 NB2：高德原味 Bundle（bs6.a() 整个塞过来的）优先解析
+            android.os.Bundle nb = intent.getBundleExtra("b");
+            if (nb != null) {
+                android.graphics.drawable.Icon ic = null;
+                try {
+                    ic = nb.getParcelable("ucar.map.bundle.DIRECTION_ICON");
+                } catch (Throwable ignore) {
+                }
+                final NavInfo hi = new NavInfo(0,
+                        nb.getString("ucar.map.bundle.DISTANCE"),
+                        nb.getString("ucar.map.bundle.DISTANCE_UNIT"),
+                        nb.getString("ucar.map.bundle.OPERATION"),
+                        nb.getString("ucar.map.bundle.WHERE"),
+                        nb.getString("ucar.map.bundle.TITLE_1"),
+                        nb.getString("ucar.map.bundle.TITLE_2"), ic);
+                MAIN.post(() -> {
+                    for (Listener l : SINKS) {
+                        try {
+                            l.onNavInfo(hi);
+                        } catch (Throwable t) {
+                            Log.w(TAG, "sink 分发失败", t);
                         }
                     }
                 });
