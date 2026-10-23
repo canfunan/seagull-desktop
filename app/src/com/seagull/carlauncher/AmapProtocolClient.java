@@ -214,6 +214,8 @@ public final class AmapProtocolClient {
             Log.w(TAG, "JsonProtocolService 断开");
             svc = null;
             registering = false;
+            bound = false;   // ★NB13：不置 false 的话 rebind→bind() 被 if(bound)return
+                             // 挡住，22:51 断开后实测永久卡死（用户「信息不上卡片」真凶）
             scheduleReconnect();
         }
     };
@@ -224,6 +226,7 @@ public final class AmapProtocolClient {
             Log.w(TAG, "协议 binder died");
             svc = null;
             registering = false;
+            bound = false;   // ★NB13 同上（binderDied 走的是 disconnect 之外的路径）
             scheduleReconnect();
         }
     };

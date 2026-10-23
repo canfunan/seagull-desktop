@@ -109,9 +109,17 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         AmapProtocolClient.addSink(this);
     }
 
-    /** NB12：按包拼回家/公司的搜索 URI（各图厂 scheme 不同）。 */
+    /**
+     * NB13：按包拼回家/公司的落地方式。
+     * · 高德手机版（minimap）：androidamap://poi 实测能起（SplashActivity）
+     * · 高德车机版（amapauto）：不认 poi URI（实测 unable to resolve）、
+     *   AUTO_WIDGET_GO_HOME 是 vivo protected 广播——两条都死。改为起它的
+     *   主界面（用户自己点车机版里的回家/公司按钮），见 launchHome() 特判
+     * · 百度 baidumap://map/place/search / 腾讯 qqmap://map/search
+     */
     private static String homeUri(String pkg, String keyword) {
         if (pkg == null) return null;
+        if ("com.autonavi.amapauto".equals(pkg)) return null;   // 特判：走 launchHome
         if (pkg.startsWith("com.autonavi")) {
             return "androidamap://poi?sourceApplication=seagull&keywords=" + keyword + "&dev=0";
         }
@@ -122,6 +130,20 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
             return "qqmap://map/search?keyword=" + keyword + "&referer=seagull";
         }
         return null;
+    }
+
+    /** NB13：车机版高德（amapauto）的回家/公司——起主界面让用户点它自家的按钮。 */
+    private static void launchAmapAuto(Activity act) {
+        try {
+            android.content.Intent i = new android.content.Intent();
+            i.setComponent(new android.content.ComponentName("com.autonavi.amapauto",
+                    "com.autonavi.amapauto.MainMapActivity"));
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                    | android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            act.startActivity(i);
+        } catch (Throwable t) {
+            Log.w(TAG, "起高德车机版失败", t);
+        }
     }
 
     /** 注入画中画当前导航包提供者（HomeActivity.buildUi 里调）。 */
@@ -152,6 +174,12 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
             java.util.List<String> order = new java.util.ArrayList<>();
             if (navPkg != null) order.add(navPkg);
             order.add("com.autonavi.minimap");
+            // NB13：车机版高德没有可用 URI——起主界面（用户点它自家回家按钮），
+            // 不回落手机版（用户实测「还是跳手机版」的修法）
+            if ("com.autonavi.amapauto".equals(navPkg)) {
+                launchAmapAuto(act);
+                return;
+            }
             for (String pkg : order) {
                 String uri = homeUri(pkg, keyword);
                 if (uri == null) continue;

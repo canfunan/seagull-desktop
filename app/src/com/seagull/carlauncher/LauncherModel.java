@@ -429,7 +429,7 @@ public final class LauncherModel {
     public int pipWeightA = 60;   // 批次 NB：默认 60/40（用户拍板——导航在左 60%）
     public int pipWeightB = 40;
     /** 批次 NB：右侧竖排上(导航卡)/下(槽2)占比（100 制，竖 splitter 拖拽持久化）。 */
-    public int pipWeightNav = 38;   // NB12：30→38（用户实测：缝隙大、卡片空间小，「占比不到38」要加大）
+    public int pipWeightNav = 42;   // NB13：38→42（NB12 改 38 用户实测「大小没变化」，再加码）
     public boolean keepScreenOn = false;
     public boolean hideSystemBars = false;
     public boolean topInfoBar = true;          // 顶部信息栏
