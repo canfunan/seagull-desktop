@@ -292,6 +292,24 @@ public class XposedEntry implements IXposedHookLoadPackage {
             }
         }
 
+        if ("com.autonavi.amapauto".equals(pkg)) {
+            // 批次 NB4：高德车机版导航数据（用户「车机版这个导航卡片应该行」评估坐实）——
+            // defpackage.a80.k(GuideInfoProtocolData) 是车机版 TBT 数据 → 协议
+            // Model 的唯一组装入口（车机屏导航 UI 就消费它发的协议），每次导航
+            // 更新必调。hook before 拿 GuideInfoProtocolData（参数），反射调它的
+            // **语义 getter**（getCurRoadName/getNextRoadName/getRouteRemainDis/
+            * getSegRemainDis/getCurSpeed/getLimitedSpeed/getType/getIcon/...）——
+            // 不碰混淆的 GuideInfoModel 字母 getter，零对应成本。
+            // 字段比 minimap 的 Ucar 线全一个量级：全程剩余距离/时间、本段剩余、
+            // 当前速度、限速、电子眼距离、图标、下一道路名。
+            try {
+                hookAmapAutoGuide(lpp.classLoader);
+                log("已挂载 amapauto → 车机版导航数据(a80.k)");
+            } catch (Throwable t) {
+                log("车机版导航 hook 失败: " + t);
+            }
+        }
+
         if (isNetease(pkg)) {
             try {
                 log("已挂载 " + pkg + " → 注入 setLaunchDisplayId");
@@ -745,6 +763,66 @@ public class XposedEntry implements IXposedHookLoadPackage {
                                 i.setAction(com.seagull.carlauncher.Constants.ACTION_NAV_CLEAR);
                             }
                             ctx.sendBroadcast(i);
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
+    }
+
+    /** GuideInfoProtocolData 的语义 getter（混淆类里唯一可靠的读法）。 */
+    private static final String[] GP_GETTERS = {
+            "getCurRoadName", "getNextRoadName", "getRouteRemainDis",
+            "getRouteRemainTime", "getSegRemainDis", "getSegRemainTime",
+            "getCurSpeed", "getLimitedSpeed", "getType", "getIcon",
+            "getCameraDist", "getCameraSpeed", "getCarDirection",
+    };
+
+    /**
+     * 批次 NB4：高德车机版导航数据源。hook defpackage.a80.k before，
+     * 反射 GuideInfoProtocolData 语义 getter 拿全字段，广播回海鸥。
+     * 同一 ACTION_NAV_INFO 通道（NavInfoReceiver 的 "b" Bundle extra）。
+     */
+    private void hookAmapAutoGuide(ClassLoader cl) {
+        // 参数类型用类名字符串（LSPosed 的 findAndHookMethod 重载吃字符串）——
+        // 不能 Class.forName：handleLoadPackage 早期 GuideInfoProtocolData 还没
+        // 加载，forName 直接 ClassNotFound，钩子装不上（复盘抓的）
+        XposedHelpers.findAndHookMethod("defpackage.a80", cl,
+                "k", "com.autonavi.amapauto.protocol.model.service.GuideInfoProtocolData",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            Object data = param.args[0];
+                            if (data == null) return;
+                            android.os.Bundle b = new android.os.Bundle();
+                            boolean any = false;
+                            for (String g : GP_GETTERS) {
+                                try {
+                                    Object v = XposedHelpers.callMethod(data, g);
+                                    if (v == null) continue;
+                                    if (v instanceof String) {
+                                        b.putString(g, (String) v);
+                                        if (!((String) v).isEmpty()) any = true;
+                                    } else if (v instanceof Integer) {
+                                        b.putInt(g, (Integer) v);
+                                        if ((Integer) v != 0) any = true;
+                                    } else if (v instanceof Double) {
+                                        b.putDouble(g, ((Double) v).doubleValue());
+                                        if ((Double) v != 0d) any = true;
+                                    }
+                                } catch (Throwable skipOne) {
+                                    // 单个 getter 没有/签名不符就跳过，别牵连全批
+                                }
+                            }
+                            if (!any) return;
+                            Class<?> at = Class.forName("android.app.ActivityThread");
+                            Object app = at.getMethod("currentApplication").invoke(null);
+                            if (!(app instanceof android.content.Context)) return;
+                            android.content.Intent i = new android.content.Intent(
+                                    com.seagull.carlauncher.Constants.ACTION_NAV_INFO);
+                            i.setPackage(com.seagull.carlauncher.Constants.SELF_PACKAGE);
+                            i.putExtra("b", b);
+                            ((android.content.Context) app).sendBroadcast(i);
                         } catch (Throwable ignored) {
                         }
                     }

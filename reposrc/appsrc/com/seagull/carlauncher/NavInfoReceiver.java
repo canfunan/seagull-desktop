@@ -97,9 +97,33 @@ public final class NavInfoReceiver {
                 });
                 return;
             }
-            // 批次 NB2：高德原味 Bundle（bs6.a() 整个塞过来的）优先解析
+            // 批次 NB2/NB4：原味 Bundle 优先解析。
+            // NB2 = minimap 的 bs6.a()（ucar.map.bundle.* key）；
+            // NB4 = amapauto 的 a80.k() 语义 getter key（getCurRoadName 等）。
             android.os.Bundle nb = intent.getBundleExtra("b");
             if (nb != null) {
+                // NB4 车机版：key 是语义 getter 名，映射到统一字段
+                if (nb.containsKey("getSegRemainDis") || nb.containsKey("getCurRoadName")) {
+                    int icon = nb.getInt("getType", 0);
+                    final NavInfo hi = new NavInfo(icon,
+                            String.valueOf(nb.getInt("getSegRemainDis", 0)),
+                            "米",
+                            "",
+                            "",
+                            nb.getString("getNextRoadName"),
+                            "",
+                            null);
+                    MAIN.post(() -> {
+                        for (Listener l : SINKS) {
+                            try {
+                                l.onNavInfo(hi);
+                            } catch (Throwable t) {
+                                Log.w(TAG, "sink 分发失败", t);
+                            }
+                        }
+                    });
+                    return;
+                }
                 android.graphics.drawable.Icon ic = null;
                 try {
                     ic = nb.getParcelable("ucar.map.bundle.DIRECTION_ICON");
