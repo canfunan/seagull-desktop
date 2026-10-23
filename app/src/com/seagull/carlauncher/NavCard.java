@@ -247,8 +247,8 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         String word = arrowTextOf(g.icon);
         String distTxt = fmtDist(g.nextSegRemainDis);
         dist.setText(distTxt.isEmpty() ? "" : distTxt + (word.isEmpty() ? "" : "后"));
-        String road = !g.nextRoadName.isEmpty() ? "进入 " + g.nextRoadName : g.curRoadName;
-        road.setText((word.isEmpty() ? "" : word + " ") + road);
+        String roadName = !g.nextRoadName.isEmpty() ? "进入 " + g.nextRoadName : g.curRoadName;
+        road.setText((word.isEmpty() ? "" : word + " ") + roadName);
         // 次行：全程距离 + 时间 + ETA（用户实测在跑的格式）
         StringBuilder sb = new StringBuilder();
         sb.append(fmtDist(g.routeRemainDis));
