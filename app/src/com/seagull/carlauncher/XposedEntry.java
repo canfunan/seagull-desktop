@@ -298,7 +298,7 @@ public class XposedEntry implements IXposedHookLoadPackage {
             // Model 的唯一组装入口（车机屏导航 UI 就消费它发的协议），每次导航
             // 更新必调。hook before 拿 GuideInfoProtocolData（参数），反射调它的
             // **语义 getter**（getCurRoadName/getNextRoadName/getRouteRemainDis/
-            * getSegRemainDis/getCurSpeed/getLimitedSpeed/getType/getIcon/...）——
+            // getSegRemainDis/getCurSpeed/getLimitedSpeed/getType/getIcon/...）——
             // 不碰混淆的 GuideInfoModel 字母 getter，零对应成本。
             // 字段比 minimap 的 Ucar 线全一个量级：全程剩余距离/时间、本段剩余、
             // 当前速度、限速、电子眼距离、图标、下一道路名。
