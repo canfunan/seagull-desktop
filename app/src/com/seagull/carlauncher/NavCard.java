@@ -51,6 +51,9 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         setBackground(bg);
         int p = dp(act, 10);
         setPadding(dp(act, 14), p, dp(act, 14), p);
+        // NB9：高度上限（信息态两行 + 快捷态一行）——防卡片把 navHost 的
+        // 38% 撑爆后盖住竖 splitter（用户实测「太大拖不动」）
+        setMaxHeight(dp(act, 110));   // NB9：96→110（复盘：内容实际约 97dp，96 会裁 total 行）
 
         turn = new TextView(act);
         turn.setTextColor(0xFFF5C542);          // 转向提示黄：与地图应用的播报色一致
@@ -112,18 +115,26 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         b.setTextSize(15);
         b.setPadding(dp(act, 14), dp(act, 8), dp(act, 14), dp(act, 8));
         b.setOnClickListener(v -> {
-            try {
-                android.content.Intent i = new android.content.Intent(
-                        android.content.Intent.ACTION_VIEW,
-                        android.net.Uri.parse(
-                            "androidamap://poi?sourceApplication=seagull&keywords="
-                            + keyword + "&dev=0"));
-                i.setPackage("com.autonavi.minimap");
-                i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-                act.startActivity(i);
-            } catch (Throwable t) {
-                Log.w(TAG, "起高德搜索失败: " + keyword, t);
+            // NB9 复盘实测：amapauto（车机版）不认 androidamap://poi（unable to
+            // resolve）、AUTO_WIDGET_GO_HOME 是 vivo protected 广播且 amapauto 被
+            // frozen——两条都死；minimap（手机版）实测 URI 能起。故 minimap 优先，
+            // amapauto 留作万一（它哪天支持了 poi URI 就自动走前面）。
+            for (String pkg : new String[]{"com.autonavi.minimap", "com.autonavi.amapauto"}) {
+                try {
+                    android.content.Intent i = new android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse(
+                                "androidamap://poi?sourceApplication=seagull&keywords="
+                                + keyword + "&dev=0"));
+                    i.setPackage(pkg);
+                    i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    act.startActivity(i);
+                    return;   // 起成功就停
+                } catch (Throwable ignore) {
+                    // 这个包不可用（没装/URI 不支持）试下一个
+                }
             }
+            Log.w(TAG, "起高德搜索失败（两包都不可用）: " + keyword);
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
         lp.leftMargin = dp(act, 8);
@@ -249,7 +260,8 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         if (g.cameraDist > 0 && g.cameraDist < 2000) sb.append("·电子眼").append(fmtDist(g.cameraDist));
         if (!g.sapaName.isEmpty()) sb.append("·").append(g.sapaName);
         total.setText(sb.toString());
-        total.setMaxLines(2);
+        total.setMaxLines(1);
+        total.setEllipsize(android.text.TextUtils.TruncateAt.END);
     }
 
     /** 批次 NC：协议空帧 = 导航结束 → 回快捷态。 */

@@ -776,7 +776,10 @@ public final class PipBoard extends LinearLayout {
         if (nav.getParent() == navHost) return;
         android.view.ViewGroup p = (android.view.ViewGroup) nav.getParent();
         if (p != null) p.removeView(nav);
-        navHost.addView(nav, new FrameLayout.LayoutParams(-2, -2,
+                // NB9：宽度 MATCH_PARENT（原来 WRAP——信息态长文本把卡片横向撑爆，
+        // 挤压 colB 还把竖 splitter 的触摸区盖住，用户实测「拖不动」）。
+        // 高度仍 WRAP（卡片多高看内容），navHost 自身 weight 决定上限。
+        navHost.addView(nav, new FrameLayout.LayoutParams(-1, -2,
                 android.view.Gravity.TOP | android.view.Gravity.CENTER_HORIZONTAL));
     }
 

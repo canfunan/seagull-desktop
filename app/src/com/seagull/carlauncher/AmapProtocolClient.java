@@ -48,9 +48,11 @@ public final class AmapProtocolClient {
     private static final String IFACE = "com.autonavi.amapauto.aidl.IJsonProtocolInterface";
     private static final String RECV_IFACE =
             "com.autonavi.amapauto.aidl.IJsonProtocolReceiveInterface";
-    /** 注册 type 串（高德官方模拟客户端用 "com.amapauto.autonavi.jsonsimulate.client"，
-     *  这里用自己的——服务端不校验）。 */
-    private static final String CLIENT_TYPE = "com.seagull.carlauncher.protocol";
+    /** 注册 type 串——**必须跟高德官方 SdkClient 一致**：服务端 g2.e(nc) 按
+     *  requestAuthor 定向推送（this.d.get(str)），自定义 type 有被过滤不收的
+     *  风险（复盘 g2.java:AidlJsonConnection 坐实）。服务端不校验 type 内容，
+     *  但推送路由按它。 */
+    private static final String CLIENT_TYPE = "com.amapauto.autonavi.jsonsimulate.client";
 
     /** 解析出来的一条导航引导信息（对应 GuideInfoModel 核心字段）。 */
     public static final class Guide {
@@ -114,7 +116,9 @@ public final class AmapProtocolClient {
             data.writeInterfaceToken(IFACE);
             data.writeString(CLIENT_TYPE);
             data.writeStrongBinder(cb);
-            binder.transact(2, data, reply, 1);
+            // flags=0（同步）：高德 Stub 的 X 在 onTransact 里 reply.writeNoException()，
+            // ONE_WAY(1) 时 reply=null → 服务端 NPE → crashed service（实测翻车点）
+            binder.transact(2, data, reply, 0);
             reply.readException();
             handshake(binder);   // ★ 注册后必发版本握手（pk0.e → h1 protocolId=99999），
                                  // 漏了它高德 3 秒后销毁 binder（实测稳定复现）
