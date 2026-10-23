@@ -367,6 +367,15 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
         // 主界面页翻页，壁纸页不看导航卡是一期已知边界。
         navCard = new NavCard(this);
         navCard.setEnabled(model == null || model.navEnabled);
+        // NB15：长按移除卡片 —— 持久化关掉（设置里「导航信息卡片」随时加回）
+        navCard.setOnRemoveListener(() -> {
+            if (model != null) {
+                model.navEnabled = false;
+                model.save();
+            }
+            navCard.setEnabled(false);
+            Toast.makeText(this, "导航卡片已移除（设置 → 导航信息卡片 可加回）", Toast.LENGTH_SHORT).show();
+        });
         // NB8（回滚 NB6 的错误）：卡片只属于画中画板——用户原话「导航卡片在
         // 画中画2的上面」= PipBoard 右侧 40% 的上区（navHost）。NB6 我误判
         // 「翻页看不到是 bug」挂到 root 全局——那是全局糊脸，用户从没要过。

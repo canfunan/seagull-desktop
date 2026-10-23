@@ -9,6 +9,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 /**
  * 导航卡片（批次 AN + NB5 双态常驻）。
@@ -37,7 +38,15 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
     private final TextView dist;
     private final TextView road;
     private final TextView total;
-    /** NB12：画中画当前导航包提供者（HomeActivity 注入 pip::currentNavPkg）。 */
+    private final TextView growBtn;        // NB15：⤢ 拉大/还原（两档字号，持久化）
+    private final TextView quickHome;      // NB15：引用以随 scale 缩放
+    private final TextView quickComp;
+    /** NB15：卡片字号档（1.0 标准 / 1.45 大）——用户原话「不能拉伸变大」。 */
+    private float scale = 1f;
+    /** NB15：长按移除回调（HomeActivity 注入：写 model.navEnabled=false + save）。 */
+    public interface OnRemoveListener { void onRemove(); }
+    private OnRemoveListener removeListener;
+    /** 注入画中画当前导航包提供者（HomeActivity 注入 pip::currentNavPkg）。 */
     private java.util.concurrent.Callable<String> navPkgProvider;
     private final android.os.Handler ui = new android.os.Handler();
     private final Runnable staleTask = this::showQuick;
@@ -57,9 +66,15 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         // 本就在 navHost 的 30% 占比内，WRAP 自适应即可，不硬限。防撑爆靠
         // pipWeightNav=30 + 宽度 MATCH_PARENT（横不溢→不盖 splitter）。
 
+        // NB15：恢复字号档（用户拉大后翻页/重建不回弹）
+        try {
+            scale = act.getSharedPreferences("seagull", Context.MODE_PRIVATE)
+                    .getFloat("navCardScale", 1f);
+        } catch (Throwable ignore) {
+        }
+
         turn = new TextView(act);
         turn.setTextColor(0xFFF5C542);          // 转向提示黄：与地图应用的播报色一致
-        turn.setTextSize(26);
         turn.setGravity(Gravity.CENTER);
         turn.setMinWidth(dp(act, 40));
 
@@ -68,10 +83,8 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         mid.setGravity(Gravity.CENTER_VERTICAL);
         dist = new TextView(act);
         dist.setTextColor(Color.WHITE);
-        dist.setTextSize(20);
         road = new TextView(act);
         road.setTextColor(0xCCFFFFFF);
-        road.setTextSize(13);
         road.setMaxLines(1);
         mid.addView(dist);
         mid.addView(road);
@@ -80,7 +93,6 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
 
         total = new TextView(act);
         total.setTextColor(0x99FFFFFF);
-        total.setTextSize(13);
         total.setGravity(Gravity.RIGHT);
 
         // 信息态容器（整体显藏，NavCard 本体只做双态切换）
@@ -90,16 +102,47 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         infoMode.addView(turn);
         infoMode.addView(mid, mlp);
         infoMode.addView(total, new LinearLayout.LayoutParams(-2, -2));
+        // NB15：⤢ 拉大/还原 —— 点一下在 标准/大 两档之间切（像画中画拖拽的轻量替身）
+        growBtn = new TextView(act);
+        growBtn.setTextColor(0x88FFFFFF);
+        growBtn.setGravity(Gravity.CENTER);
+        growBtn.setPadding(dp(act, 6), 0, dp(act, 2), 0);
+        growBtn.setOnClickListener(v -> {
+            scale = scale > 1.2f ? 1f : 1.45f;
+            try {
+                getContext().getSharedPreferences("seagull", Context.MODE_PRIVATE)
+                        .edit().putFloat("navCardScale", scale).apply();
+            } catch (Throwable ignore) {
+            }
+            applyScale();
+            Toast.makeText(getContext(), scale > 1.2f ? "卡片已拉大" : "卡片已还原", Toast.LENGTH_SHORT).show();
+        });
+        infoMode.addView(growBtn, new LinearLayout.LayoutParams(-2, -2));
         addView(infoMode, new LinearLayout.LayoutParams(-1, -2));
 
         // 快捷态容器（NB5：无导航时的回家/公司）
         quickMode = new LinearLayout(act);
         quickMode.setOrientation(HORIZONTAL);
         quickMode.setGravity(Gravity.CENTER_VERTICAL);
-        quickMode.addView(quickBtn(act, "🏠 回家", "回家"));
-        quickMode.addView(quickBtn(act, "🏢 公司", "公司"));
+        quickHome = quickBtn(act, "🏠 回家", "回家");
+        quickComp = quickBtn(act, "🏢 公司", "公司");
+        quickMode.addView(quickHome);
+        quickMode.addView(quickComp);
         addView(quickMode, new LinearLayout.LayoutParams(-1, -2));
 
+        // NB15：长按整卡 → 移除导航卡片（设置里「导航信息卡片」开关可随时加回）
+        setOnLongClickListener(v -> {
+            if (removeListener == null) return false;
+            new android.app.AlertDialog.Builder(getContext())
+                    .setTitle("导航卡片")
+                    .setMessage("移除导航卡片？\n（可在 设置 → 区域功能 → 导航信息卡片 重新添加）")
+                    .setPositiveButton("移除", (d, w) -> removeListener.onRemove())
+                    .setNegativeButton("取消", null)
+                    .show();
+            return true;
+        });
+
+        applyScale();   // NB15：构造即按恢复的档位排版
         showQuick();   // 构造即快捷态（常驻）
         AmapNavClient client = AmapNavClient.get(act);
         client.addListener(this);
@@ -107,6 +150,27 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         if (last != null) onNavState(last);
         // 批次 NC：高德车机版协议通道（主数据源——字段最全，跟车机屏同源）
         AmapProtocolClient.addSink(this);
+    }
+
+    /** NB15：按当前档位重排全部字号/间距（构造与点击切换共用）。 */
+    private void applyScale() {
+        float s = scale;
+        turn.setTextSize(26 * s);
+        dist.setTextSize(20 * s);
+        road.setTextSize(13 * s);
+        total.setTextSize(13 * s);
+        growBtn.setTextSize(16 * s);
+        growBtn.setText(scale > 1.2f ? "⤡" : "⤢");
+        if (quickHome != null) quickHome.setTextSize(15 * s);
+        if (quickComp != null) quickComp.setTextSize(15 * s);
+        int p = dp(getContext(), 10 * s);
+        setPadding(dp(getContext(), 14 * s), p, dp(getContext(), 14 * s), p);
+        turn.setMinWidth(dp(getContext(), 40 * s));
+    }
+
+    /** NB15：HomeActivity 注入移除回调（写持久化 + GONE）。 */
+    public void setOnRemoveListener(OnRemoveListener l) {
+        this.removeListener = l;
     }
 
     /**
@@ -132,7 +196,32 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         return null;
     }
 
-    /** NB13：车机版高德（amapauto）的回家/公司——起主界面让用户点它自家的按钮。 */
+    /** NB13：车机版高德（amapauto）的回家/公司——
+     * 批次 NB15 三通道（全面反编译 amapauto 9.5.0 坐实）：
+     *   ① 官方小部件广播（AutoWidgetReceiver，manifest exported=true 零权限）：
+     *      AUTO_WIDGET_GO_HOME / AUTO_WIDGET_GO_COMPANY —— 高德内部解析收藏
+     *      地址直接起导航（v2.p/v2.o），和用户按车机屏「回家」小部件完全同款；
+     *   ② 协议下发 30010 GoToHomeOrCopType（mGoToPageType 0=家 1=公司）；
+     *   ③ 协议下发 30306 PageJumpModel pageType=14（回家/公司 PNAV 页）
+     *      + displayID=画中画屏 —— 页面直接落在画中画（用户原话「跳转到
+     *      画中画界面拉起导航回家」）。 */
+    private static void launchNavHome(Activity act, boolean home) {
+        try {
+            android.content.Intent i = new android.content.Intent(home
+                    ? "com.autonavi.amapauto.AUTO_WIDGET_GO_HOME"
+                    : "com.autonavi.amapauto.AUTO_WIDGET_GO_COMPANY");
+            i.setPackage("com.autonavi.amapauto");
+            act.sendBroadcast(i);
+        } catch (Throwable t) {
+            Log.w(TAG, "回家广播失败", t);
+        }
+        int disp = VirtualPipController.isActive() ? VirtualPipController.displayId() : 0;
+        boolean proto = AmapProtocolClient.goToHomeOrCompany(home);
+        AmapProtocolClient.pageJump(14, disp);   // 落屏到画中画（0=主屏兜底）
+        Log.i(TAG, "回家/公司 home=" + home + " 广播已发 协议=" + proto + " -> display " + disp);
+    }
+
+    /** NB13 老兜底：车机版高德起主界面（三通道全哑时才走）。 */
     private static void launchAmapAuto(Activity act) {
         try {
             android.content.Intent i = new android.content.Intent();
@@ -174,10 +263,10 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
             java.util.List<String> order = new java.util.ArrayList<>();
             if (navPkg != null) order.add(navPkg);
             order.add("com.autonavi.minimap");
-            // NB13：车机版高德没有可用 URI——起主界面（用户点它自家回家按钮），
-            // 不回落手机版（用户实测「还是跳手机版」的修法）
+            // NB15：车机版高德走三通道（广播 + 30010 协议 + 30306 落屏画中画），
+            // 不再「起主界面让用户自己点」（用户原话「该跳转到画中画界面拉起导航回家」）
             if ("com.autonavi.amapauto".equals(navPkg)) {
-                launchAmapAuto(act);
+                launchNavHome(act, "回家".equals(keyword));
                 return;
             }
             for (String pkg : order) {
@@ -301,23 +390,34 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
     @Override public void onGuide(AmapProtocolClient.Guide g) {
         if (g == null || !enabled || forcedHidden) return;
         showInfo();
-        // 主行（NB12：对齐嘟嘟实测排版）：
-        //   转向箭头 | 距离(+后) | 转向词 + 路名（第二行）
-        turn.setText(arrowOf(g.icon));
-        String word = arrowTextOf(g.icon);
-        String distTxt = fmtDist(g.nextSegRemainDis);
-        // NB14：0 距离不显「现在」（用户实测嫌「现在右转进入」不对）——显「即将」，
-        // 有距离才「XXX米后」。距离字段异常（0/负）时距离行只作提示不摆数字。
-        boolean atNow = g.nextSegRemainDis <= 0;
-        dist.setText(atNow ? "即将" : distTxt + (word.isEmpty() ? "" : "后"));
+        // 主行（NB15：对齐官方渲染 —— 反编译 GuideInfoModel_JsonLubeParser +
+        // GuideInfoProtocolData 坐实，车机屏渲染的数字其实是 *Auto 现成文案）：
+        //   转向箭头 | 距离文案 | 转向词 + 进入路名
+        int iconId = g.newIcon != 0 ? g.newIcon : g.icon;
+        turn.setText(arrowOf(iconId));
+        String word = arrowTextOf(iconId);
+        // 距离行：官方现成文案优先（"198米"/"即将"），数字字段临近路口归 0 时
+        // 它是唯一活口（用户实测「即将 右转 进」= 数字 0 + Auto 没取）
+        if (!g.nextSegRemainDisAuto.isEmpty()) {
+            dist.setText(g.nextSegRemainDisAuto);
+        } else {
+            boolean atNow = g.nextSegRemainDis <= 0;
+            dist.setText(atNow ? "即将" : fmtDist(g.nextSegRemainDis) + (word.isEmpty() ? "" : "后"));
+        }
         // 路名回退链：下一道路名 → 当前路名 → 空（只留转向词，不摆空行）
         String roadName = !g.nextRoadName.isEmpty() ? "进入 " + g.nextRoadName
                 : (!g.curRoadName.isEmpty() ? g.curRoadName : "");
         road.setText(((word.isEmpty() ? "" : word + " ") + roadName).trim());
-        // 次行：全程距离 · 时间 · ETA（\t 在 TextView 不渲染，用 · 分隔）
+        // 次行：全程距离 · 时间 · ETA（官方 routeRemainDistanceAuto/routeRemainTimeAuto
+        // 文案优先 —— 与车机屏同源，解决「手机 18公里/19分钟 vs 卡 18.1/20」不同步）
         StringBuilder sb = new StringBuilder();
-        sb.append(fmtDist(g.routeRemainDis));
-        if (g.routeRemainTime > 0) sb.append(" · ").append(fmtTime(g.routeRemainTime));
+        if (!g.routeRemainDistanceAuto.isEmpty()) {
+            sb.append(g.routeRemainDistanceAuto);
+            if (!g.routeRemainTimeAuto.isEmpty()) sb.append(" · ").append(g.routeRemainTimeAuto);
+        } else {
+            sb.append(fmtDist(g.routeRemainDis));
+            if (g.routeRemainTime > 0) sb.append(" · ").append(fmtTime(g.routeRemainTime));
+        }
         if (!g.etaText.isEmpty()) sb.append(" · ").append(g.etaText);
         total.setText(sb.toString());
         total.setMaxLines(1);

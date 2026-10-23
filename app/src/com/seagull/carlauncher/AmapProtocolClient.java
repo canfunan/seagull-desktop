@@ -10,6 +10,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.Parcel;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.util.Log;
 
 import org.json.JSONObject;
@@ -56,14 +57,20 @@ public final class AmapProtocolClient {
 
     /** 解析出来的一条导航引导信息（对应 GuideInfoModel 核心字段）。 */
     public static final class Guide {
-        public int icon;                      // icon/newIcon（int——高德图标 id 制，
+        public int icon;                      // icon（int——高德图标 id 制，
                                               // 2/3/4=右转组 6/7/8=左转组 5=掉头）
+        public int newIcon;                   // NB15：新版图标 id（官方取值 newIcon 优先，0 回落 icon）
         public int nextSegRemainDis;          // 下一段剩余距离（米）
         public int nextSegRemainTime;         // 下一段剩余时间（秒）
+        public String nextSegRemainDisAuto = ""; // NB15：官方现成文案（"198米"/"即将"）——
+                                              // 车机屏就渲染它（GuideInfoProtocolData getter），
+                                              // 数字字段临近路口归 0 时唯一活口
         public String nextRoadName = "";      // 下一道路名
         public String nextNextRoadName = "";  // 再下一道路名
         public int routeRemainDis;            // 全程剩余距离（米）
         public int routeRemainTime;           // 全程剩余时间（秒）
+        public String routeRemainDistanceAuto = ""; // NB15：全程剩余距离官方文案（"18.1公里"）
+        public String routeRemainTimeAuto = "";     // NB15：全程剩余时间官方文案（"20分钟"）
         public int curSpeed;                  // 当前速度（km/h）
         public int limitedSpeed;              // 限速（km/h）
         public int cameraDist;                // 电子眼距离（米，0=无）
@@ -279,6 +286,79 @@ public final class AmapProtocolClient {
         svc = null;
     }
 
+    /* -------------------- 下发（client → 高德，批次 NB15） -------------------- */
+
+    /**
+     * 下发一条 client 协议（照扒 lw.n → a.h1(type, json) 的包裹格式，i2.a 坐实）：
+     *   {requestCode, responseCode:"", needResponse:false, protocolId, versionName,
+     *    requestAuthor:CLIENT_TYPE, message:"", messageType:"request", statusCode:0, data:{...}}
+     * 走与 handshake 相同的 transact code 1（= h1(String,String)）。未连接时静默丢弃。
+     */
+    private boolean sendRequest(int protocolId, JSONObject data) {
+        IBinder b = svc;
+        if (b == null || !registering) return false;
+        Parcel parcel = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            JSONObject o = new JSONObject();
+            o.put("requestCode", String.valueOf(SystemClock.elapsedRealtime()));
+            o.put("responseCode", "");
+            o.put("needResponse", false);
+            o.put("protocolId", protocolId);
+            o.put("versionName", "3.2.0.20190521");
+            o.put("requestAuthor", CLIENT_TYPE);
+            o.put("message", "");
+            o.put("messageType", "request");
+            o.put("statusCode", 0);
+            o.put("data", data);
+            parcel.writeInterfaceToken(IFACE);
+            parcel.writeString(CLIENT_TYPE);
+            parcel.writeString(o.toString());
+            b.transact(1, parcel, reply, 0);   // code 1 = h1（同步）
+            reply.readException();
+            Log.i(TAG, "下发 protocolId=" + protocolId + " data=" + data);
+            return true;
+        } catch (Throwable t) {
+            Log.w(TAG, "下发失败 protocolId=" + protocolId + ": " + t);
+            return false;
+        } finally {
+            parcel.recycle();
+            reply.recycle();
+        }
+    }
+
+    /**
+     * 页面跳转（PageJumpModel，protocolId 30306）。
+     * pageType：7=JUMP_HOME 8=JUMP_COMPANY 14=JUMP_GO_HOME_OR_COMPANY_PNAV_PAGE；
+     * displayId：高德把目标页画到指定 Android display —— 海鸥传画中画屏 id
+     * 即「回家页直接落在画中画」（displayID 字段官方多屏指引用途，0=主屏）。
+     */
+    public static boolean pageJump(int pageType, int displayId) {
+        JSONObject d = new JSONObject();
+        try {
+            d.put("pageType", pageType);
+            d.put("displayID", Math.max(0, displayId));
+        } catch (Throwable t) {
+            return false;
+        }
+        return get().sendRequest(30306, d);
+    }
+
+    /**
+     * 回家/公司直达（GoToHomeOrCopType，protocolId 30010）。
+     * mGoToPageType：0=家 1=公司（官方 z70 注解 max=1）——高德内部解析用户收藏
+     * 地址直接起导航（与语音「带我回家」同通道）。
+     */
+    public static boolean goToHomeOrCompany(boolean home) {
+        JSONObject d = new JSONObject();
+        try {
+            d.put("mGoToPageType", home ? 0 : 1);
+        } catch (Throwable t) {
+            return false;
+        }
+        return get().sendRequest(30010, d);
+    }
+
     /* -------------------- 协议解析（GuideInfoModel 60 字段） -------------------- */
 
     private void onProtocol(String json) {
@@ -293,12 +373,16 @@ public final class AmapProtocolClient {
                     ? o.getJSONObject("data") : o;
             final Guide g = new Guide();
             g.icon = f.optInt("icon", 0);
+            g.newIcon = f.optInt("newIcon", 0);
             g.nextSegRemainDis = f.optInt("nextSegRemainDis", 0);
             g.nextSegRemainTime = f.optInt("nextSegRemainTime", 0);
+            g.nextSegRemainDisAuto = opt(f, "nextSegRemainDisAuto");
             g.nextRoadName = opt(f, "nextRoadName");
             g.nextNextRoadName = opt(f, "nextNextRoadName");
             g.routeRemainDis = f.optInt("routeRemainDis", 0);
             g.routeRemainTime = f.optInt("routeRemainTime", 0);
+            g.routeRemainDistanceAuto = opt(f, "routeRemainDistanceAuto");
+            g.routeRemainTimeAuto = opt(f, "routeRemainTimeAuto");
             g.curSpeed = f.optInt("curSpeed", 0);
             g.limitedSpeed = f.optInt("limitedSpeed", 0);
             g.cameraDist = f.optInt("cameraDist", 0);
@@ -309,7 +393,7 @@ public final class AmapProtocolClient {
             g.sapaName = opt(f, "sapaName");
             g.sapaDist = f.optInt("sapaDist", 0);
             final boolean end = g.routeRemainDis <= 0 && g.nextRoadName.isEmpty()
-                    && g.nextSegRemainDis <= 0;
+                    && g.nextSegRemainDis <= 0 && g.nextSegRemainDisAuto.isEmpty();
             main.post(() -> {
                 for (Listener l : sinks) {
                     try {
