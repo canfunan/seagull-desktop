@@ -241,32 +241,42 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
     @Override public void onGuide(AmapProtocolClient.Guide g) {
         if (g == null || !enabled || forcedHidden) return;
         showInfo();
-        // 转向文本：环岛出口角优先，其次下一段距离推算的通用箭头
-        String arrow = "↑";
-        if (g.roundaboutOutAngle > 0) arrow = "⟳" + g.roundaboutOutAngle + "°";
-        else if (!g.nextNextRoadName.isEmpty()) arrow = "↗";   // 有下下段=即将转向
-        turn.setText(arrow);
-        // 主距离：下一段剩余（米→格式化）
-        dist.setText(fmtDist(g.nextSegRemainDis));
-        // 路名：下一道路名优先，空给当前路
-        road.setText(!g.nextRoadName.isEmpty() ? g.nextRoadName : g.curRoadName);
-        // 次行：全程 + 附加信息
+        // 主行（嘟嘟格式实测对齐）：距离 + 转向箭头 + 转向词 + 「进入」+ 下一道路名
+        //   icon 是 int（高德 id 制，实测 GuideInfoProtocolData.getIcon() 返回 int）
+        turn.setText(arrowOf(g.icon));
+        String word = arrowTextOf(g.icon);
+        String distTxt = fmtDist(g.nextSegRemainDis);
+        dist.setText(distTxt.isEmpty() ? "" : distTxt + (word.isEmpty() ? "" : "后"));
+        String road = !g.nextRoadName.isEmpty() ? "进入 " + g.nextRoadName : g.curRoadName;
+        road.setText((word.isEmpty() ? "" : word + " ") + road);
+        // 次行：全程距离 + 时间 + ETA（用户实测在跑的格式）
         StringBuilder sb = new StringBuilder();
-        sb.append("全程 ").append(fmtDist(g.routeRemainDis));
-        if (g.routeRemainTime > 0) sb.append("·").append(fmtTime(g.routeRemainTime));
-        if (!g.etaText.isEmpty()) sb.append("·").append(g.etaText);
-        if (g.trafficLights > 0) sb.append("·红绿灯").append(g.trafficLights);
-        if (g.limitedSpeed > 0) sb.append("·限速").append(g.limitedSpeed);
-        if (g.cameraDist > 0 && g.cameraDist < 2000) sb.append("·电子眼").append(fmtDist(g.cameraDist));
-        if (!g.sapaName.isEmpty()) sb.append("·").append(g.sapaName);
+        sb.append(fmtDist(g.routeRemainDis));
+        if (g.routeRemainTime > 0) sb.append("\t").append(fmtTime(g.routeRemainTime));
+        if (!g.etaText.isEmpty()) sb.append("\t").append(g.etaText);
         total.setText(sb.toString());
         total.setMaxLines(1);
         total.setEllipsize(android.text.TextUtils.TruncateAt.END);
     }
 
-    /** 批次 NC：协议空帧 = 导航结束 → 回快捷态。 */
+    /** icon id → 转向词（高德 id 制：2/3/4/12/14 右转组、6/7/8 左转组、5/9 掉头）。 */
+    private static String arrowTextOf(int id) {
+        switch (id) {
+            case 2: case 3: case 4: case 12: case 14: return "右转";
+            case 6: case 7: case 8: return "左转";
+            case 5: case 9: return "掉头";
+            case 11: return "直行";
+            default: return "";
+        }
+    }
+
+    /**
+     * NB11：协议空帧**不即时回快捷态**——实测协议帧字段不全会让 end 判据飘，
+     * 信息态/快捷态来回抢画面（用户实测「一闪一闪」）。导航结束只靠 30s 无
+     * 更新超时（showInfo 的 staleTask）回落，稳。
+     */
     @Override public void onGuideEnd() {
-        showQuick();
+        // 什么都不做——超时兜底
     }
 
     @Override public void onNavState(AmapNavClient.NavState s) {

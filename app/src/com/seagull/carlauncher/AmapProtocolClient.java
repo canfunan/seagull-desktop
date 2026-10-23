@@ -56,7 +56,8 @@ public final class AmapProtocolClient {
 
     /** 解析出来的一条导航引导信息（对应 GuideInfoModel 核心字段）。 */
     public static final class Guide {
-        public String icon = "";              // icon/newIcon（转向图标名或 url）
+        public int icon;                      // icon/newIcon（int——高德图标 id 制，
+                                              // 2/3/4=右转组 6/7/8=左转组 5=掉头）
         public int nextSegRemainDis;          // 下一段剩余距离（米）
         public int nextSegRemainTime;         // 下一段剩余时间（秒）
         public String nextRoadName = "";      // 下一道路名
@@ -284,7 +285,7 @@ public final class AmapProtocolClient {
             JSONObject f = o.has("data") && o.get("data") instanceof JSONObject
                     ? o.getJSONObject("data") : o;
             final Guide g = new Guide();
-            g.icon = opt(f, "icon");
+            g.icon = f.optInt("icon", 0);
             g.nextSegRemainDis = f.optInt("nextSegRemainDis", 0);
             g.nextSegRemainTime = f.optInt("nextSegRemainTime", 0);
             g.nextRoadName = opt(f, "nextRoadName");
