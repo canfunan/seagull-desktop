@@ -373,6 +373,35 @@ public final class VirtualPipController {
         }, "seagull-vd-redeploy").start();
     }
 
+    /* ============ NB23：手动自愈入口（小圆点长按菜单） ============ */
+
+    /**
+     * 手动自愈一个画中画目标：探测拉活（死了主屏拉活等注册）→ 屏活着就
+     * 锚点+move-task 重搬；屏没建时提示回桌面自动重建（调用方负责 goHome）。
+     * 内部有 sleep/exec，必须在后台线程调用。
+     */
+    public static String healTarget(Context ctx, String pkg) {
+        if (pkg == null) return "包名为空";
+        ensureTargetAlive(pkg);
+        if (!isActive()) {
+            return isEnabled(ctx) ? "屏未建：回桌面自动重建" : "画中画开关是关的";
+        }
+        int id;
+        synchronized (VirtualPipController.class) {
+            id = sDisplayId;
+        }
+        boolean ok = anchorAndMove(ctx, pkg, id);
+        Log.i(TAG, "healTarget " + pkg + " → " + (ok ? "成功" : "失败"));
+        return ok ? "已搬回画中画" : "重搬失败（看画中画状态行）";
+    }
+
+    /** 手动自愈全部：按 pickTarget（用户点选 > 手机版高德 > …）自愈。 */
+    public static String healAll(Context ctx) {
+        String pkg = pickTarget(ctx);
+        if (pkg == null) return "没装推荐应用（高德/网易云）";
+        return healTarget(ctx, pkg);
+    }
+
     /* ============ 黑屏二分探针（批次 V，保留） ============ */
 
     /**

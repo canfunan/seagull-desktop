@@ -2872,3 +2872,28 @@ move-task 搬的是「已存在的活任务」。目标应用（高德）被后�
    （防探测与被杀的 race）。
 3. VdPipView 探针升级：7s 探针实测「屏黑」→ 状态行标注「自动重搬」
    + 后台自动 redeploy 一次（任务被拉回主屏的自愈兜底）。
+
+---
+
+## NB23 · 小圆点手动自愈方案（2026-10-24）
+
+用户提议：① 点击小圆点绑定海鸥主页（不是默认桌面）② 长按弹二级菜单
+（自愈所有 / 画中画1 / 画中画2）。
+
+### 关键发现
+
+小圆点 goHome() 原来发 CATEGORY_HOME —— 回到的是**系统默认桌面**！
+海鸥 onResume 永远不触发，被动自愈链根本没人跑。用户「点了球画中画
+还是不回来」的现象与此完全吻合。
+
+### 实现
+
+1. goHome() 改直启 HomeActivity（NEW_TASK|CLEAR_TOP|RESET），失败才
+   回落 CATEGORY_HOME。
+2. 长按 500ms（拖动取消）弹菜单 overlay（贴球右侧，8s 自动收起）：
+   - 自愈所有画中画 → healAll（pickTarget 全链）
+   - 自愈画中画1/2 → 动态列已装推荐应用前两个（高德手机版/车机版/网易云）
+3. VirtualPipController 新增 healTarget/healAll：ensureTargetAlive 探测
+   拉活 → 屏活着锚点+move-task 重搬；屏未建 → Toast 提示并自动 goHome
+   触发重建管线。
+4. 自愈全程后台线程（探测/su/等待秒级），结果真实上报 Toast。
