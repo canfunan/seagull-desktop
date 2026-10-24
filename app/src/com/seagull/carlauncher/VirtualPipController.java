@@ -249,17 +249,53 @@ public final class VirtualPipController {
      */
     private static void ensureTargetAlive(String pkg) {
         try {
-            String pid = Caps.exec("pidof " + pkg);
-            if (pid != null && !pid.trim().isEmpty()) return;   // 活着，直接搬
+            if (processAlive(pkg)) return;
             Log.i(TAG, pkg + " 进程已死（后台清理），主屏拉活再搬");
             Caps.exec("monkey -p " + pkg + " -c android.intent.category.LAUNCHER 1");
-            try {
-                Thread.sleep(1800);   // 冷启 → 任务注册进 stack list 的窗口
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
+            // NB24：不再盲等 —— 进程活 + 任务进 stack list 双验证。
+            // 之前固定 1.8s，高德冷启 3-5s，任务没注册 move-task 必 41。
+            for (int i = 0; i < 6; i++) {          // 最多 ~6s
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                boolean proc = processAlive(pkg);
+                boolean task = taskRegistered(pkg);
+                Log.i(TAG, "拉活等待 #" + i + " proc=" + proc + " task=" + task);
+                if (proc && task) return;
+                if (!proc) {                        // monkey 没拉起来，补一次
+                    Caps.exec("monkey -p " + pkg + " -c android.intent.category.LAUNCHER 1");
+                }
             }
+            Log.w(TAG, pkg + " 拉活验证超时（6s），仍尝试搬（可能失败）");
         } catch (Throwable t) {
             Log.w(TAG, "ensureTargetAlive 探测失败", t);
+        }
+    }
+
+    private static boolean processAlive(String pkg) {
+        try {
+            String pid = Caps.exec("pidof " + pkg);
+            return pid != null && !pid.trim().isEmpty();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 任务是否已注册进 stack list（move-task 的硬前提）。 */
+    private static boolean taskRegistered(String pkg) {
+        try {
+            String out = Caps.exec("am stack list 2>/dev/null | grep -c '" + pkg + "'");
+            if (out == null) return false;
+            try {
+                return Integer.parseInt(out.trim().split("\n")[0].trim()) > 0;
+            } catch (NumberFormatException e) {
+                return false;
+            }
+        } catch (Throwable t) {
+            return false;
         }
     }
 
