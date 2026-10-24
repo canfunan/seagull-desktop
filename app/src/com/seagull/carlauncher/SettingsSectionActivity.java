@@ -1239,6 +1239,18 @@ public class SettingsSectionActivity extends BaseActivity {
         toggleRow("导航信息卡片", model.navEnabled, () -> { model.navEnabled = !model.navEnabled; });
         note("顶栏高德导航播报卡片：转向 + 剩余距离 + 路名。数据来自高德官方车联服务，"
                 + "只在高德导航进行中出现，无导航时整条隐藏。");
+        // NB25：回家/公司按钮绑定应用（用户实测「我装的车机版」—— 之前没有
+        // 手动绑定入口，画中画无挂载时按钮兜底只试手机版，等于绑不上车机版）
+        String[] homeTargets = {"跟随画中画（自动，车机版优先）", "高德车机版", "高德手机版"};
+        int curT = "com.autonavi.amapauto".equals(model.navHomeTarget) ? 1
+                : "com.autonavi.minimap".equals(model.navHomeTarget) ? 2 : 0;
+        actionRow("回家/公司 绑定应用", homeTargets[curT], v -> choiceDialog(
+                "回家/公司 绑定应用", homeTargets, curT, i -> {
+                    model.navHomeTarget = i == 1 ? "com.autonavi.amapauto"
+                            : i == 2 ? "com.autonavi.minimap" : "auto";
+                    model.save();   // choiceDialog 不自动存，手动落盘
+                    render();
+                }));
         actionRow("root 增强链路（rootbridge）", "当前：" + Caps.rootBridgeLabel()
                 + " · persist.seagull.rootbridge", v -> {
             toast("正在切换…");   // 读/设 prop 都走 exec，全部放子线程

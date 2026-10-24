@@ -438,6 +438,36 @@ public final class VirtualPipController {
         return healTarget(ctx, pkg);
     }
 
+    /**
+     * NB25：回家/公司落画中画 —— 目标应用已被广播/URI 拉起（导航正在主屏起），
+     * 等任务注册进 stack list 后锚点+move-task 搬进画中画屏。
+     * 之前 pageJump(14) 协议落屏依赖 hook 高德进程，hook 不生效的环境全哑，
+     * 导航永远在主屏全屏（用户实测「跳转到应用界面没有进入画中画」）。
+     * 屏没建时返回「屏未建」（调用方回海鸥桌面触发 boot 重建链）。
+     * 内部 sleep/exec，必须在后台线程调用。
+     */
+    public static String parkToPip(Context ctx, String pkg) {
+        if (pkg == null) return "包名为空";
+        if (!isActive()) return "屏未建";
+        for (int i = 0; i < 5; i++) {          // 广播/URI 起应用是异步的，最多等 5s
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+                return "等待中断";
+            }
+            if (taskRegistered(pkg)) break;
+            if (i == 4) return pkg + " 没起来（导航未启动）";
+        }
+        int id;
+        synchronized (VirtualPipController.class) {
+            id = sDisplayId;
+        }
+        boolean ok = anchorAndMove(ctx, pkg, id);
+        Log.i(TAG, "parkToPip " + pkg + " → " + (ok ? "成功" : "失败"));
+        return ok ? "已在画中画起导航" : "搬进画中画失败";
+    }
+
     /* ============ 黑屏二分探针（批次 V，保留） ============ */
 
     /**
