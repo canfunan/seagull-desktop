@@ -278,9 +278,7 @@ public class BallService extends Service {
 
     /**
      * 后台线程跑自愈（探测拉活 + su 搬任务是秒级操作），真实结果回主线程
-     * Toast；无论成败都回海鸥桌面 —— NB24：画中画视图嵌在 HomeActivity 里，
-     * 自愈「成功」时用户在第三方界面根本看不见（体感=失败）；回桌面后：
-     * 成功 → 直接看见画中画；屏未建/失败 → onResume 被动自愈链二次兜底。
+     * Toast；「屏未建」时自动回海鸥桌面触发重建管线（挂视图→建屏→部署）。
      */
     private void heal(java.util.concurrent.Callable<String> action) {
         new Thread(() -> {
@@ -288,14 +286,14 @@ public class BallService extends Service {
             try { out = action.call(); }
             catch (Throwable t) { out = "自愈异常: " + t; }
             final String r = out;
-            ui.postDelayed(() -> {
+            ui.post(() -> {
                 try {
                     android.widget.Toast.makeText(BallService.this, r,
                             android.widget.Toast.LENGTH_SHORT).show();
                 } catch (Throwable ignore) {
                 }
-                goHome();   // NB24：成功也回 —— 画中画只有回桌面才可见
-            }, 400L);
+                if (r.contains("屏未建")) goHome();
+            });
         }, "seagull-ball-heal").start();
     }
 

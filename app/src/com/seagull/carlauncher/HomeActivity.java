@@ -192,7 +192,6 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             island.setVisibility(model.islandEnabled ? View.VISIBLE : View.GONE);
         }
         if (navCard != null) navCard.setEnabled(model.navEnabled);   // 设置页回来同步开关
-        if (navCard != null) navCard.setBoundTarget(model.navHomeTarget);   // NB25：绑定同步
         // K4：绑/解绑高德导航服务（幂等；bindService 异步不卡主线程）。
         // 绑定挂在进程级单例上（与 NavCard 同寿），桌面退后台仍保持连接 ——
         // 回桌面卡片立即有数据；开销只有一条 binder 连接。
@@ -389,8 +388,6 @@ public class HomeActivity extends BaseActivity implements AppGridPage.Host {
             // NB12：回家/公司「绑画中画当前挂的哪个导航 app 就起哪个」
             navCard.setNavPkgProvider(pip::currentNavPkg);
         }
-        // NB25：回家/公司绑定应用（设置 → 系统与增强里可选），模型加载后同步
-        if (model != null) navCard.setBoundTarget(model.navHomeTarget);
 
         // 系统画中画形态下的精简视图（系统 PiP 里只显示这一层）
         pipBox = new TextView(this);

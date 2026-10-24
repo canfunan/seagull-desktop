@@ -249,53 +249,17 @@ public final class VirtualPipController {
      */
     private static void ensureTargetAlive(String pkg) {
         try {
-            if (processAlive(pkg)) return;
+            String pid = Caps.exec("pidof " + pkg);
+            if (pid != null && !pid.trim().isEmpty()) return;   // 活着，直接搬
             Log.i(TAG, pkg + " 进程已死（后台清理），主屏拉活再搬");
             Caps.exec("monkey -p " + pkg + " -c android.intent.category.LAUNCHER 1");
-            // NB24：不再盲等 —— 进程活 + 任务进 stack list 双验证。
-            // 之前固定 1.8s，高德冷启 3-5s，任务没注册 move-task 必 41。
-            for (int i = 0; i < 6; i++) {          // 最多 ~6s
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-                boolean proc = processAlive(pkg);
-                boolean task = taskRegistered(pkg);
-                Log.i(TAG, "拉活等待 #" + i + " proc=" + proc + " task=" + task);
-                if (proc && task) return;
-                if (!proc) {                        // monkey 没拉起来，补一次
-                    Caps.exec("monkey -p " + pkg + " -c android.intent.category.LAUNCHER 1");
-                }
+            try {
+                Thread.sleep(1800);   // 冷启 → 任务注册进 stack list 的窗口
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
             }
-            Log.w(TAG, pkg + " 拉活验证超时（6s），仍尝试搬（可能失败）");
         } catch (Throwable t) {
             Log.w(TAG, "ensureTargetAlive 探测失败", t);
-        }
-    }
-
-    private static boolean processAlive(String pkg) {
-        try {
-            String pid = Caps.exec("pidof " + pkg);
-            return pid != null && !pid.trim().isEmpty();
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    /** 任务是否已注册进 stack list（move-task 的硬前提）。 */
-    private static boolean taskRegistered(String pkg) {
-        try {
-            String out = Caps.exec("am stack list 2>/dev/null | grep -c '" + pkg + "'");
-            if (out == null) return false;
-            try {
-                return Integer.parseInt(out.trim().split("\n")[0].trim()) > 0;
-            } catch (NumberFormatException e) {
-                return false;
-            }
-        } catch (Throwable t) {
-            return false;
         }
     }
 
@@ -436,36 +400,6 @@ public final class VirtualPipController {
         String pkg = pickTarget(ctx);
         if (pkg == null) return "没装推荐应用（高德/网易云）";
         return healTarget(ctx, pkg);
-    }
-
-    /**
-     * NB25：回家/公司落画中画 —— 目标应用已被广播/URI 拉起（导航正在主屏起），
-     * 等任务注册进 stack list 后锚点+move-task 搬进画中画屏。
-     * 之前 pageJump(14) 协议落屏依赖 hook 高德进程，hook 不生效的环境全哑，
-     * 导航永远在主屏全屏（用户实测「跳转到应用界面没有进入画中画」）。
-     * 屏没建时返回「屏未建」（调用方回海鸥桌面触发 boot 重建链）。
-     * 内部 sleep/exec，必须在后台线程调用。
-     */
-    public static String parkToPip(Context ctx, String pkg) {
-        if (pkg == null) return "包名为空";
-        if (!isActive()) return "屏未建";
-        for (int i = 0; i < 5; i++) {          // 广播/URI 起应用是异步的，最多等 5s
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-                return "等待中断";
-            }
-            if (taskRegistered(pkg)) break;
-            if (i == 4) return pkg + " 没起来（导航未启动）";
-        }
-        int id;
-        synchronized (VirtualPipController.class) {
-            id = sDisplayId;
-        }
-        boolean ok = anchorAndMove(ctx, pkg, id);
-        Log.i(TAG, "parkToPip " + pkg + " → " + (ok ? "成功" : "失败"));
-        return ok ? "已在画中画起导航" : "搬进画中画失败";
     }
 
     /* ============ 黑屏二分探针（批次 V，保留） ============ */

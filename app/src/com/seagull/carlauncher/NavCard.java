@@ -48,8 +48,6 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
     private OnRemoveListener removeListener;
     /** 注入画中画当前导航包提供者（HomeActivity 注入 pip::currentNavPkg）。 */
     private java.util.concurrent.Callable<String> navPkgProvider;
-    /** NB25：回家/公司绑定应用（auto/amapauto/minimap），HomeActivity 从 model 同步。 */
-    private String boundTarget = "auto";
     private final android.os.Handler ui = new android.os.Handler();
     private final Runnable staleTask = this::showQuick;
 
@@ -242,70 +240,6 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         this.navPkgProvider = p;
     }
 
-    /** NB25：设置里「回家/公司 绑定应用」的当前值（auto/amapauto/minimap），HomeActivity 同步。 */
-    public void setBoundTarget(String t) {
-        this.boundTarget = t == null ? "auto" : t;
-    }
-
-    /**
-     * 解析回家/公司的目标应用：
-     *   手动绑定（设置）> 画中画当前挂载 > 自动探测（已装车机版优先，NB25：
-     *   用户实测「我装的车机版」—— 之前无挂载时兜底只试手机版，按钮直接死）。
-     * 没有任何可用导航 app 返回 null。
-     */
-    private String resolveTarget() {
-        if ("com.autonavi.amapauto".equals(boundTarget)) return "com.autonavi.amapauto";
-        if ("com.autonavi.minimap".equals(boundTarget)) return "com.autonavi.minimap";
-        String navPkg = null;
-        if (navPkgProvider != null) {
-            try {
-                navPkg = navPkgProvider.call();
-            } catch (Exception ignore) {
-            }
-        }
-        if (navPkg != null) return navPkg;
-        // 自动探测：车机版优先（车机屏幕场景），手机版兜底
-        if (installed("com.autonavi.amapauto")) return "com.autonavi.amapauto";
-        if (installed("com.autonavi.minimap")) return "com.autonavi.minimap";
-        return null;
-    }
-
-    private boolean installed(String pkg) {
-        try {
-            return getContext().getPackageManager().getLaunchIntentForPackage(pkg) != null;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    /** NB25：自愈式回海鸥桌面（直启 HomeActivity，触发 onResume 自愈链）。 */
-    private void goHomeToSeagull(Activity act) {
-        try {
-            android.content.Intent i = new android.content.Intent(act, HomeActivity.class);
-            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                    | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    | android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-            act.startActivity(i);
-        } catch (Throwable t) {
-            Log.w(TAG, "回海鸥桌面失败", t);
-        }
-    }
-
-    /** NB25：后台起导航→搬画中画→回桌面（parkToPip 内部 sleep/exec）。 */
-    private void parkAsync(final Activity act, final String target) {
-        new Thread(() -> {
-            String r = VirtualPipController.parkToPip(act, target);
-            Log.i(TAG, "parkToPip(" + target + ") → " + r);
-            act.runOnUiThread(() -> {
-                try {
-                    android.widget.Toast.makeText(act, r, android.widget.Toast.LENGTH_SHORT).show();
-                } catch (Throwable ignore) {
-                }
-                goHomeToSeagull(act);   // 成败都回桌面：成=看见画中画，败=onResume 自愈链兜底
-            });
-        }, "seagull-navpark").start();
-    }
-
     /** 快捷态按钮：起导航 app 的回家/公司搜索（各厂解析用户收藏地址）。 */
     private TextView quickBtn(Activity act, String label, String keyword) {
         TextView b = new TextView(act);
@@ -314,40 +248,42 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         b.setTextSize(15);
         b.setPadding(dp(act, 14), dp(act, 8), dp(act, 14), dp(act, 8));
         b.setOnClickListener(v -> {
-            // NB25 重写：手动绑定（设置）> 画中画挂载 > 自动探测（车机版优先）。
-            // 车机版：广播+协议起回家/公司导航 → 后台 parkToPip 搬进画中画 → 回桌面。
-            //   （之前 pageJump 协议落屏依赖 hook，hook 没生效的设备导航永远
-            //    落主屏全屏 —— 用户实测「跳转到应用界面没有进入画中画」）
-            // 手机版/其它：URI 起搜索 → 同样 parkToPip。
-            String target = resolveTarget();
-            if (target == null) {
-                Log.w(TAG, "回家/公司：没有任何可用导航应用");
+            // NB12：识别画中画1/2 当前挂的导航 app——绑哪个就起哪个（用户原话）；
+            // 槽位没挂地图回落 minimap（实测 URI 能起）。各包 URI：
+            //   高德 androidamap://poi / 百度 baidumap://map/place/search /
+            //   腾讯 qqmap://map/search
+            // Callable.call() 抛受检异常——lambda 里接不住，必须 try（71500d5 编译错）
+            String navPkg = null;
+            if (navPkgProvider != null) {
                 try {
-                    android.widget.Toast.makeText(act, "未装高德（车机版/手机版）",
-                            android.widget.Toast.LENGTH_SHORT).show();
-                } catch (Throwable ignore) {
+                    navPkg = navPkgProvider.call();
+                } catch (Exception ignore) {
                 }
+            }
+            java.util.List<String> order = new java.util.ArrayList<>();
+            if (navPkg != null) order.add(navPkg);
+            order.add("com.autonavi.minimap");
+            // NB15：车机版高德走三通道（广播 + 30010 协议 + 30306 落屏画中画），
+            // 不再「起主界面让用户自己点」（用户原话「该跳转到画中画界面拉起导航回家」）
+            if ("com.autonavi.amapauto".equals(navPkg)) {
+                launchNavHome(act, "回家".equals(keyword));
                 return;
             }
-            Log.i(TAG, "回家/公司 target=" + target + " bound=" + boundTarget);
-            if ("com.autonavi.amapauto".equals(target)) {
-                launchNavHome(act, "回家".equals(keyword));   // 广播 + 协议双保险（立即返回）
-            } else {
-                String uri = homeUri(target, keyword);
-                if (uri == null) return;
+            for (String pkg : order) {
+                String uri = homeUri(pkg, keyword);
+                if (uri == null) continue;
                 try {
                     android.content.Intent i = new android.content.Intent(
                             android.content.Intent.ACTION_VIEW, android.net.Uri.parse(uri));
-                    i.setPackage(target);
+                    i.setPackage(pkg);
                     i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
                             | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
                     act.startActivity(i);
-                } catch (Throwable t) {
-                    Log.w(TAG, "起导航搜索失败: " + keyword, t);
                     return;
+                } catch (Throwable ignore) {
                 }
             }
-            parkAsync(act, target);   // 后台等任务注册 → 搬画中画 → 回桌面
+            Log.w(TAG, "起导航搜索失败: " + keyword);
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
         lp.leftMargin = dp(act, 8);

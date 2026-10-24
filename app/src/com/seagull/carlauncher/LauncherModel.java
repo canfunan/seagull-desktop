@@ -455,9 +455,6 @@ public final class LauncherModel {
 
     public boolean navEnabled = true;                  // 顶栏导航卡片开关
     public String navPkg = "com.autonavi.minimap";     // 绑定哪一版高德（手机版/车机版实测后可换）
-    /** NB25：回家/公司按钮绑定应用。"auto"=跟随画中画当前挂载（无挂载自动探测
-     * 已装的车机版优先）；"com.autonavi.amapauto"/"com.autonavi.minimap"=手动绑定。 */
-    public String navHomeTarget = "auto";
 
     /* ==================== 状态：天气 ==================== */
 
@@ -1181,7 +1178,6 @@ public final class LauncherModel {
             o.put("islandLyric", islandLyric);
             /* 导航卡片（批次 AN） */
             o.put("navOn", navEnabled);
-            o.put("navHomeTarget", navHomeTarget);
             o.put("navPkg", navPkg);
             /* 天气 */
             o.put("citySource", citySource.name());
@@ -1512,7 +1508,6 @@ public final class LauncherModel {
             islandLyric = o.optBoolean("islandLyric", false);
 
             navEnabled = o.optBoolean("navOn", true);
-            navHomeTarget = o.optString("navHomeTarget", "auto");
             navPkg = o.optString("navPkg", "com.autonavi.minimap");
 
             citySource = optEnum(o, "citySource", CitySource.class, citySource);
