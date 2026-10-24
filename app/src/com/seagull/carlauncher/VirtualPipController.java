@@ -420,10 +420,8 @@ public final class VirtualPipController {
         if (pkg == null) return "包名为空";
         ensureTargetAlive(pkg);
         if (!isActive()) {
-            // NB26：与 parkToPip 同款 —— 钉死目标 + 开开关，回桌面重建部署
-            setTarget(ctx, pkg);
-            if (!isEnabled(ctx)) setEnabled(ctx, true);
-            return "屏未建：回桌面自动部署画中画";
+            // NB27：撤销 NB26（不覆盖用户点选、不强开开关），恢复纯提示。
+            return isEnabled(ctx) ? "屏未建：回桌面自动重建" : "画中画开关是关的";
         }
         int id;
         synchronized (VirtualPipController.class) {
@@ -452,14 +450,10 @@ public final class VirtualPipController {
     public static String parkToPip(Context ctx, String pkg) {
         if (pkg == null) return "包名为空";
         if (!isActive()) {
-            // NB26 复盘修复：之前只报「屏未建」就完事 —— 回桌面后 boot 链按
-            // pickTarget 部署（手机版优先），用户装车机版时搬错包/没目标，
-            // 导航永远留在主屏。现在先把部署目标钉死成本包 + 打开开关，
-            // 回桌面后 syncVdPip → surfaceCreated 建屏 → deploy 就搬这个包。
-            setTarget(ctx, pkg);
-            if (!isEnabled(ctx)) setEnabled(ctx, true);
-            Log.i(TAG, "parkToPip 屏未建：已钉目标 " + pkg + "，回桌面重建部署");
-            return "屏未建：回桌面自动部署画中画";
+            // NB27 复盘撤销 NB26 的破坏：setTarget 会覆盖用户在推荐应用里的
+            // 点选、setEnabled 会强开画中画 —— 回家按钮绝不该改画中画配置。
+            // 屏没开时导航留在主屏正常用，仅提示。
+            return isEnabled(ctx) ? "屏未建：回桌面重建" : "画中画未开启：导航已起在主屏";
         }
         for (int i = 0; i < 5; i++) {          // 广播/URI 起应用是异步的，最多等 5s
             try {

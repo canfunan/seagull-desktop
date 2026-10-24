@@ -296,12 +296,14 @@ public final class NavCard extends LinearLayout implements AmapNavClient.Listene
         new Thread(() -> {
             String r = VirtualPipController.parkToPip(act, target);
             Log.i(TAG, "parkToPip(" + target + ") → " + r);
+            // NB27：画中画没开时导航已起在主屏 —— 不回桌面（回桌面会盖住导航）。
+            boolean stay = r.contains("画中画未开启");
             act.runOnUiThread(() -> {
                 try {
                     android.widget.Toast.makeText(act, r, android.widget.Toast.LENGTH_SHORT).show();
                 } catch (Throwable ignore) {
                 }
-                goHomeToSeagull(act);   // 成败都回桌面：成=看见画中画，败=onResume 自愈链兜底
+                if (!stay) goHomeToSeagull(act);   // 成败都回桌面：成=看见画中画，败=onResume 自愈链兜底
             });
         }, "seagull-navpark").start();
     }
