@@ -421,7 +421,7 @@ public final class VirtualPipController {
         ensureTargetAlive(pkg);
         if (!isActive()) {
             // NB26：与 parkToPip 同款 —— 钉死目标 + 开开关，回桌面重建部署
-            setTarget(pkg);
+            setTarget(ctx, pkg);
             if (!isEnabled(ctx)) setEnabled(ctx, true);
             return "屏未建：回桌面自动部署画中画";
         }
@@ -456,7 +456,7 @@ public final class VirtualPipController {
             // pickTarget 部署（手机版优先），用户装车机版时搬错包/没目标，
             // 导航永远留在主屏。现在先把部署目标钉死成本包 + 打开开关，
             // 回桌面后 syncVdPip → surfaceCreated 建屏 → deploy 就搬这个包。
-            setTarget(pkg);
+            setTarget(ctx, pkg);
             if (!isEnabled(ctx)) setEnabled(ctx, true);
             Log.i(TAG, "parkToPip 屏未建：已钉目标 " + pkg + "，回桌面重建部署");
             return "屏未建：回桌面自动部署画中画";
